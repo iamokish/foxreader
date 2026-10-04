@@ -1,0 +1,275 @@
+================================================================================
+FOX READER — LICENSE AND THIRD-PARTY NOTICES
+================================================================================
+
+0. FOX READER'S OWN CODE
+--------------------------------------------------------------------------------
+Copyright (c) iamokish (https://github.com/iamokish/foxreader).
+
+Fox Reader's own source code is licensed under the GNU Affero General
+Public License v3 or later (AGPL-3.0-or-later). See LICENSE. This was a
+deliberate choice:
+
+* WHY AGPL: a permissive-only license (MIT/Apache) would let a Nuitka build
+  ship without sources. AGPL additionally covers hosted/SaaS use (§13):
+  anyone running a modified Fox Reader as a service must offer its source
+  to users.
+
+* DUAL LICENSING: the copyright holder may additionally offer a paid
+  commercial license covering Fox Reader's OWN code only. It never covers
+  third-party items below — model weights, datasets, fonts and libraries
+  keep their own terms no matter what. Contact the holder for terms.
+
+* CONTRIBUTIONS: by submitting a pull request you agree your contribution
+  is licensed under AGPL-3.0-or-later AND that the holder may relicense it
+  (including under a commercial license). Do not submit code you may not
+  relicense.
+
+* DONATIONS (GitHub Sponsors etc.) grant no license exceptions.
+
+1. PYTHON DEPENDENCIES (bundled into built binaries via Nuitka)
+--------------------------------------------------------------------------------
+Locked set: 174 packages in uv.lock including fox-reader = 173 unique
+third-party names across all extras (cpu/macos/cu118/cu126/cu129/cu129_win/
+cu130/rocm71/rocm72/gguf/bin-build/dev). Clean CPU venv audited 2026-10-02:
+115 dist-info including fox-reader = 114 installed third-party packages.
+Licenses below are the SPDX License / License-Expression declared in each
+installed METADATA, or the upstream PyPI license where METADATA carries no
+identifier (classifier noted). Exact pinned versions are in uv.lock; versions
+below are the audited installed versions (torch local tags +cpu/+cu*/+rocm
+resolve from torch==2.13.0 per pyproject.toml).
+
+License texts: only the curated packaging/build.py DISTRIBUTION_METADATA
+subset (24 distributions + OPTIONAL llama-cpp-python) ships as
+bin/*.dist-info in built binaries. Complete texts for all other packages
+are available from their PyPI sources / uv.lock URLs, not from bin/.
+
+* COPYLEFT: none in the locked set — no GPL/AGPL/SSPL-licensed dependencies.
+  §0 applies to this project's own code (fox-reader, AGPL-3.0-or-later).
+
+* WEAK COPYLEFT, file/library-level (no action needed when used as-is):
+  MPL-2.0 — certifi, pathspec (dev-only, not bundled); MPL-2.0 AND MIT —
+  tqdm; LGPL-2.1-or-later — crc32c; LGPL (classifier, version unspecified) —
+  python-bidi.
+
+* DUAL / OR-CHOICE: Apache-2.0 OR BSD-3-Clause — cryptography;
+  Apache-2.0 OR BSD-2-Clause — packaging; Dual License (BSD/Apache upstream)
+  — python-dateutil; Apache-2.0 AND MIT — aiohttp; BSD-3-Clause AND TCL —
+  ujson; Apache-2.0 AND CNRI-Python — regex; MPL-2.0 AND MIT — tqdm;
+  BSD-3-Clause AND Apache-2.0 (either-or) + CC-BY-4.0 docs — pypdfium2;
+  Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND
+  BSD-3-Clause AND BSL-1.0 AND MIT — torch.
+
+* BINARY-COMPONENT NOTES (beyond the SPDX identifier):
+  - opencv-contrib-python (Apache 2.0): wheels bundle FFmpeg under LGPLv2.1;
+    non-headless Linux wheels bundle Qt 5 under LGPLv3.
+  - numpy (BSD/PSF-family permissive; METADATA carries copyright-line prose):
+    vendors code under GPL-3.0-or-later WITH GCC-exception-3.1 (exception
+    applies; disclosed here for completeness).
+  - torchvision (BSD code): SWAG pre-trained models released under
+    CC-BY-NC 4.0 (non-commercial) — code use only in this project.
+  - torch: includes LLVM-exception grant as expressed above.
+  - pypdfium2: PDFium third-party deps under various open-source licenses
+    (LicenseRef-PdfiumThirdParty.txt in wheels); docs/examples CC-BY-4.0.
+
+* RUNTIME — installed and bundled in this CPU build (114, name==installed):
+  MIT — agent-detector 2.0.0, annotated-doc 0.0.5, annotated-types 0.8.0,
+  anyio 4.15.1, attrs 26.1.0, beautifulsoup4 4.15.0, brotli 1.2.0,
+  charset-normalizer 3.5.1, colorlog 6.12.0, fastapi 0.141.1,
+  fastapi-cli 0.0.32, fastapi-cloud-cli 0.25.0, fastar 0.12.0,
+  filelock 3.32.5, fonttools 4.64.0, future 1.0.0, h11 0.16.0, h2 4.4.1,
+  hpack 4.2.0, httptools 0.8.0, hyperframe 6.1.0, imagesize 2.0.1,
+  markdown-it-py 4.2.0 (classifier; no License field), mdurl 0.1.2 (classifier; no License field), natsort 8.4.0,
+  py-cpuinfo 9.0.0, pyclipper 1.4.0, pydantic 2.13.4,
+  pydantic-extra-types 2.11.1, pydantic-settings 2.15.0,
+  pydantic_core 2.46.4, PyYAML 6.0.2, rich 15.0.0, rich-toolkit 0.20.4,
+  rignore 0.8.1, ruamel.yaml 0.19.1, sentry-sdk 2.68.1, setuptools 84.0.0,
+  six 1.17.0, soupsieve 2.9.2, typer 0.27.2, typing-inspection 0.4.4,
+  urllib3 2.7.0, watchfiles 1.2.0, wcwidth 0.8.3;
+  MIT-0 — cffi 2.1.1; 0BSD — chardet 7.6.0, detect-installer 0.2.1;
+  ISC — dnspython 2.8.0, shellingham 1.5.4; Unlicense — email-validator 2.3.0;
+  PSF-2.0 — aiohappyeyeballs 2.7.1 (transport stack, not Apache),
+  typing_extensions 4.16.0; MIT-CMU — pillow 12.2.0;
+  BSD-3-Clause — click 8.5.0, fsspec 2026.7.0, httpcore 1.0.9, httpx 0.28.1,
+  idna 3.19, MarkupSafe 3.0.3, networkx 3.6.1, pandas 3.0.3,
+  prettytable 3.18.0, protobuf 7.35.1 (declared "3-Clause BSD License"),
+  psutil 7.2.2, pycparser 3.0, python-dotenv 1.2.3, shapely 2.1.2,
+  starlette 1.6.0, uvicorn 0.50.0, websockets 17.2;
+  BSD-2-Clause — Pygments 2.21.0; BSD (declared "BSD") — mpmath 1.3.0,
+  sympy 1.14.0; BSD (classifier; no License field) — colorama 0.4.6,
+  itsdangerous 2.2.0, Jinja2 3.1.6;
+  Apache-2.0 — accelerate 1.14.0, aiohttp 3.14.3 (AND MIT), aiosignal 1.4.0,
+  aistudio_sdk 0.3.9, bce-python-sdk 0.9.79, frozenlist 1.8.0, hf-xet 1.6.0,
+  huggingface_hub 1.22.0, modelscope 1.39.1, modelscope-hub 0.4.0,
+  multidict 6.7.1, opencv-contrib-python 4.10.0.84 (see binary note),
+  paddleocr 3.7.0, paddlex 3.7.2, propcache 0.5.2,
+  python-multipart 0.0.32, requests 2.34.2, transformers 5.14.1,
+  tzdata 2026.3, yarl 1.24.5 (plus the OR/AND duals listed above);
+  BSD + Public Domain — pycryptodome 3.23.0 (not Apache);
+  MPL-2.0 — certifi 2026.7.22; LGPL-2.1-or-later — crc32c 2.9;
+  LGPL — python-bidi 0.6.11; Dual License — python-dateutil 2.9.0.post0;
+  MPL-2.0 AND MIT — tqdm 4.70.0;
+  Apache-2.0 OR BSD-3-Clause — cryptography 50.0.1;
+  Apache-2.0 OR BSD-2-Clause — packaging 26.3;
+  Apache-2.0 AND CNRI-Python — regex 2026.9.3;
+  BSD-3-Clause AND TCL — ujson 6.0.0;
+  BSD-3-Clause AND Apache-2.0 — pypdfium2 5.13.0 (see binary note);
+  Apache-2.0 (classifier + upstream; no License field) — safetensors 0.8.0,
+  tokenizers 0.22.2; BSD-3-Clause upstream (no metadata declaration) —
+  sentencepiece 0.2.1; BSD/PSF-family permissive (prose metadata) —
+  numpy 2.3.5 (see binary note); BSD code — torchvision 0.28.0+cpu
+  (see CC-BY-NC note); Apache-2.0 bundle WITH LLVM-exception — torch
+  2.13.0+cpu (see above).
+
+* GPU / PLATFORM-ONLY — in uv.lock, not installed in this CPU venv; bundled
+  only in matching device builds (versions pinned in uv.lock):
+  LicenseRef-NVIDIA-Proprietary (Other/Proprietary NVIDIA) — nvidia-cublas,
+  nvidia-cublas-cu11, nvidia-cublas-cu12, nvidia-cuda-cupti,
+  nvidia-cuda-cupti-cu11, nvidia-cuda-cupti-cu12, nvidia-cuda-nvrtc,
+  nvidia-cuda-nvrtc-cu11, nvidia-cuda-nvrtc-cu12, nvidia-cuda-runtime,
+  nvidia-cuda-runtime-cu11, nvidia-cuda-runtime-cu12, nvidia-cudnn-cu11,
+  nvidia-cudnn-cu12, nvidia-cudnn-cu13, nvidia-cufft, nvidia-cufft-cu11,
+  nvidia-cufft-cu12, nvidia-cufile, nvidia-cufile-cu12, nvidia-curand,
+  nvidia-curand-cu11, nvidia-curand-cu12, nvidia-cusolver,
+  nvidia-cusolver-cu11, nvidia-cusolver-cu12, nvidia-cusparse,
+  nvidia-cusparse-cu11, nvidia-cusparse-cu12, nvidia-cusparselt-cu12,
+  nvidia-cusparselt-cu13, nvidia-nccl-cu11, nvidia-nccl-cu12,
+  nvidia-nccl-cu13, nvidia-nvjitlink, nvidia-nvjitlink-cu12,
+  nvidia-nvshmem-cu12, nvidia-nvshmem-cu13, nvidia-nvtx, nvidia-nvtx-cu11,
+  nvidia-nvtx-cu12 (CUDA EULA applies; check NVIDIA terms before
+  redistributing CUDA builds);
+  NVIDIA CUDA Python bindings (see NVIDIA EULA; versions in uv.lock) —
+  cuda-bindings 12.9.7 / 13.3.1, cuda-pathfinder 1.8.1,
+  cuda-toolkit 12.6.3 / 12.9.1 / 13.0.3.0;
+  MIT — triton 3.3.1 / 3.7.1, triton-rocm 3.7.1 (Linux-only ROCm index),
+  uvloop 0.22.1.
+
+* OPTIONAL EXTRAS — in uv.lock, installed on demand, not via default sync:
+  MIT — llama-cpp-python 0.3.35 (gguf extra; installed separately via
+  packaging/llamacpp.py with CMAKE_ARGS, never through uv sync);
+  Apache-2.0 — nuitka 4.2.1 (bin-build extra; build compiler, its own code
+  is not bundled into the output beyond compiled artifacts).
+
+* DEV-ONLY, NOT BUNDLED — in uv.lock for development; packaging/build.py
+  NOT_A_DEPENDENCY explicitly excludes these from binaries:
+  MIT — ast-serialize 0.9.0, iniconfig 2.3.0, librt 0.15.0, mypy 2.3.1,
+  mypy-extensions 1.1.0, pluggy 1.6.0, pytest 9.1.1, ruff 0.16.6;
+  MPL-2.0 — pathspec 1.1.1;
+  Apache-2.0 — diskcache 5.6.3 (transitive; not installed in CPU venv).
+
+* UNDECLARED METADATA (known upstream licenses):
+  sentencepiece — BSD-3-Clause upstream; fox-reader — this project (§0).
+
+1B. FRONTEND DEPENDENCIES (Vite/Preact bundle, embedded via packaging/embed_assets.py)
+--------------------------------------------------------------------------------
+frontend/package.json declares 1 runtime dep + 11 dev deps (private:true,
+no license field — part of this AGPL project). Resolved versions from
+pnpm-lock.yaml; licenses from package-lock.json / upstream. Only preact
+ships to users inside frontend/static/app.js (IIFE); the rest are build/test
+tooling, but their transitive deps also resolve at install time.
+
+Direct (pnpm-lock resolved; bundled preact as built):
+  MIT — preact 10.29.8 bundled (pnpm-lock 10.29.7, package-lock 10.29.8),
+  vite 8.1.5, vitest 4.1.10, jsdom 30.0.0,
+  oxlint 1.76.0, oxfmt 0.61.0, @preact/preset-vite 2.10.6,
+  @testing-library/preact 3.2.4, @testing-library/jest-dom 7.0.0,
+  @types/jsdom 28.0.3, @types/node 24.13.3;
+  Apache-2.0 — typescript 6.0.3.
+
+Transitive (package-lock.json, 311 packages entries): MIT 264, MPL-2.0 12
+(lightningcss via vite + 11 more), BSD-2-Clause 9, ISC 8, Apache-2.0 7,
+BlueOak-1.0.0 3 (lru-cache via jsdom chain), BSD-3-Clause 3, MIT-0 2,
+CC-BY-4.0 1 (caniuse-lite data), CC0-1.0 1 (mdn-data). All permissive or
+weak-copyleft (MPL-2.0 file-level); no GPL/AGPL/SSPL in the JS tree.
+Full texts and exact versions: frontend/pnpm-lock.yaml +
+frontend/package-lock.json upstream sources.
+
+Binary attribution: vite.config.ts sets build.license:true, so builds emit
+frontend/static/.vite/license.md listing every package bundled into app.js.
+packaging/embed_assets.py embeds the whole frontend/static directory, so the
+license file ships inside the binary alongside the bundle. The
+pre-existing frontend/static/LICENSE-material-icons (Apache-2.0) is likewise
+embedded. If .vite/license.md is missing from an old build, this NOTICE
+section is the fallback attribution.
+
+2. BUNDLED FONTS AND ICONS (shipped in git and in binaries)
+--------------------------------------------------------------------------------
+* ComicMono / ComicMono-Bold (fonts/ComicMono*.ttf) — MIT License.
+  Original (c) 2018 Shannon Miwa; modified (c) 2019 dtinth.
+  Full text: fonts/LICENSE-ComicMono.
+* NotoSansSymbols2-Regular (fonts/NotoSansSymbols2-Regular.otf) — SIL Open
+  Font License 1.1, Copyright 2022 The Noto Project Authors. Full text:
+  fonts/OFL.txt. Render-time per-glyph fallback only; stays under OFL.
+* Material Icons (frontend/static/) — Apache License 2.0.
+  Full text: frontend/static/LICENSE-material-icons.
+
+3. MODEL WEIGHTS (NOT in git — fetched by YOU from upstream at /setup)
+--------------------------------------------------------------------------------
+This repository ships NO weight files (.gitignore excludes /models/,
+*.pt, *.onnx). Weights download from the vendors below when you run setup,
+so upstream terms are accepted between you and them; this project neither
+grants nor can grant rights it does not hold. Each file stays under its
+own terms regardless of §0.
+
+* Speech-bubble segmentation (iamokish/manga-bubble-segmentation-pytorch,
+  SafeTensors) — Apache 2.0 declared. Training-data lineage (per upstream
+  card): MS92/MangaSegmentation + Manga109 (§4).
+  https://huggingface.co/iamokish/manga-bubble-segmentation-pytorch
+* Text segmentation (iamokish/… SafeTensors conversion of
+  a-b-c-x-y-z/Manga-Text-Segmentation-2025) — MIXED. The official research
+  code is MIT-licensed (juvian/Manga-Text-Segmentation, repo of del Gobbo &
+  Matuk Herrera, ECCV 2020 Workshops); label masks via Zenodo
+  doi:10.5281/zenodo.4511796. The weight FILE itself declares no license
+  upstream — treat the weights as RESEARCH/ACADEMIC-ONLY until the publisher
+  confirms otherwise.
+* OCR det/rec/Korean + VL GGUF (PaddlePaddle) — Apache 2.0. No restriction.
+* Gemma 4 E4B uncensored Q6/Q8 (HauhauCS/…) — CUSTOM Google Gemma Terms of
+  Use (license id: gemma). Must be accepted; prohibited uses apply;
+  downstream distributions must carry the terms. Uncensoring removes no base
+  obligation.
+* VNTL Llama-3 8B v2 Q8 (lmg-anon/…) — CUSTOM Llama 3 Community License
+  (license id: llama3). Commercial use generally allowed subject to the
+  Acceptable Use Policy, derivative attribution, and an extra Meta license
+  above 700M monthly active users.
+
+4. TRAINING-DATA TERMS (bind models trained on them — and you, using them)
+--------------------------------------------------------------------------------
+* Manga109 (109 vols, UTokyo) — ACADEMIC, NON-COMMERCIAL ONLY, non-commercial
+  organizations; NO redistribution; credit "courtesy of [Author's Name]" (or
+  "© [Author's Name]") + papers (§6). The Manga109-s subset (87 vols) also
+  permits commercial use of *results/portions of results* from ML experiments
+  (attribute Manga109-s; no redistribution; never sell images with results;
+  copies must not be products; max 20% of whole pages published per volume).
+  https://manga109.github.io/manga109-project-website/en/index.html
+* MS92/MangaSegmentation — custom license.txt (gated download). Images
+  Copyrighted by Minshan Xie. Academic AND commercial use permitted PROVIDED
+  the credit "Copyrighted by Minshan Xie" appears in ANY publication,
+  reproduction, redistribution, or derivative of the images.
+  https://huggingface.co/datasets/MS92/MangaSegmentation
+
+5. WHAT THIS MEANS FOR COMMERCIAL USE
+--------------------------------------------------------------------------------
+A paid/commercial Fox Reader offering MUST EXCLUDE the Manga109-lineage
+weights (bubble, text-seg) unless separate rights are obtained.
+Gemma/VNTL may be included subject to their own Terms. A commercial license
+from the holder covers Fox Reader's own code ONLY — never third-party
+weights, data, fonts or libraries.
+
+6. CITATIONS (required by the dataset/model terms above)
+--------------------------------------------------------------------------------
+* Manga109: Aizawa et al., IEEE MultiMedia 27(2), 2020; Matsui et al.,
+  MTAP 76(20), 2017.
+* Text-seg masks: del Gobbo & Matuk Herrera, ECCV 2020 Workshops
+  (doi: 10.5281/zenodo.4511796).
+* MS92 annotations: Xie et al., CVPR 2025.
+* PP-OCRv6: Zhang et al., arXiv:2606.13108 (2026).
+
+7. CONTACT
+--------------------------------------------------------------------------------
+Code copyright (c) iamokish (https://github.com/iamokish/foxreader).
+Copyright complaints / DMCA: user@foxreader.com — see TERMS.md §7 for the
+notice procedure and what a complete notice contains.
+Licensing / commercial terms: user@foxreader.com (TERMS.md §9).
+Online translators (DeepL, JPDB) are third-party services under their own
+API terms and your own tokens — not shipped code; endpoints you configure
+yourself are your responsibility (TERMS.md §4, §5).

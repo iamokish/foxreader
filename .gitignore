@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+.venv/
+venv/
+.python/
+
+# Project - runtime data (downloaded/generated, not tracked)
+/models/
+/cache/
+/fonts/*
+!/fonts/ComicMono.ttf
+!/fonts/ComicMono-Bold.ttf
+!/fonts/LICENSE-ComicMono
+!/fonts/NotoSansSymbols2-Regular.otf
+!fonts/OFL.txt
+
+# Config
+/config/*
+!/config/fox_config.yaml
+
+# Log
+log/
+*.log
+stdout.log
+stderr.log
+
+# Build artifacts
+*.pt
+*.onnx
+
+# IDE
+.vscode/
+.idea/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+/frontend/node_modules/
+/frontend/static/app.js
+/frontend/static/app.js.map
+/frontend/static/.vite/
+
+# Compile
+packaging/.build-venv/
+packaging/.build/
+/dist/
+/nc/

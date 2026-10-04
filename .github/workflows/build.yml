@@ -1,0 +1,304 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch/tag
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Variant matrix ─────────────────────────────────────────────────────
+  # One job per (OS, variant). Every job builds natively on its runner via
+  # packaging/build.py; CUDA jobs install exactly their pinned toolkit first.
+  #
+  # To enable a variant later, uncomment its line -- nothing else changes.
+  # Active today: CPU+gguf on Linux and Windows, CU118+gguf on Windows.
+  #
+  # No CU121 entry: pyproject.toml has no cu121 extra and build.py rejects
+  # unknown --device values, so CU121 needs a pyproject change first.
+  #
+  # Linux runners are pinned (ubuntu-24.04, ubuntu-22.04 for CUDA 11.8), not
+  # -latest: a runner image upgrade that moves the default GCC can silently
+  # push a CUDA variant past its nvcc ceiling. The `gcc` field names the
+  # major GCC each entry builds with -- one step under the toolkit's ceiling
+  # rather than at it, the same mapping as packaging/build_with_docker.py:
+  # CUDA 11.8 -> 11, 12.6 -> 13, 12.9 -> 13, 13.0 -> 14, CPU -> runner
+  # default. Windows entries leave it empty: there nvcc drives MSVC, whose
+  # toolset packaging/llamacpp.py picks itself.
+  build:
+    strategy:
+      # One failing variant (a new CUDA combo, usually) must not cancel the
+      # rest of the matrix.
+      fail-fast: false
+      matrix:
+        include:
+          - { name: cpu-gguf-linux,      os: ubuntu-24.04,   device: cpu,       cuda: "",       gcc: "",   extra: "" }
+          - { name: cpu-gguf-windows,    os: windows-latest, device: cpu,       cuda: "",       gcc: "",   extra: "" }
+          - { name: cpu-no-gguf-linux,   os: ubuntu-24.04,   device: cpu,       cuda: "",       gcc: "",   extra: "--no-gguf" }
+          - { name: cpu-no-gguf-windows, os: windows-latest, device: cpu,       cuda: "",       gcc: "",   extra: "--no-gguf" }
+          # CUDA 11.8's repos stop at Ubuntu 22.04, so its Linux job pins an
+          # older runner; every newer CUDA builds on 24.04.
+          # - { name: cu118-gguf-linux,    os: ubuntu-22.04,   device: cu118,     cuda: "11.8.0", gcc: "11", extra: "" }
+          # - { name: cu118-gguf-windows,  os: windows-latest, device: cu118,     cuda: "11.8.0", gcc: "",   extra: "" }
+          # - { name: cu126-gguf-linux,    os: ubuntu-24.04,   device: cu126,     cuda: "12.6.0", gcc: "13", extra: "" }
+          # - { name: cu126-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "" }
+          # Windows uses the cu129_win torch extra (a different PyPI index);
+          # Linux uses cu129. Same CUDA toolkit either way.
+          # - { name: cu129-gguf-linux,    os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "" }
+          # - { name: cu129-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "" }
+          # - { name: cu130-gguf-linux,    os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "" }
+          # - { name: cu130-gguf-windows,  os: windows-latest, device: cu130,     cuda: "13.0.0", gcc: "",   extra: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # The GGUF backend compiles against OpenBLAS headers. The runner ships
+      # none, and the scipy-openblas32 wheel `auto` would download instead is
+      # unusable for compiling: scipy builds its OpenBLAS with `scipy_`-suffixed
+      # symbols, so its headers declare scipy_openblas_set_num_threads instead
+      # of openblas_set_num_threads and ggml's ggml-blas.cpp fails on the first
+      # file with `cblas_sgemm was not declared`. The packaged dev library is
+      # what the build wants -- and what its own log recommends
+      # ("sudo apt install libopenblas-dev"). Needed on every Linux variant:
+      # GPU builds want BLAS for ggml's CPU backend too.
+      #
+      # Installing it is not enough on Debian and Ubuntu, though. The package
+      # puts its headers in a multiarch subdirectory
+      # (/usr/include/<triplet>/openblas-pthread/) and its library in
+      # /usr/lib/<triplet>/, and neither is the <prefix>/{include,lib} layout
+      # packaging/llamacpp.py looks for -- so it passes over /usr ("no
+      # cblas.h/openblas_config.h, nothing to link"), downloads the wheel it was
+      # meant to avoid, and the build dies in ggml-blas.cpp a quarter of an hour
+      # later. Symlinking the two halves into one prefix and naming it in
+      # OPENBLAS_HOME -- a location that module already looks in -- is what makes
+      # the packaged OpenBLAS the one that gets used. Symlinks rather than copies:
+      # the runtime libraries the distribution ships are read back out of this
+      # prefix with `ldd`, so they have to resolve to the real files.
+      - name: Install OpenBLAS (GGUF backend)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y libopenblas-dev pkg-config
+
+          include=$(dirname "$(find /usr/include -maxdepth 4 -name openblas_config.h -print -quit)")
+          library=$(find /usr/lib -maxdepth 3 -name libopenblas.so -print -quit)
+          if [ ! -f "$include/cblas.h" ] || [ -z "$library" ]; then
+            echo "libopenblas-dev left no cblas.h/openblas_config.h + libopenblas.so to point at" >&2
+            exit 1
+          fi
+
+          prefix="$RUNNER_TEMP/openblas"
+          mkdir -p "$prefix/include" "$prefix/lib"
+          ln -sf "$include"/*.h "$prefix/include/"
+          ln -sf "$library" "$prefix/lib/libopenblas.so"
+          echo "OPENBLAS_HOME=$prefix" >> "$GITHUB_ENV"
+
+      # Fails in seconds if the step above stopped matching the distribution's
+      # layout, instead of letting the build fall back to the wheel and break
+      # deep inside ggml. Prints the headers and the library the GGUF backend
+      # will be compiled against, and exits non-zero when there are none.
+      - name: Check OpenBLAS
+        if: runner.os == 'Linux'
+        run: python packaging/llamacpp.py --find-openblas
+
+      # Nuitka's SCons backend prints "You are not using ccache ..." without
+      # it, and every rebuild then recompiles all ~157 C files from scratch.
+      # ccache also speeds up the llama.cpp CMake compile in the same build
+      # via CMAKE_*_COMPILER_LAUNCHER below. Linux only: Windows drives MSVC
+      # (which uses clcache, not ccache) and needs no system package here.
+      - name: Install ccache
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y ccache
+          ccache --version
+          mkdir -p "$HOME/.cache/ccache"
+          echo "CCACHE_DIR=$HOME/.cache/ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=true" >> "$GITHUB_ENV"
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+
+      # Restores the ccache directory from previous runs so identical C files
+      # hit the cache instead of recompiling. Keyed on the variant plus the
+      # lockfile (torch/Nuitka versions change what gets compiled); the
+      # restore-keys fall back to any cache for the same variant, then any
+      # Linux cache, rather than starting cold.
+      # actions/cache@v5: v4 targets Node.js 20, which the runners deprecate
+      # ("forced to run on Node.js 24" annotation); v5 targets Node.js 24.
+      - name: Cache ccache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.name }}-
+            ccache-${{ runner.os }}-
+
+      # Pin the host compiler nvcc will accept, before the toolkit step.
+      # Each CUDA entry names its GCC in the matrix (one step under the
+      # toolkit's ceiling); installing it is the whole step, because
+      # packaging/llamacpp.py scans downwards from the ceiling and picks a
+      # versioned g++ up on its own -- and names it for the entire build, so
+      # host code and device code never mix libstdc++ ABIs. CPU entries leave
+      # `gcc` empty and keep the runner default. Skipped on Windows, where
+      # nvcc drives MSVC instead.
+      - name: Select GCC (CUDA host compiler)
+        if: runner.os == 'Linux' && matrix.gcc != ''
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-${{ matrix.gcc }} g++-${{ matrix.gcc }}
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ matrix.gcc }} 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ matrix.gcc }} 100
+          sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-${{ matrix.gcc }} 100
+          sudo update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-${{ matrix.gcc }} 100
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+          test "$(g++ -dumpversion | cut -d. -f1)" = "${{ matrix.gcc }}"
+
+      # CPU variants skip this: torch arrives prebuilt and llama.cpp needs
+      # no toolkit. Each CUDA variant installs exactly its own version --
+      # the major version must match the torch bundled for its --device
+      # (llamacpp.py refuses a mismatch rather than linking across one).
+      - name: Install CUDA toolkit
+        if: matrix.cuda != ''
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: ${{ matrix.cuda }}
+
+      - name: Check CUDA compiler
+        if: matrix.cuda != ''
+        run: nvcc --version
+
+      # Reports the compiler the launcher will be built with. Runs before the
+      # build so a runner without one fails here, in seconds, rather than after
+      # Nuitka has spent a quarter of an hour on the backend.
+      - name: Check C toolchain
+        run: python packaging/toolchain.py --which
+
+      - name: Build executable
+        env:
+          # Belt and braces next to build.py's own line-buffering: a piped
+          # stdout (which is what a CI log is) block-buffers print() while the
+          # uv/Nuitka children stream past it, so the log reads backwards.
+          PYTHONUNBUFFERED: "1"
+        run: python -u packaging/build.py --skip-frontend --device ${{ matrix.device }} ${{ matrix.extra }}
+
+      # Always reports, even when the build failed: a 0% hit rate on a warm
+      # cache means the cache key or BASEDIR is wrong, which is worth knowing.
+      - name: ccache stats
+        if: runner.os == 'Linux' && !cancelled()
+        run: ccache --show-stats || true
+
+      # build.py already writes the final compressed archive
+      # (`dist/fox-reader-*-windows-x64.zip` / `dist/fox-reader-*-linux-x64.tar.gz`).
+      # It is uploaded directly (`archive: false`), so there is no second zip
+      # wrapping it. The action fails if the glob matches anything but one file,
+      # which is intended: one job always produces exactly one archive.
+      # Note: with `archive: false` the artifact name is the file name, so every
+      # matrix entry must produce a distinct archive name (it does: the stem
+      # carries version + device + gguf + platform).
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.os == 'Windows' && 'dist/fox-reader-*-windows-x64.zip' || 'dist/fox-reader-*-linux-x64.tar.gz' }}
+          archive: false
+          if-no-files-found: error
+
+  # ── Create GitHub Release ────────────────────────────────────────────────
+  # Runs on version tags only. Collects every archive the matrix uploaded --
+  # whichever variants are active -- and attaches them to one release with
+  # both Windows (.zip) and Linux (.tar.gz) builds.
+  create-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      # Artifacts were uploaded with `archive: false` (single files, not
+      # wrapper zips). `.tar.gz` files pass through as-is, but the Windows
+      # `.zip` files would be auto-extracted without `skip-decompress: true`
+      # below.
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+          # Artifacts were uploaded with `archive: false`, so the Windows
+          # .zip files ARE zip files. Without this, download-artifact
+          # extracts them into artifacts/ and the
+          # `artifacts/fox-reader-*-windows-x64.zip` release glob matches
+          # nothing (the Linux .tar.gz files pass through untouched, which
+          # is why only 2 of 4 files reached the release).
+          skip-decompress: true
+
+      - name: List downloaded artifacts
+        run: ls -R artifacts/ || dir artifacts\
+
+      # Release title and description live here. Before tagging a release,
+      # edit the "What's new" list below to say what the update added --
+      # everything else (title, download table) stays correct as-is.
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Fox Reader v${{ github.ref_name }}
+          files: |
+            artifacts/fox-reader-*-windows-x64.zip
+            artifacts/fox-reader-*-linux-x64.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body: |
+            ## What's new
+
+            - TODO: Notes.
+
+            ## What to download
+
+            Pick the archive matching your OS and GPU, extract it anywhere,
+            and start `launcher` (`launcher.exe` on Windows).
+
+            | Your machine | Download |
+            |---|---|
+            | Windows or Linux, no NVIDIA GPU | the `cpu` archive for your OS (runs anywhere) |
+            | NVIDIA GPU | the `cuXXX` archive matching your card (`cu118` older, `cu126`/`cu129` current, `cu130` newest). CUDA builds need that CUDA driver installed |
+            | Only OCR/typesetting, no local translation | a build *without* `gguf` in its name (smaller, no translator backend) |
+            | Local GGUF translation models | a build *with* `gguf` in its name (bundled llama.cpp, no toolchain needed) |
+
+            Archive names read as
+            `fox-reader-v{version}-{device}[-gguf]-{platform}`:
+            `cpu` = PyTorch backend, `gguf` = translator backend included,
+            `windows-x64` = `.zip`, `linux-x64` = `.tar.gz`. Missing your
+            combination? Build it yourself with
+            [`packaging/build.md`](../blob/master/packaging/build.md).

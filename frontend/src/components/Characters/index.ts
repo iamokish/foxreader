@@ -1,0 +1,1 @@
+export { CharactersModal } from "./CharactersModal";

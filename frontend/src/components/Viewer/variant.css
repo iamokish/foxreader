@@ -1,0 +1,163 @@
+/*
+ * The Original/Saved switch, and the tick on a page that has been saved.
+ *
+ * Every colour is a theme token, so both themes and both layouts get this for
+ * free -- there is no light/dark variant of this file to keep in step.
+ */
+
+/*
+ * The switch is a sibling of `#imageContainer`, so it needs the viewer cell as
+ * its containing block. Both of these hold only the viewer (the basic layout's
+ * column also holds the gallery bar, which sits below), and neither had any
+ * positioned descendant of its own outside `#imageContainer` -- which is
+ * already `position: relative` and so keeps every child it has today.
+ */
+.viewer-section,
+body.layout-default .ws-col--viewer > .ws-cell--fill {
+    position: relative;
+}
+
+.variant-switch {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    z-index: 20;
+    display: none; /* shown by `updateVariantSwitch` once this page has been saved */
+    align-items: stretch;
+    gap: 0;
+    padding: 1px;
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-sm);
+    /* Translucent so it never hides artwork underneath; solid on hover, when the
+       user is actually aiming at it. */
+    opacity: 0.65;
+    transition: opacity 0.15s ease;
+    /* The viewer's pan handler lives on the container this sits over. */
+    user-select: none;
+}
+
+.variant-switch:hover,
+.variant-switch:focus-within {
+    opacity: 1;
+}
+
+.variant-switch__label {
+    display: flex;
+    align-items: center;
+    padding: 0 5px 0 4px;
+    font-family: sans-serif;
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.variant-switch__btn {
+    padding: 2px 7px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: sans-serif;
+    font-size: 10.5px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.variant-switch__btn:hover:not(.is-active) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.variant-switch__btn.is-active {
+    background: var(--bg-highlight);
+    color: var(--text-primary);
+    font-weight: bold;
+}
+
+/*
+ * Shown while a variant swap is in flight. The new URL carries a fresh cache
+ * buster, so on a large page there is a real gap during which the *old* variant
+ * is still on screen -- without this the switch looks like it did nothing.
+ */
+.variant-loader {
+    position: absolute;
+    inset: 0;
+    z-index: 21;
+    display: none; /* flipped to flex by `setViewVariant` */
+    align-items: center;
+    justify-content: center;
+    /* Never in the way of a click: the swap is only a repaint. */
+    pointer-events: none;
+}
+
+.variant-loader__badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    box-shadow: var(--shadow-lg);
+    color: var(--text-secondary);
+    font-family: sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.variant-loader .modal-spinner {
+    width: 16px;
+    height: 16px;
+    border-width: 2px;
+}
+
+/*
+ * Needed for the tick to sit on the thumbnail's corner. Safe to add here: the
+ * container is a flex item with no offsets of its own, so nothing moves.
+ */
+.gallery-item-container {
+    position: relative;
+}
+
+.gallery-saved {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    font-size: 16px !important;
+    line-height: 1;
+    color: var(--color-success);
+    /* A ring behind the glyph so it reads on light and dark artwork alike. */
+    background: var(--bg-secondary);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/*
+ * Read-only mode, driven by `applySavedViewLocks` in `viewer.ts`.
+ *
+ * The saved page already has the typeset text baked into the pixels, so the
+ * entry list and the region outlines -- both of which describe the *original* --
+ * would be describing something that is not on screen.
+ */
+body.viewing-saved #savedEntriesList,
+body.viewing-saved #regionSvgOverlay {
+    /* `!important` is load-bearing: both `EntriesRegion` and `EntryList` carry an
+       inline `display: flex`, which a plain rule here cannot outrank. */
+    display: none !important;
+}
+
+body.viewing-saved #alignmentCycleBtn,
+body.viewing-saved #inpaintGenerateBtn,
+body.viewing-saved #inpaintPreviewBtn,
+body.viewing-saved #clearPageBtn,
+body.viewing-saved #confirmTranslationBtn {
+    /* Alongside the `disabled` property, not instead of it: something else may
+       re-enable one of these while the lock is on, and this still holds. */
+    pointer-events: none;
+    opacity: 0.45;
+    cursor: not-allowed;
+}

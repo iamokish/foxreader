@@ -1,0 +1,243 @@
+[build-system]
+requires = ["setuptools>=84.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fox-reader"
+version = "0.1.0"
+description = "Manga reader with OCR, translation, and typesetting"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "beautifulsoup4==4.15.0",
+    "pandas==3.0.3",
+    "huggingface_hub==1.22.0",
+    # Bare fastapi: only the optionals we actually use are listed below.
+    # jinja2 (templates/TemplateResponse), email-validator (fastapi openapi
+    # models), websockets (/ws/lifecycle). python-multipart + uvloop are
+    # future-proofing, not used yet (no Form/File uploads; uvicorn falls back
+    # to asyncio/h11 without uvloop/httptools).
+    "fastapi==0.141.1",
+    "uvicorn==0.50.0",
+    "jinja2>=3.1.5",
+    "email-validator>=2.0.0",
+    "websockets>=11.0",
+    "python-multipart>=0.0.18",
+    "uvloop>=0.15.1; sys_platform != 'win32' and sys_platform != 'cygwin' and platform_python_implementation != 'PyPy'",
+    "pillow==12.2.0",
+    "fonttools==4.64.0",
+    "paddleocr==3.7.0",
+    "natsort==8.4.0",
+    "brotli==1.2.0",
+    "protobuf==7.35.1",
+    "httpx[http2]==0.28.1",
+    "pyyaml==6.0.2",
+    "pydantic==2.13.4",
+    "psutil==7.2.2",
+    "cryptography==50.0.1",
+    "sentencepiece==0.2.1",
+    "transformers==5.14.1",
+    "accelerate==1.14.0",
+    "safetensors==0.8.0",
+    # The one OpenCV. Both distributions install into the same `cv2/` package, so
+    # having both means whichever pip touched last owns the shared modules and the
+    # loser is left as empty namespace folders that import but export nothing.
+    # paddlex pins this exact version; contrib is a superset of plain
+    # `opencv-python`, so it satisfies every consumer, and the override below
+    # stops the plain one being pulled in beside it.
+    "opencv-contrib-python==4.10.0.84"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.6",
+    "mypy==2.3.1",
+]
+bin-build = [
+    "nuitka==4.2.1",
+]
+# For GGUF Models
+gguf = [
+    "llama-cpp-python==0.3.35",
+]
+# CPU
+cpu = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+macos = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+# CUDA 11.8
+cu118 = [
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+]
+# CUDA 12.6
+cu126 = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+# CUDA 12.9
+cu129 = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+cu129_win = [
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+]
+# CUDA 13.0
+cu130 = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+]
+# AMD ROCm. Linux only -- AMD publishes no ROCm wheels for Windows, and the HIP
+# backend llama.cpp builds for these (see packaging/llamacpp.py) is Linux only
+# too. On any other platform the sources below do not apply and these extras
+# resolve to the ordinary PyPI torch, which keeps the lock solvable for all three
+# environments without pretending ROCm exists there.
+#
+# The version in the name is ROCm's, not torch's: `2.13.0+rocm7.2` still matches
+# `torch==2.13.0`, because a specifier with no local version ignores the one on
+# the wheel -- the same thing the cu126 and cu129 extras rely on.
+#
+# `triton-rocm` is torch's own dependency, named here because a `[tool.uv.sources]`
+# entry only applies to a dependency the project declares itself. PyPI has no
+# project by that name -- it lives only on the ROCm index -- so without the pair
+# below the lock fails on the Linux split with "no version of triton-rocm==3.7.1",
+# and the platform marker is what keeps it from being looked for at all on Windows
+# and macOS. The CUDA extras need no equivalent: their `triton` is on PyPI.
+# ROCm 7.1
+rocm71 = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+    "triton-rocm ; sys_platform == 'linux'",
+]
+# ROCm 7.2
+rocm72 = [
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+    "triton-rocm ; sys_platform == 'linux'",
+]
+
+[project.scripts]
+fox-reader = "fox_reader.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+# Guard against any dependency pulling plain `opencv-python` over the top of
+# the `opencv-contrib-python` paddlex pins. A marker that is false in every
+# environment above deletes that requirement rather than resolving it: nothing
+# ever installs opencv-python, and the contrib build in `dependencies` provides
+# the `cv2` every consumer imports.
+override-dependencies = [
+    "opencv-python ; sys_platform == 'never'",
+]
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "macos" },
+        { extra = "cu118" },
+        { extra = "cu126" },
+        { extra = "cu129" },
+        { extra = "cu129_win" },
+        { extra = "cu130" },
+        { extra = "rocm71" },
+        { extra = "rocm72" },
+    ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-mac"
+url = "https://pypi.org/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm71"
+url = "https://download.pytorch.org/whl/rocm7.1"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm72"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu118", extra = "cu118", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system != 'Darwin' and platform_system != 'Windows'" },
+    { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
+    { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-mac", extra = "macos", marker = "platform_system == 'Darwin'"}
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu118", extra = "cu118", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu126", extra = "cu126", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system != 'Darwin' and platform_system != 'Windows'" },
+    { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
+    { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
+    { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-mac", extra = "macos", marker = "platform_system == 'Darwin'"}
+]
+triton-rocm = [
+    { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
+    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" },
+]

@@ -1,0 +1,93 @@
+/* Dark theme (default) */
+:root {
+    /* Background colors */
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #2b2b2b;
+    --bg-tertiary: #3a3735;
+    --bg-quaternary: #2b2826;
+    --bg-surface: #222222;
+    --bg-viewer: #1a1a1a;
+    --bg-overlay: rgba(15, 15, 15, 0.92);
+    --bg-highlight: #5a544f;
+    --bg-inline-editor: rgba(255, 255, 255, 0.95);
+
+    /* Text colors */
+    --text-primary: #e0e0e0;
+    --text-secondary: #cccccc;
+    --text-muted: #999999;
+    --text-dim: #888888;
+    --text-faint: #666666;
+    --text-on-accent: #121212;
+    --text-on-button: #ffffff;
+    --text-inline-editor: #000000;
+
+    /* Border colors */
+    --border-default: #444444;
+    --border-strong: #555555;
+    --border-hover: #666666;
+    --border-subtle: #3d3d3d;
+    --border-accent: #ffffff;
+
+    /* Accent colors */
+    --accent-gold: #ffd166;
+    --accent-active: #9ab4ff;
+    --accent-selection: #ffcc00;
+
+    /* Semantic colors */
+    --color-primary: #2f80ed;
+    --color-success: #28a745;
+    --color-danger: #dc3545;
+    --color-purple: #6f42c1;
+    --color-cyan: #17a2b8;
+    --color-green: #4caf50;
+
+    /* Button colors */
+    --btn-primary-bg: #2f80ed;
+    --btn-primary-border: #1c6dd0;
+    --btn-secondary-bg: #6c757d;
+    --btn-secondary-border: #545b62;
+    --btn-danger-bg: #dc3545;
+    --btn-danger-border: #bd2130;
+    --btn-success-bg: #28a745;
+    --btn-success-border: #218838;
+    --btn-purple-bg: #6f42c1;
+    --btn-purple-border: #5a32a3;
+
+    /* Slider */
+    --slider-bg: #555555;
+    --slider-checked-bg: #4caf50;
+    --slider-disabled-bg: #3a3a3a;
+    --slider-knob: #ffffff;
+
+    /* Scrollbar */
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+
+    /* SVG overlay */
+    --svg-fill: rgba(255, 255, 255, 0.1);
+    --svg-fill-active: rgba(255, 255, 255, 0.35);
+
+    /* Text-clean live preview (blur + hatch over the region to be erased) */
+    --clean-plate: rgba(23, 162, 184, 0.18);
+    --clean-mark: rgba(23, 162, 184, 0.45);
+    --clean-blur: 3px;
+
+    /* Spinner */
+    --spinner-border: rgba(255, 255, 255, 0.1);
+
+    /* Box shadows */
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 15px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 15px 40px rgba(0, 0, 0, 0.7);
+
+    /* Selection box */
+    --selection-bg: rgba(255, 204, 0, 0.15);
+
+    /* Workspace (Default layout) */
+    --panel-header-bg: #262626;
+    --splitter: #3d3d3d;
+    --splitter-hover: #666666;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+}

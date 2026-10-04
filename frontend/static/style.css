@@ -1,0 +1,2282 @@
+/* ============================================================
+   1. GLOBAL & LAYOUT RESET
+   ============================================================ */
+html,
+body {
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  /* Prevents double scrollbars */
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: sans-serif;
+}
+
+.main-app-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  width: 100vw;
+}
+
+/* Horizontal split: Left (Image) | Right (Tools) */
+.main-layout {
+  display: flex;
+  flex: 1;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* Thin custom scrollbar utility class */
+.custom-scrollbar {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track,
+.custom-scrollbar::-webkit-scrollbar-button {
+  background: transparent;
+  display: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ============================================================
+   2. TOP NAVIGATION (Folder Path)
+   ============================================================ */
+.folder-nav {
+  background: var(--bg-primary);
+  padding: 0px 4px 4px 0px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#folderPathInput {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+#folderPathInput:focus {
+  outline: none;
+}
+
+/* ============================================================
+   3. VIEWER SECTION (LEFT - STRICT 50%)
+   ============================================================ */
+.viewer-section {
+  flex: 0 0 50%;
+  /* Strict 50% width */
+  max-width: 50%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-viewer);
+  border-right: 1px solid var(--border-default);
+}
+
+.image-container {
+  flex: 1;
+  overflow: hidden;
+  /* Start locked */
+  position: relative;
+  background-color: var(--bg-tertiary);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  /* Vertical Center */
+  justify-content: center;
+  /* Horizontal Center */
+}
+
+#mainImage {
+  position: absolute;
+  /*
+   * Anchored at the container's top-left, never centred by CSS.
+   *
+   * Centring used to be done here with top/left: 50% and a -50% translate, and
+   * that is what made panning impossible: half the image ends up at negative
+   * coordinates, and a scroll container cannot reach anything above or left of
+   * its origin. viewer.ts places the page instead -- an explicit translate that
+   * centres an axis while it fits and pins it to 0 once it does not -- so every
+   * pixel of an over-sized page is inside the scrollable area.
+   *
+   * transform-origin must match: the script's arithmetic scales from the
+   * top-left corner.
+   */
+  top: 0;
+  left: 0;
+  margin: 0;
+  transform-origin: 0 0;
+  transform: none;
+
+  display: block;
+  flex-shrink: 0;
+
+  max-width: none;
+  max-height: none;
+
+  /* Prevents the browser from treating the image as a draggable object */
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+
+  /* Prevents the user from highlighting the image like text */
+  user-select: none;
+}
+
+#imageContainer {
+  display: flex;
+  /* Crucial for centering */
+  justify-content: center;
+  /* Center horizontally */
+  align-items: center;
+  /* Center vertically */
+  overflow: auto;
+  position: relative;
+  width: 100%;
+  height: 80vh;
+  /* Or whatever your height is */
+  background-color: var(--bg-viewer);
+  /* Keep a wheel that runs out of page here instead of scrolling the app behind it */
+  overscroll-behavior: contain;
+  /* 🆕 Hide scrollbars for Firefox */
+  scrollbar-width: none;
+
+  /* 🆕 Hide scrollbars for IE and Legacy Edge */
+  -ms-overflow-style: none;
+}
+
+#imageContainer::-webkit-scrollbar {
+  display: none;
+}
+
+
+/* Selection Box for Capture */
+#cropSelector {
+  position: absolute;
+  border: 2px solid var(--accent-selection);
+  background-color: var(--selection-bg);
+  display: none;
+  z-index: 1000;
+  pointer-events: none;
+  /* Crucial: mouse events pass through to container */
+}
+
+/* Bottom Gallery Bar */
+/* The main bar */
+.gallery-bar {
+  display: flex;
+  flex-direction: row;
+  /* Force side-by-side */
+  overflow-x: auto;
+  /* Enable horizontal scroll */
+  overflow-y: hidden;
+  /* Disable vertical scroll */
+  white-space: nowrap;
+  /* Prevent wrapping */
+  gap: 15px;
+  padding: 10px;
+  background: var(--bg-surface);
+  min-height: 110px;
+  max-height: 110px;
+  height: 110px;
+  /* Adjust based on thumbnail size */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+  /* Modern scrollbar styling */
+  /* Hide scrollbar for a cleaner look (optional) */
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  /*scrollbar-width: none;*/
+  /* Firefox */
+}
+
+/* If you want to hide the scrollbar in Chrome/Safari */
+.gallery-bar::-webkit-scrollbar {
+  display: none;
+}
+
+
+.gallery-bar::-webkit-scrollbar {
+  height: 4px;
+  /* thin horizontal scrollbar */
+}
+
+.gallery-bar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gallery-bar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-hover);
+  border-radius: 10px;
+}
+
+.gallery-bar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.gallery-bar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Container for each thumbnail + index */
+.gallery-item-container {
+  display: flex;
+  flex-direction: column;
+  /* Stack image on top, text on bottom */
+  align-items: center;
+  /* Center them horizontally */
+  cursor: pointer;
+  transition: transform 0.2s;
+  flex: 0 0 auto;
+  /* CRITICAL: Prevents images from shrinking */
+  margin-bottom: 5px;
+}
+
+/* The actual thumbnail */
+.gallery-item {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border: 2px solid transparent;
+  border-radius: 4px;
+}
+
+/* Active state styling */
+.gallery-item-container.active .gallery-item {
+  border-color: var(--accent-selection);
+}
+
+.gallery-item-container.active .gallery-index {
+  color: var(--accent-selection);
+  font-weight: bold;
+}
+
+/* The index number below */
+.gallery-index {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  font-family: sans-serif;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* Optional: Custom scrollbar for Chrome/Edge/Safari */
+.gallery-bar::-webkit-scrollbar {
+  height: 8px;
+}
+
+.gallery-bar::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 10px;
+}
+
+.gallery-bar::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+.gallery-item:hover {
+  border-color: var(--border-strong);
+}
+
+.gallery-item.active {
+  border-color: var(--accent-active);
+}
+
+/* ============================================================
+   4. CONTENT AREA (RIGHT - STRICT 50%)
+   ============================================================ */
+.content-area {
+  flex: 0 0 50%;
+  /* Strict 50% width */
+  max-width: 50%;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 20px 20px 20px;
+  background: var(--bg-primary);
+  overflow-y: auto;
+  box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.content-area::-webkit-scrollbar {
+  width: 4px;
+}
+
+.content-area::-webkit-scrollbar-track,
+.content-area::-webkit-scrollbar-button {
+  background: transparent;
+  display: none;
+}
+
+.content-area::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+.content-area::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+
+/* Form Elements */
+textarea {
+  width: 100%;
+  min-height: 80px;
+  height: 130px;
+  max-height: 300px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 12px;
+  resize: vertical;
+  font-size: 16px;
+  box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* 1. Define the width of the scrollbar */
+textarea::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* 2. Disables the background track and removes the arrows */
+textarea::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-button {
+  background: transparent;
+  display: none;
+  /* Hide the arrows entirely */
+}
+
+/* 3. Style just the draggable thumb */
+textarea::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--text-faint);
+}
+
+.textarea-wrapper {
+  position: relative;
+}
+
+/* Keep your existing blur */
+textarea.ocr-loading {
+  filter: blur(4px);
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Loading waveform dots */
+.ocr-loader {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.ocr-loader span {
+  width: 8px;
+  height: 8px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  animation: waveform 0.8s infinite ease-in-out;
+}
+
+.ocr-loader span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.ocr-loader span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes waveform {
+
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+
+  50% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+.ocr-loader.active {
+  display: flex;
+}
+
+
+
+select {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 15px;
+  margin: 5px 1px;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+}
+
+button:focus {
+  outline: none;
+}
+
+/* ============================================================
+   5. BUTTONS & UI COMPONENTS
+   ============================================================ */
+/* Apply your button styles to the select box too */
+.buttons {
+  display: flex;
+  /* Puts items in a row */
+  align-items: center;
+  /* Forces everything to be perfectly centered vertically */
+  gap: 5px;
+  /* Space between buttons and select */
+  padding: 5px;
+  flex-wrap: wrap;
+}
+
+button,
+#languageSelect {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  /* Remove margin: 5px 2px; to prevent it from pushing the box down */
+  margin: 0;
+  font-weight: 700;
+  cursor: pointer;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
+
+  /* Standardizes how text sits inside the box */
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+#languageSelect {
+  min-width: 110px;
+  /* Standardizes the internal line height so text isn't "below" the button text */
+  line-height: 38px;
+  vertical-align: middle;
+}
+
+
+.translator-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 6px;
+  /* First value is vertical (row) gap, second value is horizontal (column) gap */
+  width: 100%;
+  box-sizing: border-box;
+  padding-top: 0px;
+  /* Optional: Adds a tiny buffer between the buttons and whatever element is above them */
+}
+
+/* Ensure the buttons scale cleanly within their flex wrapper bounds */
+.translator-buttons button {
+  margin: 0;
+  /* Clear out any legacy margins that might disrupt the flex gap calculation */
+}
+
+
+
+/* Active state for the currently selected translation button */
+.translator-buttons button.active-translator {
+  background-color: var(--accent-active) !important;
+  color: var(--text-on-accent) !important;
+  border-color: var(--border-accent) !important;
+  box-shadow: 0 0 8px rgba(154, 180, 255, 0.4);
+}
+
+
+.material-icons {
+  font-size: 18px;
+  margin-right: 5px;
+  /* Ensures icon doesn't push the button height weirdly */
+  display: inline-block;
+  vertical-align: middle;
+}
+
+
+/* Native Wrapper Styling */
+.translation-wrapper {
+  flex: 1;
+  min-height: 350px;
+  height: 65vh;
+  border-radius: 8px;
+  background: var(--bg-quaternary);
+  margin-top: 10px;
+  padding: 6px 15px 8px 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+#translationContainer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* Integrated from api_frame.html */
+.translation-wrapper .panel {
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  width: 100%;
+  min-height: 20vh;
+  max-width: 100%;
+  padding: 8px;
+  font-size: 1rem;
+  line-height: 1.3;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-secondary);
+  overflow-y: auto;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+  box-sizing: border-box;
+}
+
+
+/* 1. Set the scrollbar width to 4px to match your design */
+.translation-wrapper .panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* 2. Hide the background track and the up/down arrows */
+.translation-wrapper .panel::-webkit-scrollbar-track,
+.translation-wrapper .panel::-webkit-scrollbar-button {
+  background: transparent;
+  display: none;
+}
+
+/* 3. Style the scrollbar thumb */
+.translation-wrapper .panel::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-hover);
+  border-radius: 4px;
+}
+
+
+.translation-wrapper .panel.error {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Translated Text Panel: Fixed at 60% height */
+.translation-wrapper .panel.translated {
+  height: 100%;
+  min-height: 0;
+  font-weight: 500;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.translation-wrapper .panel.translating {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+
+.translation-wrapper .alt_translated {
+  color: var(--text-muted);
+  font-weight: 425;
+  padding-top: 6px;
+  margin-top: 6px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+
+/* Ensure the canvas covers the entire viewable area of the container */
+#drawCanvas {
+  width: 100%;
+  height: 100%;
+}
+
+/* Optional: style the Free button differently if you want it to stand out */
+/* #freeCapture .material-icons {
+    color: #ffcc00;
+}*/
+
+/* Add this to your CSS */
+.stop-scrolling {
+  overflow: hidden !important;
+  user-select: none;
+  /* Prevents text highlighting while dragging */
+}
+
+/* Ensure the canvas is always on top during capture */
+#drawCanvas {
+  z-index: 9999;
+  cursor: crosshair;
+}
+
+
+/* Color for Rectangle Capture when active */
+#rectCapture.active-capture {
+  background-color: var(--color-success) !important;
+  color: white !important;
+  box-shadow: 0 0 10px var(--color-success);
+}
+
+#freeCapture.active-capture {
+  background-color: var(--accent-selection) !important;
+  color: white !important;
+  box-shadow: 0 0 10px var(--accent-selection);
+}
+
+/* Optional: add a subtle pulse animation */
+.active-capture {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+
+/* Container styling to make the checkbox look like a button */
+.ml-control-box {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  padding: 0 14px;
+  border-radius: 8px;
+  height: 38px;
+  color: var(--text-primary);
+}
+
+.ml-label {
+  padding-left: 4px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* Small toggle switch styling */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+}
+
+.switch input {
+  display: none;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--slider-bg);
+  transition: .4s;
+  border-radius: 20px;
+}
+
+input:checked+.slider {
+  background-color: var(--slider-checked-bg);
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked+.slider:before {
+  transform: translateX(14px);
+}
+
+
+
+
+
+/* Disabled checkbox */
+.switch input:disabled+.slider {
+  background-color: var(--slider-disabled-bg);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Disabled knob */
+.switch input:disabled+.slider:before {
+  background-color: var(--slider-knob);
+  opacity: 0.5;
+}
+
+/* Keep checked color muted when disabled */
+.switch input:checked:disabled+.slider {
+  background-color: var(--slider-checked-bg);
+  opacity: 0.6;
+}
+
+/* Optional: dim the whole switch */
+.switch input:disabled+.slider,
+.switch input:disabled+.slider:before {
+  transition: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Dropdown Container */
+.dropdown {
+  position: relative;
+  padding: 0 !important;
+  /* Reset padding to let button fill space */
+  border: none !important;
+}
+
+.dropdown-trigger {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  height: 38px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+}
+
+/* The Hidden Menu */
+.dropdown-content {
+  display: none;
+  position: fixed;
+  background-color: var(--bg-secondary);
+  min-width: 160px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 2000;
+  padding: 10px;
+}
+
+/* THE MAGIC BRIDGE: This invisible area keeps the hover active 
+   if there's a slight visual gap */
+.dropdown-content::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  /* Extends the hoverable area 10px upwards */
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: transparent;
+}
+
+/* Menu Row Styling */
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.menu-item:last-child {
+  border-bottom: none;
+}
+
+.menu-item .ml-label {
+  padding-right: 15px;
+  font-size: 13px;
+}
+
+/* Settings entry: a full-row anchor that reads like the other menu rows and
+   leads to the settings page. Kept here (not in a component stylesheet) so
+   the server-rendered toolbar is styled before the bundle loads. */
+.menu-link {
+  gap: 8px;
+  /* No width:100% here: as a block-level flex container the anchor already
+     fills the dropdown, and width:100% plus padding overflowed the list under
+     content-box (the hover background spilled past the dropdown border). */
+  box-sizing: border-box;
+  margin-top: 2px;
+  padding: 8px;
+  border-radius: 6px;
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.menu-link:hover {
+  background: var(--bg-tertiary);
+  text-decoration: none;
+}
+
+.menu-link:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 1px;
+}
+
+.menu-link > .material-icons:first-child {
+  color: var(--accent-gold);
+}
+
+.menu-link .ml-label {
+  flex: 1;
+  padding: 0;
+}
+
+.menu-link > .material-icons:last-child {
+  font-size: 16px;
+  color: var(--text-faint);
+}
+
+/* Reading direction: two icons, one choice. Segmented like the alignment
+   control in the entry options, so the selected direction reads as pressed. */
+.reading-dir-group {
+  display: flex;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.reading-dir-btn {
+  height: 30px;
+  min-width: 38px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.reading-dir-btn:first-child {
+  border-right: 1px solid var(--border-subtle);
+}
+
+.reading-dir-btn:hover:not(:disabled) {
+  background: var(--bg-quaternary);
+  color: var(--text-primary);
+}
+
+.reading-dir-btn.is-active {
+  background: var(--accent-gold);
+  color: var(--text-on-accent);
+}
+
+.reading-dir-btn:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: -2px;
+}
+
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+
+/* Generic hover for plain buttons (colored .btn-* keep their own color) */
+button:hover:not(:disabled):not(.btn-primary):not(.btn-secondary):not(.btn-danger):not(.btn-success):not(.btn-purple),
+#languageSelect:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+  border-color: var(--border-hover);
+}
+
+/* Colored buttons keep their color and darken slightly on hover */
+.btn-primary:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled),
+.btn-danger:hover:not(:disabled),
+.btn-success:hover:not(:disabled),
+.btn-purple:hover:not(:disabled) {
+  filter: brightness(0.88);
+}
+
+/* Your disabled state (keep this as is) */
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(1);
+  /* Optional: Force background to stay same when disabled */
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--text-faint) !important;
+}
+
+.non-select {
+  -webkit-user-select: none;
+  /* Safari */
+  -ms-user-select: none;
+  /* IE 10 and Edge */
+  user-select: none;
+  /* Standard syntax for Chrome, Firefox, and Opera */
+}
+
+
+/* ============================================================
+   6. ACTIVE WORKBENCH LAYOUT SUITE
+   ============================================================ */
+.saved-entry-card {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  /* Forces content left-aligned */
+  gap: 12px;
+  border-left: 4px solid transparent;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.entry-checkbox {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: currentColor;
+  margin: 0;
+  /* Prevents alignment shifting */
+  flex-shrink: 0;
+}
+
+.entry-text-preview {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  /* Strict left alignment */
+}
+
+.delete-entry-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-dim) !important;
+  padding: 0 !important;
+  height: auto !important;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.delete-entry-btn:hover {
+  color: var(--color-danger) !important;
+}
+
+.edit-entry-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-dim) !important;
+  padding: 0 !important;
+  height: auto !important;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.edit-entry-btn:hover {
+  color: var(--color-green) !important;
+}
+
+.align-entry-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-dim) !important;
+  padding: 0 !important;
+  height: auto !important;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.align-entry-btn:hover {
+  color: var(--color-green) !important;
+}
+
+
+.split-entry-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-dim) !important;
+  padding: 0 !important;
+  height: auto !important;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.split-entry-btn:hover {
+  color: var(--color-green) !important;
+}
+
+/* SVG Overlays directly sitting inside the absolute layout track */
+/*.svg-overlay-polygon {
+  fill: rgba(255, 255, 255, 0.1);
+  stroke-width: 2;
+  stroke-dasharray: 4 2;
+}
+*/
+
+
+
+
+
+/* Contenteditable styling parameters */
+.panel.translated[contenteditable="true"] {
+  outline: none;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.panel.translated22[contenteditable="true"]:focus {
+  border-color: var(--text-faint);
+  background-color: var(--bg-tertiary);
+}
+
+/* Entry Card Hover Highlight States */
+/*.saved-entry-card.highlighted-entry {
+  background: #4a4542 !important;
+  box-shadow: 0 0 8px rgba(255,255,255,0.15);
+}*/
+.saved-entry-card.highlighted-entry {
+  background: var(--bg-highlight) !important;
+  border: 2px solid var(--accent-gold);
+  box-shadow:
+    0 0 12px rgba(255, 209, 102, 0.5),
+    0 0 24px rgba(255, 209, 102, 0.25),
+    var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+/* SVG Active Vector Styling */
+.svg-overlay-polygon {
+  fill: var(--svg-fill);
+  stroke-width: 2;
+  stroke-dasharray: 4 2;
+  pointer-events: auto;
+  /* Required to catch mouse events for feature 4 */
+  cursor: pointer;
+  transition: fill 0.15s, stroke-width 0.15s;
+}
+
+.svg-overlay-polygon.active-hover-region {
+  fill: var(--svg-fill-active) !important;
+  stroke-width: 4 !important;
+  stroke-dasharray: none !important;
+}
+
+/* While a draw capture (rect / freeform / split) is in flight, region shapes
+   must not see the pointer at all: a mousedown on a shape would otherwise
+   select its entry, and the mouseup-click would then overwrite the editor
+   with the entry's own text right after the capture lands. `!important` wins
+   against the `.svg-overlay-polygon` hit-target rule above, the same way the
+   hover rules do. The overlay stays visible -- only hit-testing is suspended,
+   and `ocr.ts` lifts this on every capture exit path. */
+body.fox-capturing #regionSvgOverlay .entry-shape,
+body.fox-capturing #regionSvgOverlay .entry-shape * {
+  pointer-events: none !important;
+}
+
+/* Hover Tooltip Translation Box */
+#regionHoverTooltip {
+  position: absolute;
+  z-index: 10000;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 280px;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-strong);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: sans-serif;
+  transform: translate(-50%, -120%);
+  /* Center above the pointer target */
+  transition: opacity 0.1s ease;
+}
+
+
+/* ============================================================
+   7. INPAINT SPINNING LOADING TRACK MECHANICS
+   ============================================================ */
+.modal-spinner {
+  width: 50px;
+  height: 50px;
+  border: 5px solid var(--spinner-border);
+  border-top-color: var(--color-cyan);
+  /* Matches preview button color */
+  border-radius: 50%;
+  animation: modalSpinTransform 0.8s linear infinite;
+}
+
+@keyframes modalSpinTransform {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+/* Interactive Vector Inpaint Group Layout */
+.interactive-inpaint-group text {
+  pointer-events: none;
+  /* Allows click events to drop down into background path */
+  user-select: none;
+}
+
+
+
+
+/* Inline Canvas Text Editor Overlay */
+.inline-canvas-editor {
+  background: var(--bg-inline-editor);
+  color: var(--text-inline-editor);
+  border: 2px dashed var(--color-cyan);
+  border-radius: 4px;
+  padding: 4px;
+  box-sizing: border-box;
+  font-family: sans-serif;
+  font-weight: bold;
+  line-height: 1.2;
+  z-index: 50;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+  box-shadow: var(--shadow-md);
+}
+
+.expanded-menu {
+  position: absolute;
+  z-index: 9999;
+  height: auto !important;
+  max-height: 300px;
+}
+
+/* ============================================================
+   8. THEME SWITCHER & BUTTON UTILITY CLASSES
+   ============================================================ */
+.theme-select {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.font-select-trigger {
+  height: 32px;
+  font-size: 14px;
+  padding: 0 10px;
+  border-radius: 4px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.font-options-container {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary {
+  background-color: var(--btn-primary-bg);
+  border-color: var(--btn-primary-border);
+  color: var(--text-on-button);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-secondary {
+  background-color: var(--btn-secondary-bg);
+  border-color: var(--btn-secondary-border);
+  color: var(--text-on-button);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-danger {
+  background-color: var(--btn-danger-bg);
+  border-color: var(--btn-danger-border);
+  color: var(--text-on-button);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-success {
+  background-color: var(--btn-success-bg);
+  border-color: var(--btn-success-border);
+  color: var(--text-on-button);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-purple {
+  background-color: var(--btn-purple-bg);
+  border-color: var(--btn-purple-border);
+  color: var(--text-on-button);
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* ============================================================
+   ENTRY CARDS -- HEAD ROW + TYPESETTING COLLAPSIBLE
+   Every colour here resolves through a theme variable, so the
+   panel follows dark/light and both layouts without a fork.
+   ============================================================ */
+
+/* The card is now a two-part stack: a summary row, plus an options
+   panel that is only in the DOM while it is open. The base rule
+   further up still supplies the background, radius, colour bar
+   and shadow. */
+.saved-entry-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.entry-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.saved-entry-card.is-open .entry-head {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.entry-head .material-icons {
+    font-size: 16px;
+}
+
+/* Reading number. Sized for two digits so a stack of ten does not
+   nudge the text preview sideways as numbers change. The background is set
+   inline to the entry's outline colour; these rules only shape the pill. */
+.entry-layer-badge {
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    background: var(--bg-quaternary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 9px;
+    cursor: default;
+    user-select: none;
+}
+
+.saved-entry-card.is-open .entry-layer-badge,
+.saved-entry-card.highlighted-entry .entry-layer-badge {
+    color: var(--text-on-accent);
+    background: var(--accent-gold);
+    border-color: var(--accent-gold);
+}
+
+/* Icon-only marker: this entry's background is not on Auto. */
+.entry-bg-chip {
+    flex-shrink: 0;
+    font-size: 14px !important;
+    line-height: 1;
+    color: var(--color-cyan);
+    cursor: default;
+    user-select: none;
+}
+
+.entry-toggle-btn {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-dim) !important;
+    padding: 0 !important;
+    height: auto !important;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.entry-toggle-btn:hover {
+  color: var(--text-primary) !important;
+}
+
+/* Reading-order nudge buttons. Same invisible chrome as the options toggle;
+   a disabled end of the list goes quiet instead of disappearing, so the head
+   never reflows when the selection moves. */
+.move-entry-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-dim) !important;
+  padding: 0 !important;
+  height: auto !important;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.move-entry-btn:hover:not(:disabled) {
+  color: var(--text-primary) !important;
+}
+
+.move-entry-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.move-entry-btn .material-icons {
+  font-size: 16px;
+}
+
+/* Overlay reading numbers. Geometry (position, size) is stamped per badge in
+   image pixels; this only sets what paint cannot: no pointer capture, so the
+   badge never steals a click from its region's outline. */
+.entry-number {
+  pointer-events: none;
+}
+
+.entry-number text {
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Split is armed and waiting for the cut to be drawn. The spec asks
+   for the glow to live here rather than on the toolbar. */
+.split-entry-btn.split-active {
+    color: var(--accent-selection) !important;
+    filter: drop-shadow(0 0 5px var(--accent-selection));
+    animation: pulse 1.5s infinite;
+}
+
+/* The two capture buttons that had no active state of their own. */
+#bubCapture.active-capture {
+    background-color: var(--color-purple) !important;
+    color: var(--text-on-button) !important;
+    box-shadow: 0 0 10px var(--color-purple);
+}
+
+/* Bubble detection is an optional model, and the server is the authority on
+   whether its weights loaded: index.html omits the button from the markup and
+   sets this class on <body> when they did not (bubble_available). Both are
+   server-rendered, so a toolbar built from stale JS -- a bundle compiled
+   before the gate existed, which is exactly how this button came back once --
+   cannot put a dead control on screen. The Preact toolbar gates on
+   __FOX_CONFIG__.bubbleAvailable and normally never renders it at all. */
+body.no-bubble #bubCapture {
+    display: none !important;
+}
+
+#PageCapture.active-capture {
+    background-color: var(--color-cyan) !important;
+    color: var(--text-on-button) !important;
+    box-shadow: 0 0 10px var(--color-cyan);
+}
+
+/* ---------- the collapsible ---------- */
+
+.entry-collapse {
+    padding: 8px 10px 10px;
+    background: var(--bg-quaternary);
+    font-size: 11px;
+    cursor: default;
+    animation: entryCollapseIn 0.14s ease;
+}
+
+@keyframes entryCollapseIn {
+    from {
+        opacity: 0;
+        transform: translateY(-3px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.eo-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* A fixed label column keeps every control left-aligned with the
+   next, which is what stops a narrow panel reading as clutter.
+   Rows wrap: a row can carry two labelled groups, and on a very
+   narrow sidebar the second one drops below rather than crushing
+   the first. */
+.eo-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    row-gap: 5px;
+    min-height: 22px;
+}
+
+/* One label plus its controls, as a unit. The row wraps between
+   groups, never inside one -- as bare siblings, "Outline" could end
+   a line with its two controls stranded on the next. */
+.eo-group {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* Groups whose controls have a natural size must not be stretched
+   by the row's leftover width. */
+.eo-group-hug {
+    flex: 0 0 auto;
+}
+
+/* A group whose natural width comes from data rather than from the
+   control: the font family select is as wide as the longest family name
+   installed, so one long name would push the outline group beside it
+   onto a second line and leave the select stretched across width the
+   panel has better uses for. An explicit basis -- the group's own
+   minimum -- makes that break point depend on the panel instead, and
+   flex-grow still hands the select any width left over. */
+.eo-group-fluid {
+    flex: 1 1 248px;
+}
+
+.eo-label {
+    flex: 0 0 58px;
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    user-select: none;
+}
+
+/* The second and later labels in a row size to their own text --
+   only the first one holds the shared column. */
+.eo-label-inline {
+    flex: 0 0 auto;
+    text-align: left;
+}
+
+.eo-field {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* Groups whose controls have a natural size (steppers, segmented
+   buttons) must not be stretched by the row's leftover width. */
+.eo-field-hug {
+    flex: 0 0 auto;
+}
+
+/* A group with more controls than a narrow panel can hold (the
+   tweaks line). Without this the switches box would be shrunk to its
+   minimum and spill into a one-per-line column; wrapping drops it to
+   the next line whole. */
+.eo-field-wrap {
+    flex-wrap: wrap;
+    row-gap: 5px;
+}
+
+/* Two labelled groups on one line. The gap between them has to beat
+   the 6px between controls *inside* a group, or the second label
+   reads as a caption for the control before it -- the layer
+   stepper's "+" sat 6px from ALIGN and looked joined to it. 14px
+   because 18px is where the pair stops fitting a 300px rail. */
+.eo-row-multi {
+    column-gap: 28px;
+}
+
+.eo-hint {
+    color: var(--text-faint);
+    font-size: 10px;
+    font-style: italic;
+    white-space: nowrap;
+}
+
+.eo-warn-text {
+    color: var(--color-danger);
+    font-style: normal;
+    white-space: normal;
+}
+
+.eo-select.eo-warn {
+    border-color: var(--color-danger) !important;
+}
+
+/* ---------- segmented control (alignment) ---------- */
+
+.eo-seg {
+    display: flex;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.eo-seg button {
+    height: 22px;
+    padding: 2px 5px;
+    display: inline-flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--border-subtle);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.eo-seg button:last-child {
+    border-right: none;
+}
+
+.eo-seg button:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.eo-seg button.active {
+    background: var(--accent-gold);
+    color: var(--text-on-accent);
+}
+
+.eo-seg .material-icons {
+    font-size: 15px;
+}
+
+/* ---------- selects ---------- */
+
+.eo-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 22px;
+    padding: 0 4px;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.eo-select:hover {
+    border-color: var(--border-hover);
+}
+
+.eo-select:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+}
+
+/* Auto / 6 / 7 ... -- a fixed narrow column, so the font-family
+   select beside it gets the rest of the row. */
+.eo-num-select {
+    flex: 0 0 58px;
+    width: 58px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Shift and rotation: a typed box rather than a select, because the
+   ranges are a page wide and 361 degrees long. Narrower than the
+   selects beside it -- no dropdown arrow to leave room for -- and the
+   spinners are hidden, since the arrow keys step it and 14px of
+   permanently visible browser chrome on five controls is most of what
+   this rail has. */
+.eo-num-input {
+    flex: 0 0 46px;
+    width: 46px;
+    min-width: 0;
+    height: 22px;
+    padding: 0 4px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.eo-num-input::-webkit-outer-spin-button,
+.eo-num-input::-webkit-inner-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.eo-num-input:hover {
+    border-color: var(--border-hover);
+}
+
+.eo-num-input:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+}
+
+/* X / Y / Z in front of their control. Two or three of the same widget
+   sit side by side and there is no room for a label apiece, so the axis
+   rides along as a tag; the label wrapper keeps the pair from breaking
+   across lines and makes the tag click-to-focus. */
+.eo-axis {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.eo-axis-tag {
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--text-faint);
+    user-select: none;
+}
+
+.eo-font {
+    font-size: 12px;
+    /* Enough to read a family name. Without a floor the family select
+       would shrink to nothing to keep the outline group on the same
+       line, instead of letting that group wrap. */
+    min-width: 84px;
+}
+
+/* Speed on the tweaks line hugs its content: the leftover width
+   belongs to the switches beside it, which wrap if they do not get
+   it. Wide enough for "Fastest". */
+.eo-tune-select {
+    flex: 0 1 auto;
+    min-width: 66px;
+}
+
+/* ---------- checkboxes ---------- */
+
+.eo-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.eo-check input {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    accent-color: var(--color-green);
+    cursor: pointer;
+}
+
+/* A switch that is stored and honoured, but has nothing to act on at
+   the current settings (TTA under a speed that does no flip
+   averaging). Dimmed rather than disabled: the value is remembered
+   and does apply once the setting that uses it is picked, and the
+   tooltip says so. */
+.eo-check-inert {
+    opacity: 0.5;
+}
+
+/* The tweaks line can carry up to three switches beside two selects,
+   so they sit tighter than a pair would and wrap among themselves
+   before the row itself has to. */
+.eo-flags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+}
+
+/* ---------- layer stepper ---------- */
+
+.eo-stepper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.eo-step {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.eo-step:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.eo-step:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.eo-step .material-icons {
+    font-size: 14px;
+}
+
+/* An icon glyph is one em wide once the webfont is in. Until then --
+   a cold cache, or a build served without it -- the ligature name
+   renders as a word in the fallback font, three times wider than the
+   button holding it, and pushes the group beside it off the row.
+   Pinning the box keeps the layout the same either way. */
+.eo-step .material-icons,
+.eo-seg .material-icons {
+    flex: 0 0 auto;
+    width: 1em;
+    overflow: hidden;
+}
+
+.eo-layer-val {
+    min-width: 16px;
+    text-align: center;
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------- text-clean sub-block ---------- */
+
+.eo-clean {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px dashed var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* ---------- colour control ---------- */
+
+.eo-color-btn {
+    flex-shrink: 0;
+    height: 22px;
+    padding: 0 6px 0 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.eo-color-btn:hover {
+    border-color: var(--border-hover);
+}
+
+/* Swatch only. Used where the row already carries two other
+   controls: the hex value moves to the tooltip and to the hex box
+   inside the popover, which is where it can be edited anyway. */
+.eo-color-btn.is-compact {
+    width: 24px;
+    padding: 0;
+    justify-content: center;
+}
+
+.eo-swatch {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+}
+
+/* "Auto" has no colour to show, so it shows a checkerboard. */
+.eo-swatch.is-auto {
+    background-image:
+        linear-gradient(45deg, var(--border-strong) 25%, transparent 25%),
+        linear-gradient(-45deg, var(--border-strong) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, var(--border-strong) 75%),
+        linear-gradient(-45deg, transparent 75%, var(--border-strong) 75%);
+    background-size: 6px 6px;
+    background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+}
+
+.eo-color-label {
+    color: var(--text-secondary);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Anchored to <body>, because the entries list scrolls and clips. */
+.eo-pop {
+    position: fixed;
+    z-index: 10050;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+}
+
+.eo-pop-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Typed hex. The palette covers the common cases and the eyedropper
+   covers "the colour already on the page"; this covers the third
+   case -- a value from a style guide. */
+.eo-pop-hex {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 22px;
+    padding: 0 5px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.eo-pop-hex:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+}
+
+.eo-pop-hex.is-bad {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.eo-pop-grid {
+    display: grid;
+    grid-template-columns: repeat(10, 16px);
+    gap: 3px;
+}
+
+.eo-pop-swatch {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.eo-pop-swatch:hover {
+    transform: scale(1.18);
+    border-color: var(--border-accent);
+}
+
+.eo-pop-swatch.active {
+    border: 2px solid var(--accent-gold);
+}
+
+.eo-pop-native {
+    width: 26px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.eo-chip {
+    height: 22px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 11px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.eo-chip:hover {
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+.eo-chip.active {
+    background: var(--accent-gold);
+    border-color: var(--accent-gold);
+    color: var(--text-on-accent);
+}
+
+.eo-chip .material-icons {
+    font-size: 14px;
+}
+
+/* While the eyedropper is armed the whole page is a colour target. */
+body.eyedropper-active,
+body.eyedropper-active #mainImage {
+    cursor: crosshair !important;
+}
+
+
+/* ============================================================
+   LIVE PREVIEW OVERLAY
+   ============================================================ */
+
+/* The outline is the region's hit target. An unfilled polygon would
+   leave the interior click-through, so the pointer area is claimed. */
+.entry-outline {
+    pointer-events: all;
+}
+
+/* Hover fills the region -- but not when a plate or a text preview
+   is already underneath, which the wash would grey out. Three
+   classes, so this beats the two-class !important rule above. */
+.svg-overlay-polygon.active-hover-region.no-hover-fill {
+    fill: none !important;
+}
+
+.entry-plate,
+.entry-text,
+.clean-plate,
+.clean-marks {
+    pointer-events: none;
+}
+
+.entry-text {
+    user-select: none;
+}
+
+/* ---------- an entry with no text yet ---------- */
+
+/* Neither OCR nor a translation has produced anything, so the plate
+   is covering artwork the user still has to read -- to judge whether
+   the region caught the right thing at all. It goes translucent
+   until there is text worth hiding it for. The outline is left alone:
+   it is how the region is found and clicked. */
+.entry-shape.is-empty .entry-plate {
+    opacity: 0.14;
+}
+
+.entry-shape.is-empty .clean-plate {
+    opacity: 0.15;
+}
+
+.entry-shape.is-empty .clean-fx {
+    opacity: 0.25;
+}
+
+/* ---------- region armed for a split ---------- */
+
+/* The split button is in the sidebar and the cut is drawn on the
+   artwork, so without this there is nothing on the page itself
+   saying which region the stroke is about to divide. Same colour
+   and pulse as `.split-entry-btn.split-active`, so the button and
+   its target read as one action.
+
+   !important, because `.svg-overlay-polygon.active-hover-region`
+   sets these with !important too -- and this selector is the more
+   specific of the two, so it wins between them. */
+.entry-shape.split-target .entry-outline {
+    stroke: var(--accent-selection) !important;
+    stroke-width: 3.5 !important;
+    stroke-dasharray: none !important;
+    filter:
+        drop-shadow(0 0 3px var(--accent-selection))
+        drop-shadow(0 0 8px var(--accent-selection));
+    animation: pulse 1.5s infinite;
+}
+
+/* ---------- text-clean indicator ---------- */
+
+/* A blurred copy of the artwork under the region: the honest
+   "something is erased here" that needs no pixel data. */
+.clean-fx {
+    width: 100%;
+    height: 100%;
+    backdrop-filter: blur(var(--clean-blur));
+    -webkit-backdrop-filter: blur(var(--clean-blur));
+}
+
+.clean-fx.is-ppocr {
+    --clean-blur: 5px;
+}
+
+.clean-fx.is-textseg {
+    --clean-blur: 7px;
+}
+
+/* The tint and hatch carry the differentiation on their own, so the
+   method stays readable where backdrop-filter is unsupported and
+   the blur silently does nothing. */
+.clean-plate {
+    fill: var(--clean-plate);
+}
+
+.fx-mark {
+    fill: var(--clean-mark);
+}
+
+
+/* ============================================================
+   INPAINT PREVIEW -- PROGRESS + SAVE
+   ============================================================ */
+
+.inpaint-status {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 20px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.inpaint-status__body {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+}
+
+.inpaint-status__msg {
+    color: var(--text-primary);
+    font-size: 13px;
+    text-align: center;
+}
+
+.inpaint-status__msg.is-error {
+    color: var(--color-danger);
+}
+
+.inpaint-status__count {
+    min-height: 13px;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.inpaint-progress {
+    width: 100%;
+    height: 5px;
+    background: var(--bg-quaternary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.inpaint-progress__fill {
+    width: 0;
+    height: 100%;
+    background: var(--color-cyan);
+    border-radius: 3px;
+    transition: width 0.25s ease;
+}
+
+/* No total reported yet: a moving stripe says "running" without
+   claiming a fraction the backend has not committed to. */
+.inpaint-progress.is-indeterminate .inpaint-progress__fill {
+    width: 100% !important;
+    transition: none;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            var(--color-cyan) 50%,
+            transparent 100%);
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    animation: inpaintIndeterminate 1.1s linear infinite;
+}
+
+@keyframes inpaintIndeterminate {
+    from {
+        background-position: -45% 0;
+    }
+
+    to {
+        background-position: 145% 0;
+    }
+}
+
+.inpaint-status__log {
+    width: 100%;
+    max-height: 92px;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 6px 8px;
+    overflow-y: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: 10px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.inpaint-status__log:empty {
+    display: none;
+}
+
+.inpaint-actions {
+    display: none;
+    width: 100%;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.inpaint-actions__hint {
+    flex: 1 1 auto;
+    color: var(--text-dim);
+    font-size: 11px;
+}
+
+#savePreviewBtn {
+    flex-shrink: 0;
+    padding: 6px 16px;
+    font-size: 13px;
+}
+
+#savePreviewBtn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}

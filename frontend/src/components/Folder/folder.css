@@ -1,0 +1,228 @@
+/*
+ * The folder picker.
+ *
+ * Two path fields and a live verdict on each. Every colour, border and shadow is
+ * a theme token, so the dialog is correct in both themes and in both layouts
+ * without a second stylesheet to keep in step.
+ */
+
+.folder-modal {
+    /* Shown by the component; the inline `display` is what toggles it. */
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-overlay);
+    box-sizing: border-box;
+    padding: 24px;
+}
+
+.folder-modal__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+    max-width: 620px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 22px 24px;
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    font-family: sans-serif;
+    color: var(--text-primary);
+}
+
+.folder-modal__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 17px;
+    font-weight: bold;
+}
+
+.folder-modal__subtitle {
+    margin: -8px 0 0 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.folder-modal__field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.folder-modal__label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.folder-modal__hint {
+    font-size: 11px;
+    font-weight: normal;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--text-muted);
+}
+
+.folder-modal__input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 5px;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.folder-modal__input:focus {
+    outline: none;
+    border-color: var(--accent-selection);
+}
+
+.folder-modal__input::placeholder {
+    color: var(--text-faint);
+    font-family: sans-serif;
+}
+
+.folder-modal__quick {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.folder-modal__chip {
+    padding: 4px 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    font-family: sans-serif;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+.folder-modal__chip:hover:not(:disabled) {
+    background: var(--bg-highlight);
+    color: var(--text-primary);
+    border-color: var(--border-hover);
+}
+
+/* One verdict line: an icon, then the sentence. */
+.folder-modal__status {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.folder-modal__status .material-icons {
+    font-size: 15px !important;
+    line-height: 1.35;
+    flex-shrink: 0;
+}
+
+.folder-modal__status.is-ok {
+    color: var(--color-success);
+}
+
+.folder-modal__status.is-bad {
+    color: var(--color-danger);
+}
+
+.folder-modal__status.is-warn {
+    color: var(--accent-selection);
+}
+
+.folder-modal__status.is-muted {
+    color: var(--text-muted);
+}
+
+/* Read / Write / Open, as reported by the backend's real probe. */
+.folder-modal__perms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11px;
+}
+
+.folder-modal__perm {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}
+
+.folder-modal__perm.is-on {
+    color: var(--color-success);
+    border-color: var(--color-success);
+}
+
+.folder-modal__perm.is-off {
+    color: var(--text-faint);
+}
+
+.folder-modal__perm .material-icons {
+    font-size: 12px !important;
+}
+
+.folder-modal__note {
+    padding: 9px 11px;
+    border-radius: 5px;
+    border: 1px solid var(--accent-selection);
+    background: var(--selection-bg);
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.folder-modal__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 2px;
+}
+
+.folder-modal__actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    font-family: sans-serif;
+    font-size: 13px;
+}
+
+.folder-modal__spacer {
+    margin-right: auto;
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+.folder-modal__divider {
+    height: 1px;
+    margin: 2px 0;
+    background: var(--border-subtle);
+}

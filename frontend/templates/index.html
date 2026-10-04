@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Fox Reader</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/material-icons.css">
+  <link rel="manifest" href="{{ url_for('static', path='site.webmanifest') }}">
+
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', path='favicon.ico') }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', path='favicon-16x16.png') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', path='favicon-32x32.png') }}">
+
+  <link rel="alternative icon" type="image/vnd.microsoft.icon" href="{{ url_for('static', path='favicon-32x32.ico') }}">
+
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', path='apple-touch-icon.png') }}">
+
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', path='android-chrome-192x192.png') }}">
+  <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', path='android-chrome-512x512.png') }}">
+  <style id="dynamicFontStyles"></style>
+  <style>
+    /* The MTL memory warning. Styled here rather than in style.css because the
+       element it belongs to lives in this file, outside the app's mount point. */
+    .mtl-memory-notice {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100001;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 16px;
+      background: #4a2f00;
+      border-bottom: 1px solid #b8860b;
+      color: #ffe8b8;
+      font-family: sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+      box-sizing: border-box;
+    }
+
+    .mtl-memory-notice[hidden] {
+      display: none;
+    }
+
+    .mtl-memory-notice__icon {
+      flex-shrink: 0;
+      color: #ffc849;
+    }
+
+    .mtl-memory-notice__text {
+      flex: 1 1 auto;
+      min-width: 0;
+      word-wrap: break-word;
+    }
+
+    .mtl-memory-notice__text strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #ffd479;
+    }
+
+    .mtl-memory-notice__close {
+      flex-shrink: 0;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #ffe8b8;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .mtl-memory-notice__close:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+  </style>
+  <script>
+    window.__FOX_CONFIG__ = { theme: "{{ initial_theme }}", layout: "{{ initial_layout }}", deeplAvailable: {{ deepl_available | default(false) | lower }}, jpdbAvailable: {{ jpdb_available | default(false) | lower }}, bubbleAvailable: {{ bubble_available | default(false) | lower }} };
+  </script>
+</head>
+
+<body{% if not bubble_available | default(false) %} class="no-bubble"{% endif %}>
+  <!-- Sits outside #nocontextmenu on purpose: the app clears that element when
+       it mounts, and this warning has to outlive that. -->
+  <div id="mtlMemoryNotice" class="mtl-memory-notice" hidden>
+    <span class="material-icons mtl-memory-notice__icon">memory</span>
+    <div id="mtlMemoryNoticeText" class="mtl-memory-notice__text"></div>
+    <button type="button" id="mtlMemoryNoticeClose" class="mtl-memory-notice__close"
+      title="Dismiss" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <div class="main-app-wrapper" id="nocontextmenu">
+    <div class="main-layout">
+
+      <div class="viewer-section non-select">
+        <div id="imageContainer" class="image-container">
+          <canvas id="drawCanvas"
+            style="position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none; display: none;"></canvas>
+          <img id="mainImage" src="" style="display:none;">
+          <div id="cropSelector"></div>
+        </div>
+        <div id="gallery" class="gallery-bar">
+        </div>
+      </div>
+
+      <div class="content-area">
+
+        <div class="folder-nav">
+          <input type="text" id="folderPathInput" placeholder="Input Folder Path Here (e.g., X:\My Comic\XYZ)">
+          <button id="loadFolderBtn" onclick="loadLocalFolder()">
+            <span class="material-icons">folder_open</span> Load Folder
+          </button>
+        </div>
+
+        <div class="buttons">
+          <button id="rectCapture" title="Capture Region" onclick="startCapture()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"
+              class="lucide lucide-maximize-icon lucide-maximize">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+              <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+            </svg>
+          </button>
+
+          <button id="freeCapture" title="Free-form Capture" onclick="startFreeCapture()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"
+              class="lucide lucide-line-squiggle-icon lucide-line-squiggle">
+              <path d="M7 3.5c5-2 7 2.5 3 4C1.5 10 2 15 5 16c5 2 9-10 14-7s.5 13.5-4 12c-5-2.5.5-11 6-2" />
+            </svg>
+          </button>
+
+          {# Bubble detection is an optional model. With no weights there is
+             nothing behind this button, so it is left out of the markup rather
+             than disabled: a disabled control users cannot explain is worse
+             than one that is simply not there. The setup page is where it
+             comes back. The Preact toolbar gates the same button on
+             __FOX_CONFIG__.bubbleAvailable. #}
+          {% if bubble_available | default(false) %}
+          <button id="bubCapture" title="Bubble Capture" onclick="bubbleCapture()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              class="lucide lucide-message-circle-icon lucide-message-circle">
+              <path
+                d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
+            </svg>
+          </button>
+          {% endif %}
+
+          <button id="PageCapture" title="Page TL" onclick="pageCapture()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              class="lucide lucide-book-open-text-icon lucide-book-open-text">
+              <path d="M12 7v14" />
+              <path d="M16 12h2" />
+              <path d="M16 8h2" />
+              <path
+                d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+              <path d="M6 12h2" />
+              <path d="M6 8h2" />
+            </svg>
+          </button>
+
+
+          <select id="languageSelect">
+            <option value="japanese">Japanese</option>
+            <option value="chinese">Chinese</option>
+            <option value="korean">Korean</option>
+          </select>
+
+          <div class="ml-control-box dropdown">
+            <button id="settingsBtn" class="dropdown-trigger">
+              <span class="material-icons">settings</span>
+              <span class="ml-label">Options</span>
+            </button>
+
+            <div class="dropdown-content">
+
+              <div class="menu-item">
+                <span class="ml-label">MTL</span>
+                <label class="switch">
+                  <input type="checkbox" id="enableML">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Gray OCR</span>
+                <label class="switch">
+                  <input type="checkbox" id="grayScaleOCR">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">H-Fit</span>
+                <label class="switch">
+                  <input type="checkbox" id="horizontalFit">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Auto OCR</span>
+                <label class="switch">
+                  <input type="checkbox" id="autoOCRresponse">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Auto TL</span>
+                <label class="switch">
+                  <input type="checkbox" id="autoTLresponse" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Live Inpainting</span>
+                <label class="switch">
+                  <input type="checkbox" id="liveInpaint" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Context</span>
+                <label class="switch">
+                  <input type="checkbox" id="enableContext" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <div class="menu-item">
+                <span class="ml-label">Characters</span>
+                <label class="switch">
+                  <input type="checkbox" id="enableCharacters" checked>
+                  <span class="slider"></span>
+                </label>
+              </div>
+
+              <a class="menu-item menu-link" href="/settings" title="Open settings">
+                <span class="material-icons" aria-hidden="true">settings</span>
+                <span class="ml-label">Settings</span>
+                <span class="material-icons" aria-hidden="true">chevron_right</span>
+              </a>
+
+            </div>
+          </div>
+
+          <button id="charactersBtn" type="button" title="Manage characters (speaker metadata for VNTL models)">
+            <span class="material-icons" aria-hidden="true">group</span>
+            <span class="ml-label">Characters</span>
+          </button>
+
+        </div>
+
+        <div class="textarea-wrapper">
+          <textarea id="textArea" placeholder="Recognized text will appear here..."></textarea>
+
+          <div id="ocrLoader" class="ocr-loader">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+
+        <div class="translator-buttons">
+          {% if deepl_available | default(false) %}
+          <button data-lang-group="japanese" data-endpoint="/translate/deepl" data-lang="JA">DeepL</button>
+          {% endif %}
+          {% if jpdb_available | default(false) %}
+          <button data-lang-group="japanese" data-endpoint="/translate/jpdb" data-lang="japanese">JPDB</button>
+          {% endif %}
+          <button data-lang-group="japanese" data-endpoint="/translate/ml" data-lang="japanese" data-requires-ml="true">MTL</button>
+
+          {% if deepl_available | default(false) %}
+          <button data-lang-group="chinese" data-endpoint="/translate/deepl" data-lang="ZH">DeepL</button>
+          {% endif %}
+          {% if jpdb_available | default(false) %}
+          <button data-lang-group="chinese" data-endpoint="/translate/jpdb" data-lang="chinese">JPDB</button>
+          {% endif %}
+          <button data-lang-group="chinese" data-endpoint="/translate/ml" data-lang="chinese" data-requires-ml="true">MTL</button>
+
+          {% if deepl_available | default(false) %}
+          <button data-lang-group="korean" data-endpoint="/translate/deepl" data-lang="KO">DeepL</button>
+          {% endif %}
+          {% if jpdb_available | default(false) %}
+          <button data-lang-group="korean" data-endpoint="/translate/jpdb" data-lang="korean">JPDB</button>
+          {% endif %}
+          <button data-lang-group="korean" data-endpoint="/translate/ml" data-lang="korean" data-requires-ml="true">MTL</button>
+        </div>
+
+
+        <div class="translation-wrapper"
+          style="display: flex; flex-direction: column; height: 65vh; min-height: 350px;">
+
+          <div class="panel"
+            style="height: 50%; min-height: 0; display: flex; flex-direction: column; padding: 8px; box-sizing: border-box; margin-bottom: 10px;">
+            <div id="savedEntriesList" class="non-select"
+              style="width: 100%; height: 100%; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
+            </div>
+          </div>
+
+          <div id="translationContainer"
+            style="height: 50%; min-height: 0; display: flex; flex-direction: column; width: 100%; box-sizing: border-box; justify-content: center; position: relative;">
+            <!-- data-state is what Confirm Entry reads: an empty editable panel
+                 holds text (nothing yet), not a message. -->
+            <div id="translatedText" class="panel translated" data-state="text" contenteditable="true"
+              spellcheck="false" style="height:100%;border-top:none;"></div>
+          </div>
+
+          <div id="confirmActionRow" class="buttons"
+            style="width:100%; display: flex; justify-content: flex-end; padding-top: 5px; box-sizing: border-box; gap: 5px;">
+
+
+            <div class="custom-font-dropdown"
+              style="position: relative; max-width: 220px; width: 100%; box-sizing: border-box;">
+
+              <div id="fontSelectTrigger" onclick="toggleFontDropdown()"
+                style="height: 32px; font-size: 14px; padding: 0 10px; border-radius: 4px; background-color: #343a40; color: #fff; border: 1px solid #495057; display: flex; align-items: center; justify-content: space-between; cursor: pointer; box-sizing: border-box; overflow: hidden;">
+
+                <span id="selectedFontLabel"
+                  style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 5px; flex-grow: 1;">
+                  Select Font
+                </span>
+                <span class="material-icons" style="font-size: 16px; flex-shrink: 0;">arrow_drop_up</span>
+              </div>
+
+              <input type="hidden" id="fontSelect" value="">
+
+              <div id="fontOptionsContainer"
+                style="display: none; position: absolute; bottom: 34px; left: 0; width: 100%; max-height: 250px; overflow-y: auto; overflow-x: hidden; background-color: #343a40; border: 1px solid #495057; border-radius: 4px; z-index: 10000; box-shadow: 0 -4px 8px rgba(0,0,0,0.3); box-sizing: border-box;">
+              </div>
+            </div>
+
+
+            <button id="alignmentCycleBtn" title="Cycle Alignment" data-current="center" onclick="cycleTextAlignment()"
+              style="background-color: #6f42c1; border-color: #5a32a3; height: 32px; font-size: 13px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+              <span class="material-icons" style="font-size: 16px;">format_align_center</span>
+            </button>
+            <button id="inpaintGenerateBtn" title="Generate InPaint & Overwrite File"
+              onclick="executeInpaintAction('generate')"
+              style="background-color: #2F80ED; border-color: #1C6DD0; height: 32px; font-size: 13px;">
+              Save
+            </button>
+            <button id="inpaintPreviewBtn" title="Preview InPaint Visual Track"
+              onclick="executeInpaintAction('preview')"
+              style="background-color: #6c757d; border-color: #545b62; height: 32px; font-size: 13px;">
+              Preview
+            </button>
+            <button id="clearPageBtn" title="Clear All Entries For This Page" onclick="clearCurrentPageEntries()"
+              style="background-color: #dc3545; border-color: #bd2130; height: 32px; font-size: 13px;">
+              Clear Page
+            </button>
+            <button id="confirmTranslationBtn" onclick="confirmCurrentTranslation()"
+              style="background-color: #28a745; border-color: #218838; height: 32px; font-size: 13px;">
+              Confirm Entry
+            </button>
+          </div>
+        </div>
+
+
+        <div id="inpaintModalOverlay"
+          style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15,15,15,0.92); z-index: 99999; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 40px 0; box-sizing: border-box;">
+
+          <div id="inpaintModalContent"
+            style="position: relative; width: 50vw; background: #2b2827; padding: 16px; border-radius: 8px; border: 1px solid #444; box-shadow: 0 15px 40px rgba(0,0,0,0.7); display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 200px; box-sizing: border-box;">
+
+            <button onclick="closeInpaintModal()"
+              style="position: fixed; top: 20px; right: calc(25vw - 50px); background: #dc3545; border: none; color: white; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.4); z-index: 100000; transition: transform 0.1s;">
+              <span class="material-icons" style="font-size: 20px; margin-right: 0px;">close</span>
+            </button>
+
+            <div id="inpaintModalLoader" class="modal-spinner" style="margin: 60px 0;"></div>
+
+            <img id="inpaintModalImage" src=""
+              style="display: none; width: 100%; height: auto; object-fit: contain; border-radius: 4px; box-sizing: border-box;">
+          </div>
+        </div>
+
+        <div id="loadingModalOverlay"
+          style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15,15,15,0.92); z-index: 99999; box-sizing: border-box;">
+
+          <div id="loadingModalContent"
+            style="background: #2b2827; padding: 30px; border-radius: 8px; border: 1px solid #444; box-shadow: 0 15px 40px rgba(0,0,0,0.7); display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 250px; max-width: 50vw; max-height: 50vh; overflow: hidden; box-sizing: border-box;">
+
+            <div class="modal-spinner" style="flex-shrink: 0;"></div>
+
+            <div id="loadingModalText"
+              style="color: #fff; font-family: sans-serif; font-size: 16px; margin-top: 20px; text-align: center; max-width: 100%; word-wrap: break-word; overflow-y: auto;">
+              Loading...
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+    <script src="/static/app.js"></script>
+    <script>
+      // Warn before the model is ever loaded. /ml/control/load reports the same
+      // shortfall, but only once the user has flipped the MTL switch and waited
+      // for a load that was never going to work.
+      //
+      // Every failure here is swallowed: a warning banner is not worth an error
+      // of its own, and text is written with textContent so a device or model
+      // name can never be read as markup.
+      (function () {
+        var notice = document.getElementById("mtlMemoryNotice");
+        var text = document.getElementById("mtlMemoryNoticeText");
+        var close = document.getElementById("mtlMemoryNoticeClose");
+
+        if (!notice || !text || !close) return;
+
+        close.addEventListener("click", function () {
+          notice.hidden = true;
+        });
+
+        var config = window.__FOX_CONFIG__ || {};
+        // Added check for model if loaded return
+
+        function render(issues) {
+          text.textContent = "";
+
+          var head = document.createElement("strong");
+          head.textContent = issues.length === 1
+            ? "The selected local translation model does not fit in memory."
+            : "Some local translation models do not fit in memory.";
+          text.appendChild(head);
+
+          issues.forEach(function (issue) {
+            var line = document.createElement("div");
+            line.textContent = issue && issue.message ? issue.message : "";
+            text.appendChild(line);
+          });
+
+          notice.hidden = false;
+        }
+
+        fetch("/ml/memory")
+          .then(function (res) {
+            return res.ok ? res.json() : null;
+          })
+          .then(function (data) {
+            if (!data || data.ok !== false) return;
+
+            var issues = Array.isArray(data.issues) ? data.issues : [];
+            if (issues.length) render(issues);
+          })
+          .catch(function () {});
+      })();
+    </script>
+    <script>
+      // Hide token-gated translator buttons unless their token is configured.
+      // The buttons are already gated server-side (folder.py passes
+      // deepl/jpdb availability into this template), so this is only the
+      // fallback for a page rendered before a token was saved, or served from
+      // cache: fetch the live status and remove what is not available.
+      // Every failure is swallowed — a missing status must never break the
+      // reader, and the backend reports the same problem on translate.
+      (function () {
+        function prune(status) {
+          if (!status) return;
+          var changed = false;
+          document.querySelectorAll(".translator-buttons button").forEach(function (btn) {
+            var endpoint = btn.dataset.endpoint || "";
+            if (endpoint === "/translate/deepl" && !status.deepl) {
+              btn.remove();
+              changed = true;
+            } else if (endpoint === "/translate/jpdb" && !status.jpdb) {
+              btn.remove();
+              changed = true;
+            }
+          });
+          if (changed) {
+            try {
+              var select = document.getElementById("languageSelect");
+              var group = select ? select.value : null;
+              var ev = new CustomEvent("fox:translators-changed", { detail: group });
+              document.dispatchEvent(ev);
+            } catch (_) {}
+          }
+        }
+
+        var config = window.__FOX_CONFIG__ || {};
+        // Server-rendered correctly: nothing to do (but still prune in case
+        // the flags are stale from a cached page — the fetch below decides).
+        fetch("/api/translate/status", { cache: "no-store" })
+          .then(function (res) {
+            return res.ok ? res.json() : null;
+          })
+          .then(prune)
+          .catch(function () {});
+
+        // Immediate pass from the injected flags so unavailable buttons never
+        // flash before the fetch returns.
+        prune({
+          deepl: !!config.deeplAvailable,
+          jpdb: !!config.jpdbAvailable,
+        });
+      })();
+    </script>
+</body>
+
+</html>

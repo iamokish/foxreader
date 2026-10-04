@@ -1,0 +1,505 @@
+/* ============================================================
+   Default Layout — Workspace shell
+   Resizable, hideable panels. Scoped to body.layout-default so
+   the Basic layout remains untouched.
+   ============================================================ */
+
+body.layout-default .main-app-wrapper {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Root fills everything below the topbar */
+body.layout-default .ws-root {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Slim capture/control rail under the topbar */
+body.layout-default .ws-capture-rail {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 20px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+}
+
+body.layout-default .ws-capture-rail #languageSelect {
+    margin: 0;
+}
+
+body.layout-default .ws-capture-rail .buttons {
+    padding: 0;
+}
+
+/* Main workspace area: viewer column + side column */
+body.layout-default .default-topbar #folderPathInput {
+    border-radius: 20px;
+}
+
+body.layout-default .ws-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+/* Left column: viewer + gallery */
+body.layout-default .ws-col--viewer {
+    width: var(--ws-viewer);
+    min-width: 220px;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-viewer);
+    border-right: 1px solid var(--border-default);
+}
+
+/* Right column: OCR / entries / translation */
+body.layout-default .ws-col--side {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Cell that fills remaining space (viewer image / translation) */
+body.layout-default .ws-cell--fill {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+}
+
+/* The legacy stylesheet gives #imageContainer a fixed 80vh height. In the
+   workspace it must fill only the viewer cell, otherwise it pushes the
+   gallery (and its header) below the viewport. */
+body.layout-default .ws-col--viewer > .ws-cell--fill {
+    display: flex;
+}
+
+body.layout-default .ws-cell--fill > #imageContainer {
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+}
+
+/* Fixed-size cell driven by WorkspaceContext panel size */
+body.layout-default .ws-cell {
+    flex: 0 0 auto;
+    min-height: 0;
+}
+
+/* ---- Panel chrome ---- */
+body.layout-default .ws-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-subtle);
+}
+
+body.layout-default .ws-panel:nth-child(1) {
+    border-top: none;
+}
+
+body.layout-default .ws-panel__header {
+    flex: 0 0 auto;
+    height: 30px;
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px 0 14px;
+    background: var(--panel-header-bg);
+    border-bottom: 1px solid var(--border-subtle);
+    box-sizing: border-box;
+}
+
+body.layout-default .ws-panel__title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+body.layout-default .ws-panel__toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+}
+
+body.layout-default .ws-panel__toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+body.layout-default .ws-panel__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Collapsed: hide body, keep header as a slim strip */
+body.layout-default .ws-panel--collapsed {
+    flex: 0 0 auto;
+}
+
+body.layout-default .ws-panel--collapsed .ws-panel__body {
+    display: none;
+}
+
+/* ---- Splitters ---- */
+body.layout-default .ws-splitter {
+    flex: 0 0 auto;
+    background: var(--bg-primary);
+    transition: background 0.15s ease;
+    z-index: 5;
+}
+
+body.layout-default .ws-splitter--vertical {
+    cursor: col-resize;
+    width: 5px;
+}
+
+body.layout-default .ws-splitter--horizontal {
+    cursor: row-resize;
+    height: 5px;
+}
+
+body.layout-default .ws-splitter--vertical:hover,
+body.layout-default .ws-splitter--vertical:active {
+    background: var(--splitter-hover);
+}
+
+body.layout-default .ws-splitter--horizontal:hover,
+body.layout-default .ws-splitter--horizontal:active {
+    background: var(--splitter-hover);
+}
+
+/* ---- Textarea / list / translation fill their panel bodies ---- */
+body.layout-default .ws-panel__body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+body.layout-default .ws-panel__body .textarea-wrapper {
+    flex: 1;
+    min-height: 60px;
+    margin: 6px;
+}
+
+body.layout-default .ws-panel__body #textArea {
+    width: 100%;
+    height: 100%;
+    min-height: 60px;
+    resize: none;
+    box-sizing: border-box;
+    margin: 0;
+    max-height: none;
+}
+
+body.layout-default .ws-panel__body .translator-buttons {
+    flex: 0 0 auto;
+    width: auto;
+    margin: 0 6px 6px;
+}
+
+body.layout-default .ws-col--side .translation-wrapper {
+    height: 100%;
+    min-height: 0;
+}
+
+/* Translation result panels injected by translate.ts (renderTranslationUI).
+   In the workspace the region is NOT inside .translation-wrapper, so restate
+   the necessary styling scoped to #translationContainer. */
+body.layout-default #translationContainer .panel,
+body.layout-default #translationContainer .panel.error {
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    width: 100%;
+    max-width: 100%;
+    padding: 8px;
+    font-size: 16px;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--text-secondary);
+    overflow-y: auto;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+    box-sizing: border-box;
+}
+
+body.layout-default #translationContainer .panel.error {
+    width: 80%;
+    text-align: center;
+    padding: 20px;
+    margin: auto;
+}
+
+body.layout-default #translationContainer .panel.translated {
+    font-weight: 500;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+body.layout-default #translationContainer .panel.translating {
+    font-weight: 500;
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+body.layout-default #translationContainer .alt_translated {
+    color: var(--text-muted);
+    font-weight: 425;
+    padding-top: 6px;
+    margin-top: 6px;
+    border-top: 1px dashed var(--border-subtle);
+}
+
+body.layout-default .ws-panel__body #savedEntriesList {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+/* Gallery cell keeps its own height from the context */
+body.layout-default .ws-cell--gallery {
+    height: var(--ws-gallery);
+    min-height: 0;
+}
+
+body.layout-default .ws-cell--gallery .gallery-bar {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    padding: 5px 10px;
+    container-type: size;
+}
+
+body.layout-default .ws-cell--gallery .gallery-item {
+    width: clamp(36px, calc(100cqh - 38px), 100cqh);
+    height: clamp(36px, calc(100cqh - 38px), 100cqh);
+}
+
+body.layout-default .ws-cell--gallery .gallery-index {
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+body.layout-default .ws-cell--gallery .gallery-item-container {
+    margin-bottom: 0;
+}
+
+/* ============================================================
+   Reader mode — collapse to a single full-bleed viewer
+   ============================================================ */
+body.layout-default.workspace-reader .ws-capture-rail,
+body.layout-default.workspace-reader .ws-col--side {
+    display: none;
+}
+
+body.layout-default.workspace-reader .ws-splitter {
+    display: none;
+}
+
+body.layout-default.workspace-reader .ws-main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+body.layout-default.workspace-reader .ws-col--viewer {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    border-right: none;
+}
+
+body.layout-default.workspace-reader .ws-cell--gallery,
+body.layout-default.workspace-reader .ws-panel {
+    display: none;
+}
+
+body.layout-default.workspace-reader .ws-cell--fill {
+    flex: 1;
+    height: 100%;
+}
+
+/* Hide the default topbar chrome in reader; keep the viewer edge-to-edge */
+body.layout-default.workspace-reader .default-topbar {
+    display: none;
+}
+
+/* ============================================================
+   Reader mode — floating overlay chrome
+   ============================================================ */
+body.layout-default .ws-reader-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    pointer-events: none;
+}
+
+body.layout-default .ws-reader-controls {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 9001;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    pointer-events: auto;
+    transition: opacity 0.2s ease;
+}
+
+body.layout-default .ws-reader-overlay:hover .ws-reader-controls,
+body.layout-default .ws-reader-controls:focus-within {
+    opacity: 1;
+}
+
+body.layout-default .ws-reader-controls button,
+body.layout-default .ws-reader-controls span.ws-reader-page {
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+}
+
+body.layout-default .ws-reader-controls span.ws-reader-page {
+    cursor: default;
+    min-width: 48px;
+    font-variant-numeric: tabular-nums;
+}
+
+body.layout-default .ws-reader-controls .ws-reader-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border-default);
+}
+
+body.layout-default .ws-reader-controls button.ws-reader-fit.active {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+body.layout-default .ws-reader-controls button.ws-reader-fit {
+    width: auto;
+    min-width: 52px;
+    padding: 0 8px;
+}
+
+body.layout-default .ws-reader-fit__label {
+    font-size: 11px;
+    letter-spacing: 0.02em;
+}
+
+body.layout-default .ws-reader-controls button:hover {
+    background: var(--bg-tertiary);
+}
+
+body.layout-default .ws-reader-controls .ws-reader-exit:hover {
+    background: var(--color-danger);
+    color: #fff;
+}
+
+/* ============================================================
+   Strip (webtoon) reader — continuous vertical scrolling
+   ============================================================ */
+
+body.layout-default #strip-scroller {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    overflow-x: auto;
+    --strip-zoom: 1;
+    scrollbar-width: thin;
+}
+
+body.layout-default .strip-page {
+    position: relative;
+    width: calc(100% * var(--strip-zoom, 1));
+    margin-inline: auto;
+    content-visibility: auto;
+    contain-intrinsic-size: 500px;
+    background: var(--bg-viewer);
+}
+
+body.layout-default .strip-page__skeleton {
+    width: 100%;
+    aspect-ratio: 1 / 1.4;
+    background:
+        linear-gradient(
+            100deg,
+            transparent 35%,
+            color-mix(in srgb, var(--bg-tertiary) 65%, transparent) 50%,
+            transparent 65%
+        )
+        var(--bg-tertiary);
+    background-size: 220% 100%;
+    animation: ws-strip-shimmer 1.6s linear infinite;
+}
+
+body.layout-default .strip-img {
+    display: none;
+    width: 100%;
+    height: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+body.layout-default .strip-page.loaded .strip-img {
+    display: block;
+}
+
+body.layout-default .strip-page.loaded .strip-page__skeleton {
+    display: none;
+}
+
+body.layout-default #regionSvgOverlay {
+    pointer-events: none;
+}
+
+@keyframes ws-strip-shimmer {
+    from {
+        background-position: 200% 0;
+    }
+    to {
+        background-position: -200% 0;
+    }
+}

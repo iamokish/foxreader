@@ -1,0 +1,105 @@
+/* ============================================================
+   Default Layout — top bar
+   ============================================================ */
+
+/* Folder nav blends into the topbar */
+body.layout-default .default-topbar .folder-nav {
+    background: transparent;
+    padding: 0;
+}
+
+.default-topbar {
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 20px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-default);
+    box-sizing: border-box;
+}
+
+.default-topbar__folder {
+    flex: 1;
+    max-width: 480px;
+    margin: 0;
+    padding: 0;
+}
+
+.default-topbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ============================================================
+   Default Layout — modernized aesthetic overrides
+   Scoped to body.layout-default (set by LayoutContext) so the
+   Basic layout remains pixel-perfect and untouched.
+   ============================================================ */
+
+/* Rounded pill-style buttons */
+body.layout-default .buttons>button,
+body.layout-default #loadFolderBtn,
+body.layout-default .ml-control-box,
+body.layout-default .dropdown-trigger,
+body.layout-default #languageSelect,
+body.layout-default select,
+body.layout-default .btn-primary,
+body.layout-default .btn-secondary,
+body.layout-default .btn-danger,
+body.layout-default .btn-success,
+body.layout-default .btn-purple,
+body.layout-default .font-select-trigger,
+body.layout-default .theme-toggle {
+    border-radius: 20px;
+}
+
+/* Consistent 16px spacing */
+body.layout-default .buttons,
+body.layout-default .translator-buttons {
+    gap: 16px;
+}
+
+body.layout-default .content-area {
+    padding: 16px 20px 20px 20px;
+}
+
+/* Entry cards: hover lift effect */
+body.layout-default .saved-entry-card {
+    transition:
+        transform 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+body.layout-default .saved-entry-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+
+/* An open options panel holds sliders, colour buttons and a popover
+   anchored to a button's screen rect. Lifting the card while the
+   pointer is inside it would shift those targets under the cursor. */
+body.layout-default .saved-entry-card.is-open:hover {
+    transform: none;
+}
+
+/* Compact, rounded gallery bar */
+body.layout-default .gallery-bar {
+    min-height: 80px;
+    max-height: 80px;
+    height: 80px;
+}
+
+body.layout-default .gallery-item {
+    border-radius: 10px;
+}
+
+/* Slightly larger translation text */
+body.layout-default .translation-wrapper .panel {
+    font-size: 16px;
+}

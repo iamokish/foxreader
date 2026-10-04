@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fox Reader — Settings</title>
+  <style>
+    :root {
+      --bg: #111318;
+      --surface: #1a1d24;
+      --surface-selected: #222733;
+      --border: #303541;
+      --accent: #e94560;
+      --text: #f1f3f5;
+      --muted: #9298a4;
+      --success: #4ecca3;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 36px 20px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .container {
+      width: min(820px, 100%);
+      margin: auto;
+    }
+
+    h1 {
+      margin: 0 0 7px;
+      font-size: 1.7rem;
+    }
+
+    .intro {
+      margin: 0 0 30px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: .92rem;
+    }
+
+    .api-section {
+      margin-top: 10px;
+      margin-bottom: 34px;
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .section-title {
+      margin-bottom: 5px;
+      font-size: 1.02rem;
+      font-weight: 700;
+    }
+
+    .section-description {
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.5;
+    }
+
+    .token-field { margin-bottom: 14px; }
+    .token-field:last-child { margin-bottom: 0; }
+
+    .token-label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: .83rem;
+      font-weight: 600;
+    }
+
+    .token-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .token-input {
+      flex: 1;
+      width: 100%;
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #11141a;
+      color: var(--text);
+      font: inherit;
+      font-size: .84rem;
+    }
+
+    .token-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .token-toggle,
+    .save-tokens {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #222733;
+      color: var(--text);
+      padding: 0 12px;
+      cursor: pointer;
+      font: inherit;
+      font-size: .8rem;
+    }
+
+    .token-toggle:hover,
+    .save-tokens:hover {
+      border-color: var(--accent);
+    }
+
+    .save-tokens {
+      margin-top: 15px;
+      min-height: 38px;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      font-weight: 700;
+    }
+
+    .save-tokens:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .token-saved {
+      display: none;
+      margin-left: 9px;
+      color: var(--success);
+      font-size: .8rem;
+    }
+
+    .crumbs {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 16px;
+      font-size: .78rem;
+    }
+
+    .crumbs a {
+      color: var(--muted);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+    }
+
+    .crumbs a:hover {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+
+    .section-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 0 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #222733;
+      color: var(--text);
+      font-size: .8rem;
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .section-link:hover {
+      border-color: var(--accent);
+    }
+
+    .device-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .device-row {
+      display: grid;
+      grid-template-columns: 1fr minmax(0, 250px);
+      align-items: center;
+      gap: 8px 16px;
+    }
+
+    @media (max-width: 620px) {
+      .device-row { grid-template-columns: 1fr; }
+    }
+
+    .device-name {
+      font-size: .88rem;
+      font-weight: 650;
+    }
+
+    .device-hint {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.45;
+    }
+
+    .device-select {
+      width: 100%;
+      padding: 9px 11px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #11141a;
+      color: var(--text);
+      font: inherit;
+      font-size: .82rem;
+      cursor: pointer;
+    }
+
+    .device-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .device-select:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .device-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px 9px;
+      margin-bottom: 17px;
+    }
+
+    .device-fact {
+      padding: 4px 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #11141a;
+      color: var(--muted);
+      font-size: .74rem;
+    }
+
+    .device-fact b {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .device-note {
+      margin-top: 14px;
+      padding: 10px 13px;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      background: rgba(233, 69, 96, .07);
+      color: var(--text);
+      font-size: .78rem;
+      line-height: 1.5;
+    }
+
+    .device-note.info {
+      border-left-color: var(--success);
+      background: rgba(78, 204, 163, .07);
+      color: var(--muted);
+    }
+
+    .device-note ul {
+      margin: 6px 0 0;
+      padding-left: 18px;
+    }
+
+    .language {
+      margin-bottom: 30px;
+    }
+
+    .language-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      margin-bottom: 10px;
+    }
+
+    .language-name {
+      font-size: 1.08rem;
+      font-weight: 700;
+    }
+
+    .current {
+      color: var(--success);
+      font-size: .8rem;
+      text-align: right;
+    }
+
+    .models {
+      display: grid;
+      gap: 9px;
+    }
+
+    .model {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 15px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      transition: .15s ease;
+    }
+
+    .model.available {
+      cursor: pointer;
+    }
+
+    .model.available:hover {
+      border-color: var(--accent);
+    }
+
+    .model.selected {
+      border-color: var(--accent);
+      background: var(--surface-selected);
+    }
+
+    .model.unavailable {
+      opacity: .42;
+      cursor: not-allowed;
+    }
+
+    input[type="radio"] {
+      margin-top: 3px;
+      accent-color: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .details {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .name-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .name {
+      font-weight: 700;
+      font-size: .95rem;
+    }
+
+    .badge {
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: .68rem;
+      font-weight: 700;
+    }
+
+    .badge.selected {
+      color: var(--success);
+      background: rgba(78, 204, 163, .12);
+    }
+
+    .badge.downloaded {
+      color: var(--success);
+      background: rgba(78, 204, 163, .08);
+    }
+
+    .badge.unavailable {
+      color: var(--muted);
+      background: rgba(255,255,255,.06);
+    }
+
+    .status {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .empty {
+      padding: 14px 15px;
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: .84rem;
+    }
+
+    #message {
+      min-height: 22px;
+      margin-top: 5px;
+      font-size: .84rem;
+    }
+
+    .success { color: var(--success); }
+    .error { color: var(--accent); }
+
+    /* ---------------- toast notifications ---------------- */
+    /* Fixed top-left stack so notices never require scrolling. At most
+       three are ever shown; a fourth dismisses the oldest first. */
+    #toasts {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 12000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-width: min(360px, calc(100vw - 32px));
+      pointer-events: none;
+    }
+
+    .toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: .8rem;
+      line-height: 1.45;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, .35);
+      animation: toast-in .18s ease-out;
+    }
+
+    .toast.success { border-color: var(--success); }
+    .toast.error { border-color: var(--accent); }
+
+    .toast-text {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .toast-close {
+      flex: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0;
+      cursor: pointer;
+      opacity: .7;
+    }
+
+    .toast-close:hover { opacity: 1; }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(-8px); }
+      to { opacity: 1; transform: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .toast { animation: none; }
+    }
+
+    /* Polished duplicate-session screen */
+    .session-lock-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 50% 30%, rgba(233, 69, 96, 0.10), transparent 34%),
+        #111318;
+    }
+
+    .session-lock-card {
+      width: min(470px, 100%);
+      padding: 36px 32px 30px;
+      text-align: center;
+      background: #1a1d24;
+      border: 1px solid #303541;
+      border-radius: 18px;
+      box-shadow:
+        0 24px 70px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(255, 255, 255, 0.015);
+    }
+
+    .session-lock-icon {
+      width: 62px;
+      height: 62px;
+      margin: 0 auto 18px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #ff8fa0;
+      background: rgba(233, 69, 96, 0.10);
+      border: 1px solid rgba(233, 69, 96, 0.28);
+      font-size: 1.55rem;
+      font-weight: 800;
+      box-shadow: 0 10px 30px rgba(233, 69, 96, 0.08);
+    }
+
+    .session-lock-title {
+      margin: 0 0 9px;
+      color: #f1f3f5;
+      font-size: 1.38rem;
+      line-height: 1.25;
+      font-weight: 750;
+    }
+
+    .session-lock-text {
+      margin: 0 auto;
+      max-width: 370px;
+      color: #9298a4;
+      font-size: .9rem;
+      line-height: 1.65;
+    }
+
+    .session-lock-hint {
+      margin-top: 20px;
+      padding-top: 17px;
+      border-top: 1px solid #303541;
+      color: #757c89;
+      font-size: .78rem;
+      line-height: 1.55;
+    }
+
+    .session-lock-action {
+      width: 100%;
+      min-height: 42px;
+      margin-top: 20px;
+      padding: 0 16px;
+      border: 1px solid #3a404c;
+      border-radius: 9px;
+      background: #222733;
+      color: #f1f3f5;
+      font: inherit;
+      font-size: .83rem;
+      font-weight: 650;
+      cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, transform .08s ease;
+    }
+
+    .session-lock-action:hover {
+      border-color: #e94560;
+      background: #292e3b;
+    }
+
+    .session-lock-action:active {
+      transform: translateY(1px);
+    }
+
+    @media (max-width: 560px) {
+      .session-lock-card {
+        padding: 30px 22px 25px;
+        border-radius: 15px;
+      }
+
+      .session-lock-title {
+        font-size: 1.25rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <nav class="crumbs">
+      <a href="/">← Reader</a>
+      <a href="/user_endpoints">Endpoints</a>
+      <a href="/setup">Setup</a>
+    </nav>
+    <h1>Settings</h1>
+    <p class="intro">
+      Choose the default local translation model for each language.
+      Downloaded models are selectable. Models that are not downloaded are
+      shown for information only and cannot be selected.
+    </p>
+
+    <section class="api-section">
+      <div class="section-title">Custom Translation Endpoints</div>
+      <div class="section-description">
+        Describe any HTTP translation API as a request and response schema, then
+        activate it for a language to get a translator button in the reader.
+      </div>
+      <a class="section-link" href="/user_endpoints">Manage endpoints →</a>
+    </section>
+
+    <section class="api-section">
+      <div class="section-title">Text Recognition (OCR Engine)</div>
+      <div class="section-description">
+        Choose which engine reads the text out of each bubble.
+        <b>PaddleOCR</b> is the classic detect-then-read pipeline and always
+        works. <b>PaddleOCR-VL-1.6</b> is a vision-language model
+        (GGUF via llama.cpp) — it only appears as selectable while
+        <code>llama-cpp-python</code> (the <code>gguf</code> extra) is installed,
+        and it needs its weights from the Setup page. Changing the engine
+        takes effect after a restart. Text cleaning keeps using the classic
+        detector either way.
+      </div>
+
+      <div id="ocrEngine"></div>
+    </section>
+
+    <section class="api-section">
+      <div class="section-title">Compute Devices</div>
+      <div class="section-description">
+        Pick the device each model runs on. <b>Auto</b> takes the GPU with the
+        most memory, or the CPU when there is none, and is re-checked every time
+        Fox Reader starts. A device that is not present falls back to the CPU
+        without changing what you picked. The thread count applies to GGUF
+        translation models, which choose their own.
+      </div>
+
+      <div id="devices"></div>
+    </section>
+
+    <section class="api-section">
+      <div class="section-title">API Tokens</div>
+      <div class="section-description">
+        Optional API tokens used by the corresponding translation services.
+        Tokens are stored in <code>settings.yaml</code>.
+        Saving validates each non-empty token (JPDB via <code>ping</code>,
+        DeepL via <code>usage</code> — equivalent to the
+        こんにちは → Hello test translation) and refuses invalid ones, so
+        nothing invalid is ever saved. The DeepL/JPDB translator buttons in
+        the reader only appear while their token is valid. Clearing a field
+        removes that translator. DeepL free-plan keys end with
+        <code>:fx</code> and use <code>api-free.deepl.com</code>; all other
+        keys use <code>api.deepl.com</code>.
+      </div>
+
+      <div class="token-field">
+        <label class="token-label" for="deeplToken">DeepL API Token <span class="token-saved" id="deeplStatus"></span></label>
+        <div class="token-row">
+          <input class="token-input" id="deeplToken" type="password"
+                 autocomplete="off" spellcheck="false" placeholder="Enter DeepL API token">
+          <button class="token-toggle" type="button" onclick="toggleToken('deeplToken', this)">Show</button>
+        </div>
+      </div>
+
+      <div class="token-field">
+        <label class="token-label" for="jpdbToken">JPDB API Token <span class="token-saved" id="jpdbStatus"></span></label>
+        <div class="token-row">
+          <input class="token-input" id="jpdbToken" type="password"
+                 autocomplete="off" spellcheck="false" placeholder="Enter JPDB API token">
+          <button class="token-toggle" type="button" onclick="toggleToken('jpdbToken', this)">Show</button>
+        </div>
+      </div>
+
+      <button class="save-tokens" id="saveTokensBtn" type="button" onclick="saveApiTokens()">
+        Save API Tokens
+      </button>
+      <span class="token-saved" id="tokensSaved">Saved.</span>
+    </section>
+
+    <div id="settings"></div>
+    <div id="message"></div>
+  </main>
+
+  <!-- Toast stack: fixed top-left, filled by showToast(). Kept outside the
+       scrollable content so notices are visible without scrolling. -->
+  <div id="toasts" aria-live="polite"></div>
+
+  <script>
+    const LANGUAGE_NAMES = {
+      japanese: "Japanese",
+      korean: "Korean",
+      chinese: "Chinese"
+    };
+
+    let saving = false;
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+      }[char]));
+    }
+
+    function languageName(language) {
+      return LANGUAGE_NAMES[language] ||
+        language.charAt(0).toUpperCase() + language.slice(1);
+    }
+
+    function setTokenInputs(data) {
+      const tokens = data.api_tokens || {};
+      document.getElementById("deeplToken").value = tokens.deepl_api_token || "";
+      document.getElementById("jpdbToken").value = tokens.jpdb_api_token || "";
+      renderTokenStatus(data.translate_status || {});
+    }
+
+    function renderTokenStatus(status) {
+      const deepl = document.getElementById("deeplStatus");
+      const jpdb = document.getElementById("jpdbStatus");
+      if (deepl) {
+        if (status.deepl) {
+          deepl.textContent = "● valid";
+          deepl.style.display = "inline";
+        } else {
+          deepl.textContent = "";
+          deepl.style.display = "none";
+        }
+      }
+      if (jpdb) {
+        if (status.jpdb) {
+          jpdb.textContent = "● valid";
+          jpdb.style.display = "inline";
+        } else {
+          jpdb.textContent = "";
+          jpdb.style.display = "none";
+        }
+      }
+    }
+
+    function toggleToken(inputId, button) {
+      const input = document.getElementById(inputId);
+
+      if (input.type === "password") {
+        input.type = "text";
+        button.textContent = "Hide";
+      } else {
+        input.type = "password";
+        button.textContent = "Show";
+      }
+    }
+
+    async function saveApiTokens() {
+      if (saving) return;
+
+      saving = true;
+      const button = document.getElementById("saveTokensBtn");
+      const saved = document.getElementById("tokensSaved");
+
+      button.disabled = true;
+      button.textContent = "Validating...";
+      saved.style.display = "none";
+      show("", false);
+
+      try {
+        const response = await fetch("/api/settings/api-tokens", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            deepl_api_token: document.getElementById("deeplToken").value,
+            jpdb_api_token: document.getElementById("jpdbToken").value
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          const details = data.details || {};
+          const parts = [];
+          if (details.deepl_api_token) parts.push(`DeepL: ${details.deepl_api_token}`);
+          if (details.jpdb_api_token) parts.push(`JPDB: ${details.jpdb_api_token}`);
+          throw new Error(parts.length ? parts.join(" ") : (data.error || "Failed to save API tokens."));
+        }
+
+        setTokenInputs(data);
+        const status = data.translate_status || {};
+        const active = [];
+        if (status.deepl) active.push("DeepL");
+        if (status.jpdb) active.push("JPDB");
+        saved.textContent = active.length ? `Saved. Active: ${active.join(", ")}.` : "Saved.";
+        saved.style.display = "inline";
+        show("", false);
+      } catch (error) {
+        show(error.message, true);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Save API Tokens";
+        saving = false;
+      }
+    }
+
+    const SLOT_LABELS = {
+      paddleocr: "Text recognition (PaddleOCR)",
+      paddleocr_vl: "Text recognition (PaddleOCR-VL)",
+      bubble: "Bubble detection",
+      translator: "Local translation model",
+      textseg: "Text cleaning (Text Seg)"
+    };
+
+    const SLOT_HINTS = {
+      paddleocr: "Reads the text out of each bubble. Cannot use an Apple GPU.",
+      paddleocr_vl: "Transcribes bubbles with the vision-language model (llama.cpp). Applies only when PaddleOCR-VL is the selected OCR engine.",
+      bubble: "Finds the bubbles in the page.",
+      translator: "Runs the downloaded MTL model. The heaviest model.",
+      textseg: "Segments glyphs for the Text Seg clean method. Separate from OCR, so cleaning can stay on the GPU while OCR runs on the CPU, or vice versa."
+    };
+
+    // Not a slot: it is a count rather than a device, but it belongs in the same
+    // grid because it is the other half of "where does translation run".
+    const THREADS_LABEL = "CPU threads (GGUF models)";
+
+    function deviceName(devices, id) {
+      const match = (devices.options || []).find(option => option.id === id);
+      return match ? match.name : id;
+    }
+
+    function threadRow(threads) {
+      // Physical cores, because llama.cpp gets slower rather than faster once
+      // two of its threads share one core's load/store units.
+      const max = Math.max(1, Number(threads.max) || 1);
+      const pinned = threads.value !== "auto" && threads.value != null;
+      const saved = pinned ? String(threads.value) : "auto";
+
+      const counts = [];
+      for (let n = 1; n <= max; n += 1) counts.push(n);
+
+      // A count saved on a wider machine — or written into settings.yaml by
+      // hand — sits above the ceiling this page offers, and a <select> whose
+      // value matches no option quietly displays the first one instead. That
+      // would show "Auto" for a value that is not auto, so the saved number is
+      // carried into the list rather than dropped from it.
+      const pinnedCount = pinned ? Number(threads.value) : 0;
+
+      if (Number.isInteger(pinnedCount) && pinnedCount > 0 && !counts.includes(pinnedCount)) {
+        counts.push(pinnedCount);
+        counts.sort((a, b) => a - b);
+      }
+
+      let hint = `Threads the GGUF translator gets, out of ${max} physical ` +
+        `core${max === 1 ? "" : "s"}. Auto keeps some back so the page and the ` +
+        `OCR pass stay responsive while it works.`;
+
+      if (pinnedCount > max) {
+        hint += ` That is more than the ${max} core${max === 1 ? "" : "s"} here.`;
+      }
+
+      if (pinned && String(threads.resolved) !== saved) {
+        hint += ` Only ${esc(threads.resolved)} can run here.`;
+      }
+
+      if (threads.override) {
+        hint += ` FOX_READER_MTL_THREADS=${esc(threads.override)} is overriding this.`;
+      }
+
+      hint += " Applies the next time a model loads.";
+
+      return `
+        <div class="device-row">
+          <div>
+            <div class="device-name">${esc(THREADS_LABEL)}</div>
+            <div class="device-hint">${hint}</div>
+          </div>
+          <select class="device-select"
+                  aria-label="${esc(THREADS_LABEL)}"
+                  onchange="chooseThreads(this.value)">
+            <option value="auto" ${saved === "auto" ? "selected" : ""}>Auto — ${
+              esc(threads.auto)
+            } thread${Number(threads.auto) === 1 ? "" : "s"}</option>
+            ${counts.map(n => `
+              <option value="${n}" ${
+                saved === String(n) ? "selected" : ""
+              }>${n} thread${n === 1 ? "" : "s"}</option>`).join("")}
+          </select>
+        </div>`;
+    }
+
+    function renderDevices(data) {
+      const root = document.getElementById("devices");
+      const devices = data.devices;
+
+      if (!devices) {
+        root.innerHTML = "";
+        return;
+      }
+
+      const options = devices.options || [];
+      const facts = [
+        `Backend <b>${esc(devices.backend || "cpu")}</b>`,
+        `GPUs <b>${esc(devices.device_count ?? 0)}</b>`
+      ];
+
+      if (devices.gpu_name) {
+        facts.push(`Fastest <b>${esc(devices.gpu_name)}</b>`);
+      }
+
+      if (devices.cuda_version) {
+        facts.push(`CUDA <b>${esc(devices.cuda_version)}</b>`);
+      }
+
+      const rows = (devices.slots || []).map(slot => {
+        const saved = (devices.selection || {})[slot] || "auto";
+        const resolved = (devices.resolved || {})[slot] || "cpu";
+        const running = (devices.running || {})[slot] || "";
+
+        // Three values worth distinguishing: what was picked, what that means
+        // on this machine, and what the process is using until it restarts.
+        // The comparison uses `running`, not `active`: `active` holds each
+        // consumer's own spelling, so gpu:1 and cuda:1 would never match.
+        let hint = SLOT_HINTS[slot] || "";
+
+        if (saved === "auto") {
+          hint += ` Currently ${esc(deviceName(devices, resolved))}.`;
+        } else if (resolved !== saved) {
+          hint += ` ${esc(saved)} is not available — using the CPU.`;
+        }
+
+        if (running && running !== resolved) {
+          hint += ` Running on ${esc(deviceName(devices, running))} until restart.`;
+        }
+
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">${esc(SLOT_LABELS[slot] || slot)}</div>
+              <div class="device-hint">${hint}</div>
+            </div>
+            <select class="device-select"
+                    aria-label="${esc(SLOT_LABELS[slot] || slot)}"
+                    onchange="chooseDevice('${esc(slot)}', this.value)">
+              ${options.map(option => `
+                <option value="${esc(option.id)}" ${
+                  option.id === saved ? "selected" : ""
+                }>${esc(option.label)}</option>`).join("")}
+            </select>
+          </div>`;
+      }).join("");
+
+      const fallbacks = devices.fallbacks || [];
+
+      const notes = [];
+
+      if (devices.restart_required) {
+        notes.push(`
+          <div class="device-note">
+            Saved. Restart Fox Reader to use the new devices — the models bind
+            theirs when they load.
+          </div>`);
+      }
+
+      if (fallbacks.length) {
+        notes.push(`
+          <div class="device-note info">
+            Falling back to the CPU for:
+            <ul>${fallbacks.map(line => `<li>${esc(line)}</li>`).join("")}</ul>
+          </div>`);
+      }
+
+      root.innerHTML = `
+        <div class="device-summary">
+          ${facts.map(fact => `<span class="device-fact">${fact}</span>`).join("")}
+        </div>
+        <div class="device-grid">${rows}${
+          devices.mtl_threads ? threadRow(devices.mtl_threads) : ""
+        }</div>
+        ${notes.join("")}`;
+    }
+
+    async function saveDevices(body, saved) {
+      if (saving) return;
+
+      saving = true;
+      show("", false);
+
+      try {
+        const response = await fetch("/api/settings/devices", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to save.");
+        }
+
+        renderDevices(data);
+        renderOcrEngine(data);
+        show(saved, false);
+      } catch (error) {
+        show(error.message, true);
+        await load();
+      } finally {
+        saving = false;
+      }
+    }
+
+    async function chooseDevice(slot, deviceId) {
+      await saveDevices(
+        { [slot]: deviceId },
+        "Device saved. Restart Fox Reader to apply it."
+      );
+    }
+
+    async function chooseThreads(value) {
+      await saveDevices(
+        { mtl_threads: value },
+        "Thread count saved. It applies the next time a model loads."
+      );
+    }
+
+    function renderOcrEngine(data) {
+      const root = document.getElementById("ocrEngine");
+      if (!root) return;
+      const ocr = data.ocr;
+      if (!ocr || !Array.isArray(ocr.engines) || !ocr.engines.length) {
+        root.innerHTML = "";
+        return;
+      }
+      const cards = ocr.engines.map(engine => {
+        const isSelected = engine.id === ocr.selected;
+        // The VL option is only truly selectable while llama-cpp-python is
+        // present. Weights alone are not enough: without the package the
+        // engine cannot run even after a restart.
+        const isVl = engine.id === "paddleocr-vl";
+        const blockedByPackage = isVl && ocr.llama_cpp === false;
+        const selectable = engine.available || (isVl && ocr.llama_cpp === true);
+        const disabled = blockedByPackage ? "disabled" : "";
+        let status;
+        if (isSelected && engine.available) status = "Current engine";
+        else if (isSelected && !engine.available) status = "Selected — unavailable, using PaddleOCR until fixed";
+        else if (engine.available) status = "Available";
+        else if (blockedByPackage) status = "Needs the gguf extra (llama-cpp-python)";
+        else status = engine.reason || "Not available";
+        const badge = isSelected
+          ? '<span class="badge selected">Selected</span>'
+          : (engine.available
+            ? '<span class="badge downloaded">Available</span>'
+            : '<span class="badge unavailable">Unavailable</span>');
+        return `
+          <label class="model ${isSelected ? "selected" : ""} ${selectable ? "available" : "unavailable"}">
+            <input type="radio" name="ocr-engine" value="${esc(engine.id)}"
+              ${isSelected ? "checked" : ""} ${disabled}
+              onchange="chooseOcrEngine('${esc(engine.id)}')">
+            <span class="details">
+              <span class="name-row">
+                <span class="name">${esc(engine.label || engine.id)}</span>
+                ${badge}
+              </span>
+              <span class="status">${esc(status)}${engine.reason && !engine.available ? " — " + esc(engine.reason) : ""}</span>
+            </span>
+          </label>`;
+      }).join("");
+      let note = "";
+      if (ocr.running && ocr.running !== ocr.selected) {
+        note = `<div class="device-note">Saved. Restart Fox Reader to use the new engine.</div>`;
+      } else if (ocr.llama_cpp === true && ocr.vl_downloaded === false) {
+        note = `<div class="device-note info">llama-cpp-python is installed${ocr.llama_cpp_version ? " (" + esc(ocr.llama_cpp_version) + ")" : ""}, but the VL weights are not downloaded yet — see Setup.</div>`;
+      } else if (ocr.last_error) {
+        note = `<div class="device-note">${esc(ocr.last_error)}</div>`;
+      }
+      root.innerHTML = `<div class="models">${cards}</div>${note}`;
+    }
+
+    async function chooseOcrEngine(engineId) {
+      if (saving) return;
+      saving = true;
+      show("", false);
+      try {
+        const response = await fetch("/api/settings/ocr-engine", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ engine: engineId })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Failed to save OCR engine.");
+        setTokenInputs(data);
+        renderDevices(data);
+        renderOcrEngine(data);
+        render(data);
+        show("OCR engine saved. Restart Fox Reader to apply it.", false);
+      } catch (error) {
+        show(error.message, true);
+        await load();
+      } finally {
+        saving = false;
+      }
+    }
+
+    function render(data) {
+      const root = document.getElementById("settings");
+      root.innerHTML = Object.entries(data.languages).map(([language, info]) => {
+        const models = info.models || [];
+        const downloaded = models.filter(m => m.downloaded);
+        const selected = models.find(
+          m => m.downloaded && m.id === info.default_model
+        );
+
+        let modelHtml;
+
+        if (!models.length) {
+          modelHtml = `
+            <div class="empty">
+              No MTL model supports ${esc(languageName(language))}.
+            </div>`;
+        } else {
+          modelHtml = `
+            <div class="models">
+              ${models.map(model => {
+                const isAvailable = Boolean(model.downloaded);
+                const isSelected =
+                  isAvailable && model.id === info.default_model;
+
+                return `
+                  <label class="model ${isSelected ? "selected" : ""} ${
+                    isAvailable ? "available" : "unavailable"
+                  }">
+                    <input
+                      type="radio"
+                      name="mtl-${esc(language)}"
+                      value="${esc(model.id)}"
+                      ${isSelected ? "checked" : ""}
+                      ${isAvailable ? "" : "disabled"}
+                      onchange="choose('${esc(language)}', '${esc(model.id)}')"
+                    >
+                    <span class="details">
+                      <span class="name-row">
+                        <span class="name">${esc(model.name)}</span>
+                        ${
+                          isSelected
+                            ? '<span class="badge selected">Selected</span>'
+                            : isAvailable
+                              ? '<span class="badge downloaded">Downloaded</span>'
+                              : '<span class="badge unavailable">Not downloaded</span>'
+                        }
+                      </span>
+                      <span class="status">
+                        ${
+                          isSelected
+                            ? "Current default model"
+                            : isAvailable
+                              ? "Available"
+                              : "Download this model to make it selectable"
+                        }
+                      </span>
+                    </span>
+                  </label>`;
+              }).join("")}
+            </div>`;
+        }
+
+        return `
+          <section class="language">
+            <div class="language-header">
+              <div class="language-name">${esc(languageName(language))}</div>
+              <div class="current">
+                ${
+                  selected
+                    ? `Selected: ${esc(selected.name)}`
+                    : downloaded.length
+                      ? ""
+                      : "No downloaded model"
+                }
+              </div>
+            </div>
+            ${modelHtml}
+          </section>`;
+      }).join("");
+    }
+
+    async function load() {
+      try {
+        const response = await fetch("/api/settings", { cache: "no-store" });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to load settings.");
+        }
+
+        setTokenInputs(data);
+        renderDevices(data);
+        renderOcrEngine(data);
+        render(data);
+      } catch (error) {
+        show(error.message, true);
+      }
+    }
+
+    async function choose(language, modelId) {
+      if (saving) return;
+
+      saving = true;
+      show("", false);
+
+      try {
+        const response = await fetch("/api/settings/mtl-default", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            language: language,
+            model_id: modelId
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to save setting.");
+        }
+
+        renderOcrEngine(data);
+        render(data);
+        show("Setting saved and applied.", false);
+      } catch (error) {
+        show(error.message, true);
+        await load();
+      } finally {
+        saving = false;
+      }
+    }
+
+    function show(message, isError) {
+      const element = document.getElementById("message");
+      element.textContent = message;
+      element.className = message ? (isError ? "error" : "success") : "";
+
+      try {
+        showToast(message, isError);
+      } catch {
+        // The line above already carries the message; a toast must never
+        // break a settings save.
+      }
+    }
+
+    /* ---------------- toast notifications ---------------- */
+
+    /* At most this many toasts are ever on screen; showing one more
+       dismisses the oldest first. */
+    const TOAST_LIMIT = 3;
+    /* How long a toast stays up unless closed by hand. */
+    const TOAST_LIFETIME_MS = 5000;
+
+    function toastStack() {
+      let stack = document.getElementById("toasts");
+
+      if (!stack) {
+        stack = document.createElement("div");
+        stack.id = "toasts";
+        stack.setAttribute("aria-live", "polite");
+        document.body.appendChild(stack);
+      }
+
+      return stack;
+    }
+
+    function dismissToast(toast) {
+      if (!toast) return;
+
+      if (toast._dismissTimer) {
+        clearTimeout(toast._dismissTimer);
+        toast._dismissTimer = null;
+      }
+
+      toast.remove();
+    }
+
+    function showToast(message, isError) {
+      if (!message) return;
+
+      const stack = toastStack();
+
+      while (stack.children.length >= TOAST_LIMIT) {
+        dismissToast(stack.firstElementChild);
+      }
+
+      const toast = document.createElement("div");
+      toast.className = "toast " + (isError ? "error" : "success");
+      toast.setAttribute("role", isError ? "alert" : "status");
+
+      // textContent, never innerHTML: setting names and device labels must
+      // not be able to inject markup.
+      const text = document.createElement("div");
+      text.className = "toast-text";
+      text.textContent = message;
+
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "toast-close";
+      close.title = "Dismiss";
+      close.setAttribute("aria-label", "Dismiss notification");
+      close.textContent = "×";
+      close.addEventListener("click", () => dismissToast(toast));
+
+      toast.append(text, close);
+      stack.appendChild(toast);
+
+      toast._dismissTimer = setTimeout(() => dismissToast(toast), TOAST_LIFETIME_MS);
+    }
+
+    function initWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(
+        `${protocol}//${window.location.host}/ws/lifecycle`
+      );
+
+      let flashInterval = null;
+
+      socket.onmessage = (event) => {
+        let data;
+
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (data.action === "focus_tab") {
+          if (flashInterval) clearInterval(flashInterval);
+
+          const originalTitle = document.title;
+          let isFlashed = false;
+
+          flashInterval = setInterval(() => {
+            document.title = isFlashed
+              ? "Fox Reader (Active)"
+              : originalTitle;
+            isFlashed = !isFlashed;
+          }, 500);
+
+          window.addEventListener("focus", () => {
+            if (flashInterval) clearInterval(flashInterval);
+            document.title = originalTitle;
+            flashInterval = null;
+          }, { once: true });
+        }
+      };
+
+      return socket;
+    }
+
+    function initSessionLock(socket) {
+      const channel = new BroadcastChannel("fox_reader_session_lock");
+      const tabId = Math.random().toString(36).substring(2, 15);
+      let isPrimary = true;
+      let dominanceInterval = null;
+
+      channel.onmessage = (event) => {
+        let data;
+
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (data.action === "ping_session_owner" && isPrimary) {
+          channel.postMessage(JSON.stringify({
+            action: "session_owner_ack",
+            ownerId: tabId
+          }));
+        }
+
+        if (
+          data.action === "session_owner_ack" &&
+          data.ownerId !== tabId &&
+          isPrimary
+        ) {
+          isPrimary = false;
+          triggerDuplicateBlockMode(socket, channel, dominanceInterval);
+        }
+      };
+
+      channel.postMessage(JSON.stringify({
+        action: "ping_session_owner"
+      }));
+
+      dominanceInterval = setInterval(() => {
+        if (isPrimary) {
+          channel.postMessage(JSON.stringify({
+            action: "session_owner_ack",
+            ownerId: tabId
+          }));
+        } else {
+          clearInterval(dominanceInterval);
+        }
+      }, 1000);
+    }
+
+    function triggerDuplicateBlockMode(socket, channel, interval) {
+      window.stop();
+
+      if (socket) socket.close();
+      if (channel) channel.close();
+      if (interval) clearInterval(interval);
+
+      document.body.innerHTML = `
+        <main class="session-lock-screen" role="alert" aria-live="polite">
+          <section class="session-lock-card">
+            <div class="session-lock-icon" aria-hidden="true">!</div>
+
+            <h1 class="session-lock-title">Fox Reader is already open</h1>
+
+            <p class="session-lock-text">
+              Another Fox Reader window or browser tab is currently using this
+              session. Only one active Fox Reader page is allowed at a time.
+            </p>
+
+            <div class="session-lock-hint">
+              Return to your active Fox Reader window, then close this tab.
+            </div>
+
+            <button
+              class="session-lock-action"
+              type="button"
+              onclick="window.close()">
+              Close This Tab
+            </button>
+          </section>
+        </main>
+      `;
+    }
+
+    load();
+    initSessionLock(initWebSocket());
+  </script>
+</body>
+</html>

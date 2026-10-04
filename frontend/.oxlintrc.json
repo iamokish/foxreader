@@ -1,0 +1,53 @@
+{
+    "$schema": "https://oxc.rs/schema/oxlintrc.json",
+    "plugins": ["typescript", "import"],
+    "categories": {
+        "correctness": "error",
+        "suspicious": "warn",
+        "style": "off",
+        "perf": "off"
+    },
+    "globals": {
+        "document": "readonly",
+        "window": "readonly",
+        "console": "readonly",
+        "fetch": "readonly",
+        "URL": "readonly",
+        "crypto": "readonly",
+        "confirm": "readonly",
+        "setTimeout": "readonly",
+        "setInterval": "readonly",
+        "clearTimeout": "readonly",
+        "clearInterval": "readonly",
+        "alert": "readonly",
+        "prompt": "readonly",
+        "localStorage": "readonly",
+        "sessionStorage": "readonly",
+        "Image": "readonly",
+        "SVGElement": "readonly",
+        "XMLHttpRequest": "readonly",
+        "WebSocket": "readonly",
+        "BroadcastChannel": "readonly",
+        "requestAnimationFrame": "readonly",
+        "cancelAnimationFrame": "readonly",
+        "getComputedStyle": "readonly",
+        "CSS": "readonly",
+        "IntersectionObserver": "readonly",
+        "Blob": "readonly",
+        "process": "readonly",
+        "Event": "readonly",
+        "MouseEvent": "readonly",
+        "KeyboardEvent": "readonly"
+    },
+    "rules": {
+        "no-unused-vars": "warn",
+        "no-undef": "error",
+        "eqeqeq": "error",
+        "no-var": "error",
+        "prefer-const": "warn",
+        "no-console": "warn",
+        "typescript/no-explicit-any": "warn",
+        "typescript/no-unused-vars": "warn",
+        "import/no-duplicates": "error"
+    }
+}
