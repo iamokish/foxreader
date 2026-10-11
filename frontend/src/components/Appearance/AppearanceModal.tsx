@@ -17,9 +17,9 @@ const LAYOUT_OPTIONS: { value: Layout; title: string; description: string }[] = 
         description: "Classic split view. Viewer on the left, tools on the right.",
     },
     {
-        value: "default",
-        title: "Default",
-        description: "Workspace with resizable panels, a top bar and reader mode.",
+        value: "vulpes",
+        title: "Vulpes",
+        description: "Pages rail, canvas and editor, with a four-view reader.",
     },
 ];
 
@@ -36,20 +36,30 @@ const THEME_OPTIONS: { value: Theme; title: string; description: string }[] = [
     },
 ];
 
+/** The human name of a layout, for the "Current:" line and the toolbar row. */
+export function layoutLabel(layout: Layout): string {
+    return layout === "vulpes" ? "Vulpes" : "Basic";
+}
+
 function LayoutPreview({ value }: { value: Layout }) {
-    if (value === "default") {
+    if (value === "vulpes") {
         return (
             <span class="appearance-preview" aria-hidden="true">
-                <span class="ap-mock ap-mock--default">
+                <span class="ap-mock ap-mock--vulpes">
                     <span class="ap-mock__topbar" />
                     <span class="ap-mock__main">
-                        <span class="ap-mock__col-viewer" />
+                        <span class="ap-mock__rail">
+                            <i />
+                            <i />
+                            <i />
+                        </span>
+                        <span class="ap-mock__stage" />
                         <span class="ap-mock__col-side">
-                            <span class="ap-mock__cell" />
                             <span class="ap-mock__cell" />
                             <span class="ap-mock__cell" />
                         </span>
                     </span>
+                    <span class="ap-mock__statusbar" />
                 </span>
             </span>
         );
@@ -87,8 +97,12 @@ function ThemePreview({ value }: { value: Theme }) {
 }
 
 /**
- * Centered Appearance overlay: pick a layout (basic/default) and a theme
+ * Centered Appearance overlay: pick a layout (basic/vulpes) and a theme
  * (light/dark). Opened from the "Appearance" row in the Options dropdown.
+ *
+ * Layout and theme are separate axes. Vulpes is a layout, not a third theme: it
+ * restates every colour token for both sides (see `themes/vulpes.css`), so the
+ * Light/Dark choice keeps working inside it.
  *
  * Styling is 100% theme tokens so the card follows the live theme, with
  * body.layout-* overrides for per-layout rounding.
@@ -122,7 +136,7 @@ export function AppearanceModal({ open, onClose }: AppearanceModalProps) {
         if (e.target === e.currentTarget) onClose();
     };
 
-    const activeLayoutLabel = layout === "default" ? "Default" : "Basic";
+    const activeLayoutLabel = layoutLabel(layout);
     const activeThemeLabel = theme === "light" ? "Light" : "Dark";
 
     return (

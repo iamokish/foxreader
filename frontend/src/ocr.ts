@@ -1,4 +1,4 @@
-import { state } from "./state";
+import { BUBBLE_PADDING_DEFAULT, BUBBLE_PADDING_MAX, BUBBLE_PADDING_MIN, state } from "./state";
 import * as api from "./api";
 import { updateCursor, suspendVariantSwitch } from "./viewer";
 import { showNotify, showLoading, hideLoading, setTextAreaLoading } from "./ui";
@@ -365,6 +365,12 @@ export async function startFreeCapture(): Promise<void> {
                 container.style.overflow = "hidden";
             }
             container.style.touchAction = "auto";
+            // Read both boxes BEFORE hiding the canvas below: a `display: none`
+            // element reports a zero rect, which used to shift every captured
+            // point up-left by exactly the canvas origin. Read once, not per
+            // point: the boxes cannot move mid-map, and one sync layout beats N.
+            const imgRect = img.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
             canvas.style.display = "none";
             canvas.style.pointerEvents = "none";
 
@@ -375,9 +381,7 @@ export async function startFreeCapture(): Promise<void> {
                 return;
             }
 
-            const imgRect = img.getBoundingClientRect();
             const realPoints: Point[] = state.lassoPoints.map((p) => {
-                const canvasRect = canvas.getBoundingClientRect();
                 const screenX = p.x + canvasRect.left;
                 const screenY = p.y + canvasRect.top;
                 return {
@@ -411,6 +415,19 @@ export async function startFreeCapture(): Promise<void> {
     };
 }
 
+/**
+ * Coerce anything at all into a usable bubble padding in px.
+ *
+ * Mirrors the backend's `normalize_padding`: out-of-range clamps to the ends,
+ * unparseable falls back to the default. Read at send time (not only when the
+ * slider moves) so a hand-set state can never ship a bad value.
+ */
+export function normalizeBubblePadding(value: unknown): number {
+    const number = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+    if (typeof number !== "number" || !Number.isFinite(number)) return BUBBLE_PADDING_DEFAULT;
+    return Math.min(BUBBLE_PADDING_MAX, Math.max(BUBBLE_PADDING_MIN, Math.floor(number)));
+}
+
 export async function bubbleCapture(): Promise<void> {
     if (!state.currentImageFile) {
         showNotify("⚠️ No image loaded!");
@@ -422,6 +439,7 @@ export async function bubbleCapture(): Promise<void> {
         const data = await api.bubbleDetect({
             filename: state.currentImageFile,
             isGrayScale: state.isGrayScaleEnabled,
+            padding: normalizeBubblePadding(state.bubblePadding),
         });
         if (Array.isArray(data) && data.length > 0) {
             const { addNewEntries, renderCurrentPageEntries } = await import("./entries");
@@ -430,8 +448,13 @@ export async function bubbleCapture(): Promise<void> {
         } else {
             showNotify("⚠️ No bubbles detected");
         }
-    } catch {
-        showNotify("❌ Bubble detection failed");
+    } catch (err) {
+        // Name the backend's reason (unreadable file, device failure, ...)
+        // instead of a dead end: `ApiError.message` already carries the
+        // response's error. Capped, so a proxy error page can never become a
+        // fullscreen toast.
+        const reason = err instanceof Error && err.message ? err.message.slice(0, 160) : "";
+        showNotify(reason ? `❌ Bubble detection failed: ${reason}` : "❌ Bubble detection failed");
     } finally {
         endCapture();
         hideLoading();

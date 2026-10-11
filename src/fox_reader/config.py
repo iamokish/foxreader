@@ -62,9 +62,14 @@ class FoxConfig(BaseModel):
     def validate_layout(cls, value: str) -> str:
         value = value.strip().lower()
 
-        if value not in {"basic", "default", "reader", "translation"}:
+        # Only "basic" and "vulpes" are real layouts. The other three are retired
+        # and the frontend maps them (see normalizeLayout): "default" onto Vulpes,
+        # its successor, and "reader"/"translation" onto Basic. They stay accepted
+        # so an existing fox_config.yaml does not stop the app from starting.
+        if value not in {"basic", "vulpes", "default", "reader", "translation"}:
             raise ValueError(
-                "layout must be one of: basic, default, reader, translation"
+                "layout must be one of: basic, vulpes "
+                "(retired, still accepted: default, reader, translation)"
             )
 
         return value

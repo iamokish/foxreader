@@ -23,7 +23,12 @@ async def detect_bubbles(request: Request, req: BubbleRequest):
         if bubble is None:
             return JSONResponse({"error": "Models are not ready"}, status_code=503)
 
-        cache_key = "gray_scale" if req.isGrayScale else "normal"
+        from fox_reader.bubble import normalize_padding
+
+        # Normalised once, here: the cache key must distinguish paddings, or a
+        # detection run at 2px would be served again after moving the slider.
+        padding = normalize_padding(req.padding)
+        cache_key = f"{'gray_scale' if req.isGrayScale else 'normal'}:pad{padding}"
         cached = session.get_cached_bubble(req.filename, cache_key)
         if cached is not None:
             return JSONResponse(cached)
@@ -34,7 +39,7 @@ async def detect_bubbles(request: Request, req: BubbleRequest):
 
         img = Image.open(file_path)
         response_data = await run_in_threadpool(
-            bubble.detect, img, req.isGrayScale
+            bubble.detect, img, grayscale=req.isGrayScale, padding=padding
         )
         session.set_cached_bubble(req.filename, cache_key, response_data)
 

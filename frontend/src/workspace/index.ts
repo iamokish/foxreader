@@ -1,6 +1,4 @@
 export { WorkspaceProvider, useWorkspace } from "./WorkspaceContext";
-export type { WorkspaceMode, PanelId, PanelState } from "./WorkspaceContext";
+export type { WorkspaceMode } from "./WorkspaceContext";
 export { Splitter } from "./Splitter";
-export { WorkspacePanel } from "./WorkspacePanel";
-export { ReaderOverlay } from "./ReaderOverlay";
-export { ReaderToggle } from "./ReaderToggle";
+export type { SplitterAxis } from "./Splitter";

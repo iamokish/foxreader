@@ -33,9 +33,14 @@ log = logging.getLogger(__name__)
 K3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
 #: Post-processing knobs the detector's ``predict`` may accept. Absent ones mean
-#: "use the value shipped in the model's own ``inference.yml``" (``thresh`` 0.2,
-#: ``box_thresh`` 0.45, ``unclip_ratio`` 1.4, ``limit_side_len`` 736 with
-#: ``limit_type: min``, which on a larger page is a no-op).
+#: "use the value the detector resolved at construction" -- for
+#: PP-OCRv6_medium_det that is ``thresh`` 0.2, ``box_thresh`` 0.45 and
+#: ``unclip_ratio`` 1.4 from the model's ``inference.yml``, with
+#: ``limit_side_len`` 960 and ``limit_type: max``.
+#:
+#: Those last two are not what the model's ``preprocessor_config.json`` says
+#: (736 / ``min``); see :data:`fox_reader.ocr_predict._TEXT_DET_MAX_LIMIT_MODELS`
+#: for why the larger value is the one that has always run.
 _PREDICT_KEYS = ("limit_side_len", "limit_type", "thresh", "box_thresh",
                  "unclip_ratio")
 

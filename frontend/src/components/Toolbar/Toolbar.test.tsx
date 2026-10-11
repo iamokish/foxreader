@@ -70,14 +70,36 @@ describe("Toolbar reading direction", () => {
     });
 });
 
+describe("Toolbar folder row", () => {
+    it("reads Load on the folder button with the reader toggle right after it", () => {
+        localStorage.setItem("fox-reader-layout", "basic");
+        const { container } = renderToolbar();
+        const nav = container.querySelector(".folder-nav");
+        expect(nav).not.toBeNull();
+        const load = container.querySelector("#loadFolderBtn");
+        expect(load?.textContent).toMatch(/Load/);
+        expect(load?.textContent).not.toMatch(/Load Folder/);
+        expect(load?.querySelector(".material-icons")?.textContent).toBe("folder_open");
+        const reader = container.querySelector("#readerModeBtn");
+        expect(reader?.closest(".folder-nav")).not.toBeNull();
+        expect(reader?.previousElementSibling?.id).toBe("loadFolderBtn");
+        // Icon-only: glyph plus accessible name, no visible words.
+        expect(reader?.querySelector(".material-icons")).not.toBeNull();
+        expect(reader?.textContent).not.toMatch(/Reader/);
+        expect(reader?.getAttribute("aria-label")).toBe("Reader");
+    });
+});
+
 describe("Toolbar characters", () => {
-    it("offers a Characters button next to Options and an enabled toggle", () => {
+    it("offers an icon-only Characters button next to Options and an enabled toggle", () => {
         const { container } = renderToolbar();
         const options = container.querySelector("#settingsBtn");
         const button = container.querySelector("#charactersBtn");
         expect(options).not.toBeNull();
         expect(button).not.toBeNull();
-        expect(button?.textContent).toMatch(/Characters/);
+        expect(button?.querySelector(".material-icons")?.textContent).toBe("group");
+        expect(button?.textContent).not.toMatch(/Characters/);
+        expect(button?.getAttribute("aria-label")).toBe("Characters");
         const toggle = container.querySelector("#enableCharacters") as HTMLInputElement | null;
         expect(toggle).not.toBeNull();
         expect(toggle?.checked).toBe(true);
@@ -87,5 +109,17 @@ describe("Toolbar characters", () => {
         const { container } = renderToolbar();
         fireEvent.click(container.querySelector("#charactersBtn")!);
         expect(document.body.querySelector(".ch-modal")).not.toBeNull();
+    });
+
+    it("offers a bubble padding slider from 0 to 10, defaulting to 5px", () => {
+        const { container } = renderToolbar();
+        const slider = container.querySelector("#bubblePadding") as HTMLInputElement | null;
+        expect(slider).not.toBeNull();
+        expect(slider?.getAttribute("min")).toBe("0");
+        expect(slider?.getAttribute("max")).toBe("10");
+        expect(slider?.getAttribute("step")).toBe("1");
+        expect(slider?.value).toBe("5");
+        expect(slider?.getAttribute("aria-label")).toBeTruthy();
+        expect(container.querySelector("#bubblePaddingValue")?.textContent?.trim()).toBe("5px");
     });
 });

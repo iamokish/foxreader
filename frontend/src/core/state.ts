@@ -98,6 +98,16 @@ export interface Entry extends TextGeometry {
     // shift and rotation -- which travel to the backend under the same names.
 }
 
+/**
+ * Bubble outline padding in px, as the Options slider offers it. Matches the
+ * backend's `normalize_padding` bounds; both sides clamp, so a stray value
+ * can never refuse a detection.
+ */
+export const BUBBLE_PADDING_MIN = 0;
+export const BUBBLE_PADDING_MAX = 10;
+/** What the detector used before the option existed; older sessions keep it. */
+export const BUBBLE_PADDING_DEFAULT = 5;
+
 export interface State {
     currentFontsData: FontData[];
     currentlySelectedEntryId: string | null;
@@ -117,6 +127,8 @@ export interface State {
     isContextEnabled: boolean;
     /** Whether character metadata rides on MTL requests (default on). */
     isCharactersEnabled: boolean;
+    /** Bubble outline padding in px, 0-10. Written by the Options slider. */
+    bubblePadding: number;
     isDrawing: boolean;
     lassoPoints: Point[];
     isPanning: boolean;
@@ -171,6 +183,7 @@ export const state: State = {
     isLiveInpaintedEnabled: true,
     isContextEnabled: true,
     isCharactersEnabled: true,
+    bubblePadding: BUBBLE_PADDING_DEFAULT,
     isDrawing: false,
     lassoPoints: [],
     isPanning: false,

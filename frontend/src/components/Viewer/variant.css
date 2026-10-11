@@ -7,13 +7,12 @@
 
 /*
  * The switch is a sibling of `#imageContainer`, so it needs the viewer cell as
- * its containing block. Both of these hold only the viewer (the basic layout's
- * column also holds the gallery bar, which sits below), and neither had any
- * positioned descendant of its own outside `#imageContainer` -- which is
+ * its containing block. Both viewer hosts hold only the viewer, and neither had
+ * any positioned descendant of its own outside `#imageContainer` -- which is
  * already `position: relative` and so keeps every child it has today.
  */
 .viewer-section,
-body.layout-default .ws-col--viewer > .ws-cell--fill {
+body.layout-vulpes .vx-stage {
     position: relative;
 }
 

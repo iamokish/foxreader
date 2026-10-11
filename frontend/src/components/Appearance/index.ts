@@ -1,1 +1,1 @@
-export { AppearanceModal } from "./AppearanceModal";
+export { AppearanceModal, layoutLabel } from "./AppearanceModal";

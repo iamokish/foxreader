@@ -1,0 +1,66 @@
+/*
+ * Font picker.
+ *
+ * The picker is filled and driven by `fonts.ts`, not by JSX: the option list is
+ * built into `#fontOptionsContainer` by `innerHTML`, and the trigger's preview face
+ * and label are written on selection. So this file owns the *shape* of the control
+ * and nothing here is ever written by script.
+ *
+ * `display` used to be an exception to that, and it was the bug. The menu carried an
+ * inline `display: none` from JSX while `fonts.ts` overwrote it with
+ * `style.display = "block"` -- two writers on one property. Everything that made the
+ * menu "flicker" came from that: the toggle decided open-vs-closed by reading back
+ * `style.display`, which is whatever the last writer left there rather than what the
+ * user last asked for.
+ *
+ * One class, toggled by `fonts.ts`, is now the single source of truth.
+ */
+
+.custom-font-dropdown {
+    position: relative;
+    width: 100%;
+    max-width: 220px;
+    box-sizing: border-box;
+}
+
+#selectedFontLabel {
+    flex-grow: 1;
+    padding-right: 5px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.custom-font-dropdown .font-select-trigger .material-icons {
+    flex-shrink: 0;
+    font-size: 16px;
+}
+
+/*
+ * The menu.
+ *
+ * `bottom: 100%` rather than a pixel offset: the control is 32px tall in the
+ * translation panel and 24px in the Vulpes footer, and "just above the trigger" is
+ * the same instruction in both. A hardcoded offset would sit wrong in one of them.
+ *
+ * `z-index` is high because the menu escapes its row; the layouts give their chrome
+ * lower values than this, so it lands on top of whatever it overlaps.
+ */
+.font-options-container {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    width: 100%;
+    max-height: 250px;
+    margin-bottom: 4px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-radius: var(--radius-sm, 4px);
+    z-index: 10000;
+    box-sizing: border-box;
+}
+
+.font-options-container.is-open {
+    display: block;
+}

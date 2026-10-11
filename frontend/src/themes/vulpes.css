@@ -1,0 +1,257 @@
+/*
+ * Vulpes -- the palette layer.
+ *
+ * Vulpes is a *layout* (see `src/layouts/VulpesLayout.tsx`), not a third entry on
+ * the theme axis: it rides on top of the existing Dark/Light choice and restates
+ * every token for both sides. So `body.layout-vulpes` + `html.theme-dark` is
+ * Vulpes Dark, and the same body class under `html.theme-light` is Vulpes Light.
+ *
+ * Scoped to `body` rather than `:root` on purpose. `dark.css` defines the tokens
+ * on `:root` and `light.css` on `html.theme-light`; both of those are ancestors
+ * of `<body>`, so a definition here wins for everything inside the body without
+ * needing `!important` or a specificity contest -- and leaves the other two
+ * layouts byte-for-byte unchanged.
+ *
+ * Every token `dark.css` declares is redeclared here, in the same order, so a
+ * component can never fall through to the base palette and come out half-themed.
+ * The `--vx-*` block at the end is Vulpes' own, consumed only by `vulpes.css`
+ * and the Vulpes components.
+ *
+ * One accent, used consistently: ember (`--vx-accent`) is the brand, the primary
+ * action, the focus ring and the active splitter. Blue stays reserved for
+ * "this item is selected" affordances the rest of the app already drives through
+ * `--accent-active`.
+ */
+
+body.layout-vulpes {
+    /* Background colors */
+    --bg-primary: #101114;
+    --bg-secondary: #16181c;
+    --bg-tertiary: #212429;
+    --bg-quaternary: #1a1d21;
+    --bg-surface: #13151a;
+    --bg-viewer: #0a0b0d;
+    --bg-overlay: rgba(7, 8, 10, 0.78);
+    --bg-highlight: #2c3037;
+    --bg-inline-editor: rgba(248, 249, 250, 0.96);
+
+    /* Text colors */
+    --text-primary: #eceef2;
+    --text-secondary: #c6cbd4;
+    --text-muted: #8d94a0;
+    --text-dim: #737a86;
+    --text-faint: #575d68;
+    --text-on-accent: #1a1206;
+    --text-on-button: #ffffff;
+    --text-inline-editor: #101114;
+
+    /* Border colors */
+    --border-default: #282c33;
+    --border-strong: #343941;
+    --border-hover: #434953;
+    --border-subtle: #1e2127;
+    --border-accent: #f79a4b;
+
+    /* Accent colors */
+    --accent-gold: #f7b05b;
+    --accent-active: #8ab4ff;
+    --accent-selection: #ffa94d;
+
+    /* Semantic colors */
+    --color-primary: #e8732f;
+    --color-success: #2da45e;
+    --color-danger: #e2473f;
+    --color-purple: #7c5cff;
+    --color-cyan: #3fbfd8;
+    --color-green: #45c46a;
+
+    /* Button colors */
+    --btn-primary-bg: #e8732f;
+    --btn-primary-border: #c85d1f;
+    --btn-secondary-bg: #3a4049;
+    --btn-secondary-border: #2c3139;
+    --btn-danger-bg: #e2473f;
+    --btn-danger-border: #bf342d;
+    --btn-success-bg: #2da45e;
+    --btn-success-border: #238049;
+    --btn-purple-bg: #7c5cff;
+    --btn-purple-border: #6243e0;
+
+    /* Slider */
+    --slider-bg: #3a4049;
+    --slider-checked-bg: #2da45e;
+    --slider-disabled-bg: #23262c;
+    --slider-knob: #ffffff;
+
+    /* Scrollbar */
+    --scrollbar-thumb: rgba(236, 238, 242, 0.18);
+    --scrollbar-thumb-hover: rgba(236, 238, 242, 0.36);
+
+    /* SVG overlay */
+    --svg-fill: rgba(255, 255, 255, 0.1);
+    --svg-fill-active: rgba(255, 169, 77, 0.32);
+
+    /* Text-clean live preview (blur + hatch over the region to be erased) */
+    --clean-plate: rgba(63, 191, 216, 0.18);
+    --clean-mark: rgba(63, 191, 216, 0.46);
+    --clean-blur: 3px;
+
+    /* Spinner */
+    --spinner-border: rgba(255, 255, 255, 0.1);
+
+    /* Box shadows -- two layers each: a tight contact shadow plus a soft spread,
+       which is what reads as depth rather than as a grey halo. */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 20px rgba(0, 0, 0, 0.5), 0 24px 60px rgba(0, 0, 0, 0.55);
+
+    /* Selection box */
+    --selection-bg: rgba(255, 169, 77, 0.16);
+
+    /* Workspace */
+    --panel-header-bg: #15171b;
+    --splitter: #1e2127;
+    --splitter-hover: #e8732f;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+
+    /* ---------------------------------------------------------------- Vulpes */
+
+    --vx-accent: #e8732f;
+    --vx-accent-hover: #f2884a;
+    /* A wash of the accent, for active chips and selected rows. */
+    --vx-accent-soft: rgba(232, 115, 47, 0.14);
+    --vx-accent-line: rgba(232, 115, 47, 0.42);
+    --vx-ring: rgba(232, 115, 47, 0.45);
+
+    /* Chrome heights. Read by the grid rows, the reader overlay and the rail,
+       so a change here moves all of them together. */
+    --vx-topbar-h: 48px;
+    --vx-status-h: 34px;
+    --vx-section-h: 30px;
+
+    /* Spacing scale. Four steps is enough for this much chrome; anything that
+       needs a fifth is usually asking for a different structure. */
+    --vx-space-1: 4px;
+    --vx-space-2: 8px;
+    --vx-space-3: 12px;
+    --vx-space-4: 18px;
+
+    /* Page gaps. Written by `viewSettings.ts`; the defaults here are what a
+       profile with no stored settings gets, and what the strip falls back to if
+       the Vulpes effect has not run yet. */
+    --vx-vertical-gap: 5px;
+    --vx-spread-gap: 8px;
+
+    /* The page behind a thumbnail and behind the stage: one step off the
+       surrounding surface so artwork with white margins still has an edge. */
+    --vx-page-bg: #040506;
+    --vx-thumb-bg: #0d0e11;
+
+    --vx-font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --vx-font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+}
+
+html.theme-light body.layout-vulpes {
+    /* Background colors */
+    --bg-primary: #f6f7f8;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #eff0f2;
+    --bg-quaternary: #e8e9ec;
+    --bg-surface: #fbfbfc;
+    --bg-viewer: #e6e7ea;
+    --bg-overlay: rgba(24, 26, 30, 0.42);
+    --bg-highlight: #fde8d6;
+    --bg-inline-editor: rgba(255, 255, 255, 0.97);
+
+    /* Text colors */
+    --text-primary: #15171a;
+    --text-secondary: #3a3f47;
+    --text-muted: #6b7280;
+    --text-dim: #868d98;
+    --text-faint: #aab0b9;
+    --text-on-accent: #1a1206;
+    /* White, not the base light theme's near-black: every surface this lands on
+       (primary/danger/success/purple) is a saturated fill. */
+    --text-on-button: #ffffff;
+    --text-inline-editor: #15171a;
+
+    /* Border colors */
+    --border-default: #e2e4e8;
+    --border-strong: #cfd3d9;
+    --border-hover: #b4bac3;
+    --border-subtle: #edeef1;
+    --border-accent: #d4621f;
+
+    /* Accent colors */
+    --accent-gold: #c8891f;
+    --accent-active: #2f6be0;
+    --accent-selection: #d4621f;
+
+    /* Semantic colors */
+    --color-primary: #d4621f;
+    --color-success: #1f8a4c;
+    --color-danger: #cf3a33;
+    --color-purple: #6243e0;
+    --color-cyan: #1d93aa;
+    --color-green: #2f9e52;
+
+    /* Button colors */
+    --btn-primary-bg: #d4621f;
+    --btn-primary-border: #b14f17;
+    --btn-secondary-bg: #5c636d;
+    --btn-secondary-border: #4a5159;
+    --btn-danger-bg: #cf3a33;
+    --btn-danger-border: #ad2a24;
+    --btn-success-bg: #1f8a4c;
+    --btn-success-border: #176e3c;
+    --btn-purple-bg: #6243e0;
+    --btn-purple-border: #4f34bd;
+
+    /* Slider */
+    --slider-bg: #cfd3d9;
+    --slider-checked-bg: #1f8a4c;
+    --slider-disabled-bg: #e8e9ec;
+    --slider-knob: #ffffff;
+
+    /* Scrollbar */
+    --scrollbar-thumb: rgba(21, 23, 26, 0.18);
+    --scrollbar-thumb-hover: rgba(21, 23, 26, 0.34);
+
+    /* SVG overlay */
+    --svg-fill: rgba(21, 23, 26, 0.08);
+    --svg-fill-active: rgba(212, 98, 31, 0.26);
+
+    /* Text-clean live preview */
+    --clean-plate: rgba(29, 147, 170, 0.22);
+    --clean-mark: rgba(23, 118, 136, 0.5);
+    --clean-blur: 3px;
+
+    /* Spinner */
+    --spinner-border: rgba(21, 23, 26, 0.12);
+
+    /* Box shadows */
+    --shadow-sm: 0 1px 2px rgba(16, 20, 28, 0.08), 0 2px 8px rgba(16, 20, 28, 0.06);
+    --shadow-md: 0 2px 6px rgba(16, 20, 28, 0.1), 0 8px 24px rgba(16, 20, 28, 0.1);
+    --shadow-lg: 0 8px 20px rgba(16, 20, 28, 0.14), 0 24px 60px rgba(16, 20, 28, 0.16);
+
+    /* Selection box */
+    --selection-bg: rgba(212, 98, 31, 0.14);
+
+    /* Workspace */
+    --panel-header-bg: #f2f3f5;
+    --splitter: #e2e4e8;
+    --splitter-hover: #d4621f;
+
+    /* ---------------------------------------------------------------- Vulpes */
+
+    --vx-accent: #d4621f;
+    --vx-accent-hover: #e0712d;
+    --vx-accent-soft: rgba(212, 98, 31, 0.1);
+    --vx-accent-line: rgba(212, 98, 31, 0.34);
+    --vx-ring: rgba(212, 98, 31, 0.4);
+
+    --vx-page-bg: #d7d9dd;
+    --vx-thumb-bg: #eceef1;
+}

@@ -46,10 +46,14 @@ function isHorizontalFit(): boolean {
  * as a different name, or as a fragment -- and `variant=saved` is only ever added
  * when there really is a separate saved copy of *this* page, so a stale switch
  * cannot ask for something that does not exist.
+ *
+ * `variant` defaults to whichever side the Original/Saved switch is on. The
+ * Vulpes comparison view is the one caller that names it: it shows both copies at
+ * once, so it cannot read the choice off a switch that only has one position.
  */
-export function pageUrl(file: string, buster: number | string): string {
+export function pageUrl(file: string, buster: number | string, variant: PageVariant = state.viewVariant): string {
     const url = `/img_serve/${encodeURIComponent(file)}?t=${buster}`;
-    const wantsSaved = state.viewVariant === "saved" && !state.sameDir && state.savedFiles.has(file);
+    const wantsSaved = variant === "saved" && !state.sameDir && state.savedFiles.has(file);
     return wantsSaved ? `${url}&variant=saved` : url;
 }
 
@@ -76,12 +80,12 @@ const pageBusters = new Map<string, number>();
  */
 let saveTick = 0;
 
-/** The cache-busting token for the copy of `file` that is currently on screen. */
-function busterFor(file: string): string {
+/** The cache-busting token for the copy of `file` named by `variant`. */
+function busterFor(file: string, variant: PageVariant = state.viewVariant): string {
     // A save writes the *destination* copy, so it only invalidates what a page
     // looks like while the switch is on the saved side -- unless the destination
     // is the source, where the page itself was rewritten and both sides are it.
-    const rewritten = state.sameDir || (state.viewVariant === "saved" && state.savedFiles.has(file));
+    const rewritten = state.sameDir || (variant === "saved" && state.savedFiles.has(file));
     const bump = rewritten ? pageBusters.get(file) : undefined;
     return bump === undefined ? String(folderBuster) : `${folderBuster}.${bump}`;
 }
@@ -89,6 +93,17 @@ function busterFor(file: string): string {
 /** {@link pageUrl} for the copy of `file` on screen, at its current version. */
 export function currentPageUrl(file: string): string {
     return pageUrl(file, busterFor(file));
+}
+
+/**
+ * {@link pageUrl} for a named copy of `file`, at that copy's current version.
+ *
+ * What the comparison view asks for: it shows the original and the saved copy
+ * side by side, so neither pane can go through `currentPageUrl` -- that one
+ * answers for whichever side the switch happens to be on.
+ */
+export function variantPageUrl(file: string, variant: PageVariant): string {
+    return pageUrl(file, busterFor(file, variant), variant);
 }
 
 /**
@@ -497,7 +512,9 @@ export function applyReaderTransform(
     mainImg.style.transformOrigin = "0 0";
     mainImg.style.top = "0px";
     mainImg.style.left = "0px";
-    mainImg.style.transform = `translate(${px}px, ${py}px) scale(${zoom})`;
+    // `translate3d` (not `translate`): the same placement, but it promotes the
+    // page to a compositor layer so pan/zoom is a GPU shift, not a repaint.
+    mainImg.style.transform = `translate3d(${px}px, ${py}px, 0) scale(${zoom})`;
     syncSvgOverlayDimensions();
 }
 
@@ -565,8 +582,10 @@ export function syncContainerOverflow(): void {
     // A pixel of slack: a fit divides one of these by the other, and the product
     // comes back a hair over often enough to flicker an axis in and out of
     // scrollability for a page that plainly fits.
-    container.style.overflow =
-        w > container.clientWidth + 1 || h > container.clientHeight + 1 ? "auto" : "hidden";
+    const next = w > container.clientWidth + 1 || h > container.clientHeight + 1 ? "auto" : "hidden";
+    // Written on every zoom frame: skip the write when nothing changed, so a
+    // steady zoom does not pay a style recalc per tick for the value it has.
+    if (container.style.overflow !== next) container.style.overflow = next;
 }
 
 /**
@@ -593,7 +612,9 @@ function applyWorkTransform(container: HTMLElement, mainImg: HTMLImageElement): 
     mainImg.style.transformOrigin = "0 0";
     mainImg.style.top = "0px";
     mainImg.style.left = "0px";
-    mainImg.style.transform = `translate(${Math.max(0, (cw - w) / 2)}px, ${Math.max(0, (ch - h) / 2)}px) scale(${zoom})`;
+    // `translate3d` (not `translate`): the same placement, but it promotes the
+    // page to a compositor layer so zoom/pan is a GPU shift, not a repaint.
+    mainImg.style.transform = `translate3d(${Math.max(0, (cw - w) / 2)}px, ${Math.max(0, (ch - h) / 2)}px, 0) scale(${zoom})`;
     syncContainerOverflow();
 
     syncSvgOverlayDimensions();
@@ -639,6 +660,8 @@ function zoomWorkAround(
     // exists; anything outside it the browser clamps for us.
     container.scrollLeft = Math.max(0, (cw - W * z1) / 2) + u * z1 - mx;
     container.scrollTop = Math.max(0, (ch - H * z1) / 2) + v * z1 - my;
+    // The wheel (and the footer buttons through `zoomViewerBy`) emit nothing.
+    updateStageZoomReadout();
 }
 
 /**
@@ -703,6 +726,9 @@ function zoomReaderAround(
     state.panX = px1 - (cw - W * z1) / 2;
     state.panY = py1 - (ch - H * z1) / 2;
     renderReader(container, mainImg);
+    // The footer is hidden in reader mode, but this keeps it fresh for the
+    // exit back to work mode.
+    updateStageZoomReadout();
 }
 
 export function renderGallery(files: string[], dimensions: [number, number][] = []): void {
@@ -718,7 +744,24 @@ export function renderGallery(files: string[], dimensions: [number, number][] = 
     state.stripEligible = detectStripEligible(dimensions);
     state.stripZoom = 1;
     state.stripScroll = {};
+    // Seeded from the dimensions the folder load already returned, rather than
+    // waiting for each image to decode. Two things read it: the strip's slot-height
+    // estimates, which were guessing from a median of an empty cache on the first
+    // build, and the double-page view's "a landscape page is already a spread"
+    // rule, which could not see a wide page at all until that page had been
+    // scrolled past in the strip. Cleared first: these are keyed by filename, and
+    // two folders can hold the same name for different artwork.
+    state.aspectCache = {};
+    dimensions.forEach(([width, height], index) => {
+        const file = files[index];
+        if (file && width > 0 && height > 0) state.aspectCache[file] = height / width;
+    });
 
+    // One insertion, not N: appending each thumbnail straight to the live gallery
+    // forces a style recalc per page, and a folder of hundreds of pages holds the
+    // main thread long enough for the loading spinner to stutter. A fragment
+    // builds the same nodes in the same order and lands them in a single layout.
+    const fragment = document.createDocumentFragment();
     files.forEach((file, index) => {
         const itemDiv = document.createElement("div");
         itemDiv.className = "gallery-item-container";
@@ -748,8 +791,9 @@ export function renderGallery(files: string[], dimensions: [number, number][] = 
         itemDiv.appendChild(img);
         itemDiv.appendChild(label);
         if (state.savedFiles.has(file)) ensureSavedBadge(itemDiv);
-        gallery.appendChild(itemDiv);
+        fragment.appendChild(itemDiv);
     });
+    gallery.appendChild(fragment);
 
     updateVariantSwitch();
 }
@@ -796,6 +840,9 @@ export function markPageSaved(file: string): void {
 
     refreshVariantImages();
     updateVariantSwitch();
+    // Announced after the bookkeeping, so a listener reading `savedFiles` or
+    // asking for a URL sees the save that has just happened.
+    emit("page:saved", file);
 }
 
 /**
@@ -1080,6 +1127,8 @@ export function applyImageFit(container: HTMLElement, mainImg: HTMLImageElement)
         state.panX = 0;
         state.panY = 0;
         renderReader(container, mainImg);
+        // Re-fits (splitter drags, panel toggles, the reader exit) emit nothing.
+        updateStageZoomReadout();
         return;
     }
 
@@ -1092,6 +1141,8 @@ export function applyImageFit(container: HTMLElement, mainImg: HTMLImageElement)
         : Math.min(containerWidth / naturalWidth, containerHeight / naturalHeight);
     state.zoomLevel = state.fitZoomLevel;
     applyWorkTransform(container, mainImg);
+    // Re-fits (splitter drags, panel toggles, the reader exit) emit nothing.
+    updateStageZoomReadout();
 }
 
 export function navigateGallery(direction: number): void {
@@ -1336,10 +1387,17 @@ export function initZoom(): void {
         gallery.addEventListener(
             "wheel",
             (e) => {
-                if (e.deltaY !== 0) {
-                    e.preventDefault();
-                    gallery.scrollLeft += e.deltaY;
-                }
+                if (e.deltaY === 0) return;
+                // Translating the wheel onto `scrollLeft` is for a *horizontal*
+                // bar, which has no vertical axis of its own to use it. The
+                // Vulpes layout stands the same element up as a vertical rail,
+                // where doing this would preventDefault the one gesture that
+                // scrolls it and leave the rail stuck on its first few pages.
+                const scrollsVertically = gallery.scrollHeight > gallery.clientHeight + 1;
+                const scrollsHorizontally = gallery.scrollWidth > gallery.clientWidth + 1;
+                if (scrollsVertically || !scrollsHorizontally) return;
+                e.preventDefault();
+                gallery.scrollLeft += e.deltaY;
             },
             { passive: false },
         );
@@ -1374,6 +1432,27 @@ export function refitViewer(): void {
     const container = document.getElementById("imageContainer");
     if (!mainImg || !container || mainImg.style.display === "none") return;
     applyImageFit(container, mainImg);
+}
+
+/**
+ * Rewrites the Vulpes footer zoom readout (e.g. "42%") from the live zoom.
+ *
+ * The footer re-renders on page/image/entry events, but most zoom changes --
+ * the wheel, a splitter drag refitting the stage, the reader exit refit --
+ * emit nothing, so without this the readout freezes at whatever it last
+ * rendered. A direct write (like `updateReaderPageIndicator`) rather than an
+ * event: it costs no re-render, and the text derives from the same state the
+ * JSX paints, so the two can never disagree. Absent in Basic, where it is a
+ * no-op by construction.
+ */
+export function updateStageZoomReadout(): void {
+    const el = document.querySelector(".vx-statusbar__zoom");
+    if (!el) return;
+    const percent = Math.round((state.zoomLevel || 0) * 100);
+    const next = percent > 0 ? `${percent}%` : "—";
+    // Trackpads send dozens of ticks per gesture while the rounded percent
+    // barely moves: skip the write when the text is already right.
+    if (el.textContent !== next) el.textContent = next;
 }
 
 /** Updates the reader page indicator (e.g. "3 / 24") from the gallery items. */

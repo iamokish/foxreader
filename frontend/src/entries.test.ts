@@ -190,6 +190,36 @@ describe("reading order", () => {
     });
 });
 
+describe("entry preview face", () => {
+    function previewOf(ocrText: string, text: string): HTMLElement {
+        state.pageEntriesCache = {};
+        state.currentImageFile = "p.png";
+        state.currentTrackingColorIdx = 0;
+        document.body.innerHTML = '<div id="savedEntriesList"></div>';
+        addNewEntries([rectRegion(10, 10)]);
+        const entry = saved()[0];
+        entry.ocr_text = ocrText;
+        entry.text = text;
+        entry.fontname = "'TestFace', sans-serif";
+        renderCurrentPageEntries();
+        return document.querySelector<HTMLElement>(".entry-text-preview")!;
+    }
+
+    // The face dresses the entry's own text; the OCR fallback below it always
+    // renders in the default face.
+    it.each([
+        ["", "", "", ""],
+        ["og", "", "og", ""],
+        ["og", "hi", "hi", "'TestFace'"],
+        ["", "hi", "hi", "'TestFace'"],
+    ])("og %p + text %p shows %p dressed in %p", (og, text, shown, face) => {
+        const preview = previewOf(og, text);
+        expect(preview.textContent).toBe(shown);
+        if (face === "") expect(preview.style.fontFamily).toBe("");
+        else expect(preview.style.fontFamily).toContain("TestFace");
+    });
+});
+
 describe("Auto OCR on entry click", () => {
     const ocrCrop = vi.mocked(api.ocrCrop);
 

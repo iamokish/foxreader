@@ -1,0 +1,36 @@
+/* ============================================================
+   Basic layout — reader mode
+
+   The reader overlay is shared (`src/reader/reader.css`) and covers the window
+   with an opaque surface, which is all the pager views need. The continuous view
+   is the exception: that one draws nothing of its own, because the strip is built
+   *into* `#imageContainer` and has to show through. So the layout underneath has
+   to get its own chrome out of the way, exactly as Vulpes does for itself.
+
+   Kept here rather than in `reader.css` because this is the one thing in reader
+   mode that is the layout's business: which parts of *this* shell step aside.
+   ============================================================ */
+
+body.layout-basic.workspace-reader .content-area,
+body.layout-basic.workspace-reader #gallery {
+    display: none;
+}
+
+/* The viewer takes the window. `.viewer-section` is the viewer's column, and the
+   legacy stylesheet pins it to a share of `.main-layout`; in reader mode there is
+   nothing beside it to share with. */
+body.layout-basic.workspace-reader .viewer-section {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    border: none;
+}
+
+body.layout-basic.workspace-reader #imageContainer {
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+}

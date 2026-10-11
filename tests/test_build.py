@@ -12,10 +12,10 @@ was learned from something that shipped broken:
 
 * every spelling in ``METADATA_LOOKUPS`` resolves to a distribution in
   ``DISTRIBUTION_METADATA``. Nuitka keys embedded metadata by the name each
-  distribution declares and looks it up with an exact dict hit, so
-  ``version("huggingface-hub")`` -- what ``import transformers`` calls before
-  anything else happens -- misses a record filed as ``huggingface_hub`` and
-  raises. The build proves the same thing dynamically against its own venv; this
+  distribution declares and looks it up with an exact dict hit, so a lookup for
+  ``hf_xet`` -- the module spelling huggingface_hub uses to decide whether Xet
+  is available -- misses a record filed as ``hf-xet`` and raises. The build
+  proves the same thing dynamically against its own venv; this
   says so in a second, before the fifteen minutes.
 * ``TOTAL_STEPS`` still matches the ``step()`` calls, or the progress counter
   lies.

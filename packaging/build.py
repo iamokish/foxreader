@@ -122,15 +122,16 @@ class BuildError(RuntimeError):
 
 #: Data files that live inside the package and are read at runtime -- config
 #: yaml, vocabularies, compiled kernels. PyInstaller's `--collect-data`.
+#:
+#: The OCR model code used to arrive through `paddleocr` -> `paddlex` ->
+#: `transformers`; it is now vendored in `fox_reader.hf`, which travels with
+#: `--include-package=fox_reader` and carries no data files of its own (the
+#: configs and vocabularies live beside the weights in `models/`, which the
+#: user downloads).
 PACKAGE_DATA = (
     "torch",
     "torchvision",
-    "paddlex",
-    "paddleocr",
-    "pypdfium2",
     "cv2",
-    "transformers",
-    "sentencepiece",
     "huggingface_hub",
 )
 
@@ -159,14 +160,6 @@ OPTIONAL_PACKAGES = ("llama_cpp",)
 DISTRIBUTION_METADATA = (
     "torch",
     "torchvision",
-    "paddlex",
-    "paddleocr",
-    "pypdfium2",
-    "transformers",
-    # transformers checks this version at `import transformers`, but only when
-    # the package is importable -- which it always is here, since OCR loads
-    # through `device_map`. Without it the backend dies on its first import.
-    "accelerate",
     "huggingface_hub",
     # Xet is huggingface_hub's chunked transfer backend, and `is_xet_available()`
     # decides whether to use it by reading this metadata -- not by importing the
@@ -175,8 +168,6 @@ DISTRIBUTION_METADATA = (
     # installed" and falls back to plain HTTP.
     "hf-xet",
     "safetensors",
-    "tokenizers",
-    "sentencepiece",
     "numpy",
     # opencv-contrib-python, not opencv-python: the two install the same `cv2`
     # module and only one of them is a dependency here. Naming both would make
@@ -184,8 +175,6 @@ DISTRIBUTION_METADATA = (
     "opencv-contrib-python",
     "pillow",
     "pyyaml",
-    "regex",
-    "requests",
     "tqdm",
     "packaging",
     "filelock",
@@ -226,20 +215,11 @@ OPTIONAL_DISTRIBUTION_METADATA = ("llama-cpp-python",)
 #: `bundle_metadata`. Listed here so the build can prove the lookups still
 #: resolve rather than leaving it to be discovered at a user's first OCR run.
 #:
-#: transformers' own list is read from the build venv on top of this one, so a
-#: version of it that checks something new fails the build instead of the app.
+#: This list used to be topped up at build time by asking transformers which
+#: versions it checks at import. With transformers gone -- the OCR model code is
+#: vendored in `fox_reader.hf` -- nothing in the tree has a dynamic list of
+#: these left, so the static set below is the whole of it.
 METADATA_LOOKUPS = (
-    # transformers, at `import transformers`. The first two are in
-    # DISTRIBUTION_METADATA under the names their metadata declares -- and those
-    # names are `huggingface_hub` and `PyYAML`, neither of which is what is asked
-    # for here. `accelerate` needs no normalisation, but it is transformers'
-    # fatal lookup for the `device_map` path, so it is pinned here too:
-    # removing it from DISTRIBUTION_METADATA must fail in a second, not fifteen
-    # minutes into a build.
-    "huggingface-hub",
-    "pyyaml",
-    "accelerate",
-    "accelerate",
     # huggingface_hub, deciding whether Xet is available. Its distribution calls
     # itself `hf-xet`; the lookup uses the module spelling.
     "hf_xet",
@@ -249,8 +229,10 @@ METADATA_LOOKUPS = (
 )
 
 #: Imported by name at runtime, so nothing static can see them. uvicorn's `auto`
-#: modules pick an implementation with an import inside a function; scipy.signal
-#: is reached through one of paddle's lazy loaders.
+#: modules pick an implementation with an import inside a function.
+#:
+#: `scipy.signal` was here for one of paddle's lazy loaders. Both are gone:
+#: scipy was a paddlex dependency and is no longer in the tree at all.
 HIDDEN_MODULES = (
     "fox_reader.app",
     "uvicorn.loops",
@@ -262,24 +244,6 @@ HIDDEN_MODULES = (
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     "uvicorn.lifespan.off",
-    "scipy.signal",
-)
-
-#: The OCR model code. transformers resolves these from the model's config at
-#: load time -- the string is in a downloaded json file, so there is no import
-#: anywhere for Nuitka to follow.
-OCR_PACKAGES = tuple(
-    f"transformers.models.{name}"
-    for name in (
-        "pp_ocrv5_server_det",
-        "pp_ocrv5_server_rec",
-        "pp_ocrv5_mobile_det",
-        "pp_ocrv5_mobile_rec",
-        "pp_ocrv6_small_det",
-        "pp_ocrv6_small_rec",
-        "pp_ocrv6_medium_det",
-        "pp_ocrv6_tiny_rec",
-    )
 )
 
 #: Never worth compiling or including as bytecode: build tooling that is in the
@@ -830,7 +794,7 @@ def _probe(python: Path, modules: tuple[str, ...] = (), dists: tuple[str, ...] =
 
     A flag naming a module that is not installed is a hard error in Nuitka, so
     every name this script would pass is checked first. That is what makes the
-    same flag lists survive a torch or transformers upgrade instead of turning
+    same flag lists survive a torch or torchvision upgrade instead of turning
     into a build that fails on a submodule that was renamed upstream.
     """
     payload = json.dumps({"modules": list(modules), "dists": list(dists), "sites": sites})
@@ -1595,7 +1559,7 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
 
     probe = _probe(
         python,
-        modules=HIDDEN_MODULES + OCR_PACKAGES + PACKAGE_DATA + OPTIONAL_PACKAGES,
+        modules=HIDDEN_MODULES + PACKAGE_DATA + OPTIONAL_PACKAGES,
         dists=DISTRIBUTION_METADATA + OPTIONAL_DISTRIBUTION_METADATA,
         sites=True,
     )
@@ -1613,7 +1577,7 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
     #: neither of which anything imports.
     present_dist_modules: list[str] = probe.get("dist_modules") or []
 
-    _report_missing("modules", HIDDEN_MODULES + OCR_PACKAGES + PACKAGE_DATA, present_modules)
+    _report_missing("modules", HIDDEN_MODULES + PACKAGE_DATA, present_modules)
     _report_missing("distributions", DISTRIBUTION_METADATA, present_dists)
 
     # The optional ones get a line either way rather than a "not installed" note:
@@ -1670,8 +1634,12 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
 
     nuitka.add_each(cmd, "--include-module", [m for m in HIDDEN_MODULES if m in present_modules],
                     note="hidden imports")
-    nuitka.add_each(cmd, "--include-package", [m for m in OCR_PACKAGES if m in present_modules],
-                    note="OCR model packages")
+    # No OCR flags: the PP-OCR model code is `fox_reader.hf`, which the
+    # `--include-package=fox_reader` above already covers. It used to need one
+    # `--include-package=transformers.models.*` per model, because transformers
+    # resolved the class from a string in a downloaded json file and there was
+    # no import for Nuitka to follow. `fox_reader.hf.models.auto` resolves it
+    # from a static table instead.
     nuitka.add_each(cmd, "--include-package-data", [m for m in PACKAGE_DATA if m in present_modules],
                     note="package data files")
     _exclude_shared_libs_from_data(nuitka, cmd)
@@ -2226,20 +2194,18 @@ def bundle_runtime_dlls(dist: Path) -> None:
     print()
 
 
-#: Asks the build venv which distributions its packages will look up by name at
-#: runtime, and under which spelling. Only transformers is asked, because it is
-#: the only one whose lookups are fatal: they run at `import transformers`, and a
-#: miss raises there rather than degrading into a wrong answer somewhere later.
+#: Filters `METADATA_LOOKUPS` down to what the build venv actually has.
 #:
-#: Everything is filtered to what the venv actually has. transformers checks its
-#: optional dependencies only when they are importable -- `accelerate` is in its
-#: list, is not installed here, and is skipped at runtime for exactly that reason
-#: -- so demanding metadata for it would fail a build that is entirely correct.
+#: This used to also *add* to that list, by importing transformers and reading
+#: its `pkgs_to_check_at_runtime` -- the versions it verifies at
+#: `import transformers`, which were the only lookups in the tree that were
+#: outright fatal. transformers is gone (the PP-OCR model code is vendored in
+#: `fox_reader.hf`), and nothing left in the tree publishes a list of the
+#: distributions it will ask about, so the static set is now the whole of it.
 #:
-#: Tolerant on purpose. transformers' list is a private name inside somebody
-#: else's package, so it is allowed to move; when it does, the build reports what
-#: it could not read and falls back to METADATA_LOOKUPS rather than failing on the
-#: introspection itself.
+#: The filtering still matters: a name that is not installed is not shipped, and
+#: nothing will look it up either, so demanding metadata for it would fail a
+#: build that is entirely correct.
 _LOOKUP_PROBE = r"""
 import json, sys
 import importlib.metadata as im
@@ -2263,20 +2229,6 @@ def add(name):
 for name in request["static"]:
     add(name)
 
-try:
-    from transformers.dependency_versions_check import pkgs_to_check_at_runtime
-    from transformers.dependency_versions_table import deps
-except Exception as exc:
-    notes.append("could not read transformers' version checks (%s: %s)"
-                 % (type(exc).__name__, exc))
-else:
-    for pkg in pkgs_to_check_at_runtime:
-        # `python` is compared against sys.version_info, not looked up. Anything
-        # absent from `deps` is not checked at all.
-        if pkg == "python" or pkg not in deps:
-            continue
-        add(pkg)
-
 json.dump({"names": names, "notes": notes}, sys.stdout)
 """
 
@@ -2297,12 +2249,12 @@ def _required_lookups(python: Path) -> list[str]:
                               input=json.dumps({"static": fallback}).encode("utf-8"),
                               capture_output=True, env=_build_env(), timeout=900)
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"      note: could not ask transformers what it checks ({exc})")
+        print(f"      note: could not filter the metadata lookups ({exc})")
         return fallback
 
     if proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-        print("      note: could not ask transformers what it checks "
+        print("      note: could not filter the metadata lookups "
               f"({detail[-1] if detail else 'no output'})")
         return fallback
 
@@ -2329,11 +2281,11 @@ def bundle_metadata(dist: Path, python: Path) -> None:
 
         importlib.metadata.version("huggingface-hub")
 
-    -- the call `import transformers` makes, with the dash, before anything else
-    happens -- misses the dict, falls through to the real `importlib.metadata`,
+    -- the spelling huggingface_hub's own user agent uses, with the dash --
+    misses the dict, falls through to the real `importlib.metadata`,
     finds no `.dist-info` anywhere in the tree, and raises PackageNotFoundError.
-    The traceback surfaces eleven frames deep in paddlex building a text detector,
-    a long way from the flag that was supposed to prevent it. `pyyaml` (installed
+    The traceback surfaces deep inside a model download, a long way from the flag
+    that was supposed to prevent it. `pyyaml` (installed
     as `PyYAML`) and `hf_xet` (installed as `hf-xet`) are the same bug; the first
     is a second startup failure standing behind the first, the second is why model
     downloads announce that Xet is unavailable and fall back to HTTP.

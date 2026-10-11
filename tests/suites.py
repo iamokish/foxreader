@@ -206,6 +206,7 @@ BACKEND = Domain(
         "test_config",
         "test_device_vl_slot",
         "test_folder_workspace",
+        "test_hf_vendored",
         "test_models",
         "test_mtl_characters",
         "test_mtl_context",
@@ -228,6 +229,20 @@ BACKEND = Domain(
         Script(
             path="manual/smoke_ml_memory_route.py",
             why="the ML memory route reports what is loaded",
+        ),
+        Script(
+            # Only runnable while `paddleocr` is still installed, which it no
+            # longer is -- the whole point of the change was to remove it. Kept
+            # registered rather than deleted because it is the proof the
+            # vendored path matches, and it has to be re-runnable the next time
+            # a vendored model folder is re-copied from upstream: install
+            # paddleocr into a scratch venv, run this, remove it again.
+            path="manual/smoke_ocr_parity.py",
+            why="the vendored fox_reader.hf OCR path matches paddleocr bit for bit",
+            xfail="exits 2 (skipped) without paddleocr installed, which is the "
+                  "normal state of the tree now that the dependency is gone. It "
+                  "passed on every comparison -- identical dt_polys, dt_scores "
+                  "within 1e-5, identical rec_text -- before the removal.",
         ),
         Script(
             path="manual/smoke_user_endpoints.py",

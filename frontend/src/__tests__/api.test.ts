@@ -120,7 +120,7 @@ describe("API Client", () => {
                 json: async () => mockResponse,
             } as Response);
 
-            const data = { filename: "page1.jpg", isGrayScale: false };
+            const data = { filename: "page1.jpg", isGrayScale: false, padding: 5 };
             const result = await bubbleDetect(data);
             expect(result).toEqual(mockResponse);
             expect(fetch).toHaveBeenCalledWith("/api/bubble", {

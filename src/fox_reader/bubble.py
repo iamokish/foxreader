@@ -61,6 +61,45 @@ _PAD_VALUE = 114
 #: Binarisation cut matching the reader's long-standing grayscale path.
 _GRAY_THRESHOLD = 160
 
+#: Default outline padding, in pixels: how far the detected region is inset
+#: from the raw mask edge (a distance-transform threshold, so larger eats
+#: further in). The reader offers 0-10 in Options; this is what "5" has always
+#: meant, kept as the default so older clients see no change.
+_DEFAULT_PADDING = 5
+#: Hard limits for the option above. Enforced by clamping, never by refusing:
+#: a stray value still yields a detection, just at the nearest valid padding.
+_MIN_PADDING = 0
+_MAX_PADDING = 10
+
+
+def normalize_padding(value: object) -> int:
+    """Coerce anything at all into a usable bubble padding in px.
+
+    Out-of-range values clamp to the ends and unparseable ones fall back to
+    the default, because a bad number must never fail a detection -- the worst
+    it may do is detect with a neighbouring padding.
+    """
+    number: int | None
+    if isinstance(value, bool):
+        number = None
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        try:
+            number = int(value)
+        except (OverflowError, ValueError):
+            number = None
+    elif isinstance(value, str):
+        try:
+            number = int(value, 10)
+        except ValueError:
+            number = None
+    else:
+        number = None
+    if number is None:
+        return _DEFAULT_PADDING
+    return max(_MIN_PADDING, min(_MAX_PADDING, number))
+
 
 class BubbleUnavailable(RuntimeError):
     """The bubble model cannot run here, in words for the UI."""
@@ -884,8 +923,10 @@ class BubbleModel(nn.Module):
         grayscale: bool = False,
         conf: float = _CONF,
         iou: float = _IOU,
-    ):
+        padding: int = _DEFAULT_PADDING,
+    ) -> list[dict]:
         """Polygons in original-image pixels, one dict per bubble."""
+        padding = normalize_padding(padding)
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
         if grayscale:
@@ -902,7 +943,7 @@ class BubbleModel(nn.Module):
             pts = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
             cv2.fillPoly(canvas, [pts], 255)
             dist = cv2.distanceTransform(canvas, cv2.DIST_L2, 5)
-            _, padded = cv2.threshold(dist, 5, 255, cv2.THRESH_BINARY)
+            _, padded = cv2.threshold(dist, padding, 255, cv2.THRESH_BINARY)
             padded = padded.astype(np.uint8)
             contours, _ = cv2.findContours(padded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_L1)
             for contour in contours:

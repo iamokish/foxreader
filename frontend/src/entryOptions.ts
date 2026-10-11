@@ -30,6 +30,7 @@ import {
 import type { Entry } from "./state";
 import type { BgMode, CleanKnob, CleanMethod, CleanMethodsResponse, CleanOptions, TextAlignment } from "./types";
 import * as api from "./api";
+import { checkAndStartMarquee, stopMarquee } from "./fonts";
 import { characterPickerLabel, getCharacters } from "./characters";
 import { imageBounds } from "./entries/shapes";
 import { showNotify } from "./ui";
@@ -465,7 +466,9 @@ document.addEventListener(
     (event) => {
         if (!openPopover) return;
         const target = event.target as HTMLElement;
-        if (openPopover.contains(target) || target.closest(".eo-color-btn")) return;
+        // Trigger clicks are the trigger's own business: it toggles by uid, so
+        // closing here first would turn "close" into "reopen".
+        if (openPopover.contains(target) || target.closest(".eo-color-btn, .eo-font-trigger")) return;
         closePopover();
     },
     true,
@@ -983,28 +986,184 @@ function buildSpeakerSelect(entry: Entry, ctx: OptionsContext): HTMLSelectElemen
     return select;
 }
 
+/**
+ * The entry's font family picker.
+ *
+ * A native `<select>` cannot do this job: Chrome and Edge render its popup
+ * options in the UI font, ignoring per-option `font-family`, so every face
+ * read the same and a long name was cut with no way to see its tail. This is
+ * a small custom dropdown instead -- a trigger showing the current face in its
+ * own font, and a body-anchored menu (the card clips absolutely positioned
+ * children, like the colour popover does) whose rows reuse the app-wide
+ * `.font-option-item` faces and hover marquee from `fonts.ts`.
+ *
+ * The menu is built lazily on open, not per panel: a page of entries times a
+ * library of faces would otherwise multiply the DOM for menus nobody opens.
+ * One menu is open at most, through the shared `openPopover`.
+ */
 function buildFontRow(entry: Entry, ctx: OptionsContext): HTMLElement {
     const fonts = state.currentFontsData;
     if (!fonts.length) return el("span", "eo-hint", "no fonts loaded");
-    const select = buildSelect(
-        fonts.map((font) => ({ value: font.font_filename, label: font.font_name })),
-        entry.fontfile,
-        (value) => {
-            const font = fonts.find((f) => f.font_filename === value);
-            if (!font) return;
-            entry.fontfile = font.font_filename;
-            entry.fontname = `'${font.font_name.replace(/\s+/g, "_")}', sans-serif`;
-            select.style.fontFamily = entry.fontname;
-            ctx.refresh();
-        },
-    );
-    for (const option of Array.from(select.options)) {
-        const font = fonts.find((f) => f.font_filename === option.value);
-        if (font) option.style.fontFamily = `'${font.font_name.replace(/\s+/g, "_")}', sans-serif`;
-    }
-    select.style.fontFamily = entry.fontname || "inherit";
-    select.classList.add("eo-font");
-    return select;
+
+    const faceOf = (filename: string): string => {
+        const font = fonts.find((f) => f.font_filename === filename);
+        return font ? `'${font.font_name.replace(/\s+/g, "_")}', sans-serif` : "inherit";
+    };
+    const nameOf = (filename: string): string => {
+        const font = fonts.find((f) => f.font_filename === filename);
+        return font ? font.font_name : filename;
+    };
+
+    const trigger = el("button", "eo-select eo-font eo-font-trigger") as HTMLButtonElement;
+    trigger.type = "button";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    const face = el("span", "eo-font-trigger__text");
+    // The glyph keeps its own face from `.material-icons`, so the entry's font
+    // on the trigger cannot turn it into a tofu box.
+    const chev = icon("arrow_drop_down", 14);
+    chev.classList.add("eo-font-trigger__chev");
+    trigger.append(face, chev);
+    const paintTrigger = () => {
+        const label = nameOf(entry.fontfile) || "Select font";
+        face.textContent = label;
+        trigger.style.fontFamily = entry.fontname || "inherit";
+        trigger.title = label === "Select font" ? "Font family" : `Font family: ${label}`;
+    };
+    paintTrigger();
+
+    const pick = (filename: string) => {
+        const font = fonts.find((f) => f.font_filename === filename);
+        if (!font) return;
+        entry.fontfile = font.font_filename;
+        entry.fontname = `'${font.font_name.replace(/\s+/g, "_")}', sans-serif`;
+        paintTrigger();
+        closePopover();
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.focus({ preventScroll: true });
+        ctx.refresh();
+    };
+
+    const open = () => {
+        closePopover();
+        const uid = Math.random().toString(36).slice(2);
+        trigger.dataset.uid = uid;
+        const pop = el("div", "eo-font-pop");
+        pop.dataset.owner = uid;
+        pop.setAttribute("role", "listbox");
+        pop.setAttribute("aria-label", "Font family");
+
+        // Arrow-key highlight. Hover sets it too, so the keyboard and the
+        // pointer never disagree about which row Enter will take.
+        let hot: HTMLElement | null = null;
+        const rows: HTMLElement[] = [];
+        const setHot = (row: HTMLElement | null, scroll = true) => {
+            if (hot) {
+                hot.classList.remove("is-hot");
+                hot.setAttribute("aria-selected", "false");
+            }
+            hot = row;
+            if (hot) {
+                hot.classList.add("is-hot");
+                hot.setAttribute("aria-selected", "true");
+                // Guarded: some hosts (and jsdom) have no `scrollIntoView`, and
+                // losing the highlight over that would be the worse failure.
+                if (scroll && typeof hot.scrollIntoView === "function") {
+                    hot.scrollIntoView({ behavior: "auto", block: "nearest" });
+                }
+            }
+        };
+
+        for (const font of fonts) {
+            const row = el("div", "font-option-item");
+            row.setAttribute("role", "option");
+            row.dataset.filename = font.font_filename;
+            row.title = font.font_name;
+            row.style.fontFamily = `'${font.font_name.replace(/\s+/g, "_")}', sans-serif`;
+            row.setAttribute("aria-selected", String(font.font_filename === entry.fontfile));
+            if (font.font_filename === entry.fontfile) row.classList.add("selected");
+            row.appendChild(el("span", "font-option-item__text", font.font_name));
+            row.addEventListener("mouseenter", () => {
+                checkAndStartMarquee(row);
+                setHot(row, false);
+            });
+            row.addEventListener("mouseleave", () => stopMarquee(row));
+            row.addEventListener("click", (event) => {
+                event.stopPropagation();
+                pick(font.font_filename);
+            });
+            pop.appendChild(row);
+            rows.push(row);
+        }
+
+        pop.addEventListener("keydown", (event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+            event.preventDefault();
+            if (event.key === "Enter") {
+                const target = hot ?? rows.find((r) => r.classList.contains("selected")) ?? null;
+                if (target?.dataset.filename) pick(target.dataset.filename);
+                return;
+            }
+            if (rows.length === 0) return;
+            const idx = hot ? rows.indexOf(hot) : -1;
+            const next =
+                event.key === "ArrowDown"
+                    ? rows[(idx + 1) % rows.length]
+                    : rows[(idx - 1 + rows.length) % rows.length];
+            setHot(next ?? null);
+        });
+
+        // Body-anchored, because the entry list scrolls and clips: a menu
+        // inside the card would be cut off by the list's own overflow.
+        document.body.appendChild(pop);
+        openPopover = pop;
+        trigger.setAttribute("aria-expanded", "true");
+
+        // The menu is the trigger's continuation: exactly its width, flush
+        // against it with no gap, overlapping by a pixel so the two borders
+        // read as one seam. (Long names still fit -- they scroll in place.)
+        const rect = trigger.getBoundingClientRect();
+        if (rect.width > 0) pop.style.width = `${rect.width}px`;
+        const popRect = pop.getBoundingClientRect();
+        let top = rect.bottom - 1;
+        let above = false;
+        if (top + popRect.height > window.innerHeight) {
+            top = Math.max(4, rect.top - popRect.height + 1);
+            above = true;
+        }
+        pop.classList.add(above ? "eo-font-pop--above" : "eo-font-pop--below");
+        const left = rect.left;
+        pop.style.top = `${top}px`;
+        pop.style.left = `${left}px`;
+
+        // Selected into view without moving the page behind: `scrollIntoView`
+        // on a fixed popover can drag the window along with it.
+        const selected = pop.querySelector<HTMLElement>(".font-option-item.selected");
+        setHot(selected, false);
+        if (selected) {
+            pop.scrollTop = Math.max(
+                0,
+                selected.offsetTop - pop.clientHeight / 2 + selected.clientHeight / 2,
+            );
+        }
+        // Focus for the arrow keys, without scrolling the page behind.
+        pop.tabIndex = -1;
+        pop.focus({ preventScroll: true });
+    };
+
+    trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        // Same explicit toggle as the colour control: without the uid check the
+        // first click would "close" a menu that was never built.
+        if (openPopover && trigger.dataset.uid && openPopover.dataset.owner === trigger.dataset.uid) {
+            closePopover();
+            trigger.setAttribute("aria-expanded", "false");
+            return;
+        }
+        open();
+    });
+
+    return trigger;
 }
 
 /**

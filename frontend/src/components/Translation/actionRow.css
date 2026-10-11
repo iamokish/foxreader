@@ -1,0 +1,71 @@
+/*
+ * The entry action row's shape.
+ *
+ * Layout-independent: it is the same markup in every layout, so the geometry lives
+ * here and only the *arrangement* is each layout's business. The verbs are
+ * icon-only everywhere: each button carries its glyph visibly and keeps its word
+ * in a hidden span, with the tooltip (`title`) naming the verb on hover -- that
+ * is what names it once the label is hidden, in every layout alike. (Vulpes
+ * restates the same values from its own stylesheet for its footer; the two
+ * agree, so neither layout moves.)
+ *
+ * `#confirmActionRow` is the id the app finds the row by; the class is for styling,
+ * so this file never needs to repeat the id in a selector.
+ */
+
+.confirm-action-row {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    /* 5px, matching the row as it was inline before it moved in here. */
+    gap: 5px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* `FontSelector` ships a 220px max-width for the legacy panel; in a row it should
+   take what is going rather than a fixed share. */
+.confirm-action-row .custom-font-dropdown {
+    flex: 0 1 200px;
+    min-width: 0;
+}
+
+/*
+ * Geometry matches the inline styles this row used to carry (32px tall, 13px text),
+ * so the layouts that keep it where it was do not shift. A layout that needs it
+ * smaller -- Vulpes, in its footer -- overrides from its own stylesheet; that is
+ * what the class is for.
+ */
+.confirm-action-row__btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 32px;
+    padding: 0 12px;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.confirm-action-row__btn .btn-icon {
+    display: inline-flex;
+    font-size: 15px;
+    margin: 0;
+}
+
+.confirm-action-row__btn .btn-label {
+    display: none;
+}
+
+/* A disabled button is what `applySavedViewLocks` turns these into while the
+   typeset copy is on screen; the attribute is set as well, this only reads it. */
+.confirm-action-row__btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}

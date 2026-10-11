@@ -1,0 +1,705 @@
+/* ============================================================
+   Reader — shared across layouts
+
+   The reader is a layout-agnostic overlay: Basic and Vulpes both
+   mount it, so these rules are unscoped. Every value resolves
+   through a theme token, which is what makes it "match the colour
+   coding" of whichever layout it is in:
+
+     Basic   base tokens from themes/dark.css / light.css
+     Vulpes  the same token names, restated by themes/vulpes.css
+
+   The `--vx-*` block below is the one wrinkle. Those tokens were
+   introduced by Vulpes and are declared under `body.layout-vulpes`;
+   outside that layout they would be undefined and every rule using
+   one would fall back to nothing. So each is given a base value
+   here, derived from the palette the layout already has. `:root` is
+   both a lower specificity and an ancestor of `body`, so Vulpes'
+   own values still win.
+   ============================================================ */
+
+:root {
+    /* Gold is the base themes' own accent (see `.reading-dir-btn.is-active`),
+       so the reader in the Basic layout picks up Basic's colouring. */
+    --vx-accent: var(--accent-gold);
+    --vx-accent-hover: var(--accent-selection);
+    --vx-accent-soft: var(--selection-bg);
+    --vx-accent-line: var(--border-strong);
+    --vx-ring: var(--selection-bg);
+    /* Text on a filled accent. Dark on gold and dark on ember both read; a
+       hardcoded white would fail on gold. */
+    --vx-on-accent: var(--text-on-accent);
+
+    --vx-space-1: 4px;
+    --vx-space-2: 8px;
+    --vx-space-3: 12px;
+    --vx-space-4: 18px;
+
+    --vx-page-bg: var(--bg-viewer);
+
+    /* How long a still pointer waits before the reader hides itself. */
+    --vx-idle-fade: 0.35s;
+}
+
+body.layout-vulpes {
+    /* Vulpes' accent is already its own; only the on-accent pairing differs. */
+    --vx-on-accent: #ffffff;
+}
+
+/* ------------------------------------------------------- shared controls --- */
+
+.vx-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    box-sizing: border-box;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition:
+        background 0.14s ease,
+        color 0.14s ease,
+        border-color 0.14s ease;
+}
+
+.vx-icon-btn--wide {
+    width: auto;
+    padding: 0 11px;
+}
+
+.vx-icon-btn--sm {
+    width: 24px;
+    height: 24px;
+}
+
+.vx-icon-btn .material-icons {
+    font-size: 18px;
+    margin: 0;
+}
+
+.vx-icon-btn--sm .material-icons {
+    font-size: 15px;
+}
+
+.vx-icon-btn__label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.vx-icon-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.vx-icon-btn.is-active {
+    background: var(--vx-accent-soft);
+    border-color: var(--vx-accent-line);
+    color: var(--vx-accent);
+}
+
+.vx-icon-btn--danger:hover:not(:disabled) {
+    background: var(--color-danger);
+    color: #fff;
+}
+
+.vx-icon-btn:disabled {
+    opacity: 0.38;
+    cursor: default;
+}
+
+.vx-icon-btn:focus-visible,
+.vx-seg__btn:focus-visible,
+.vx-chip:focus-visible {
+    outline: 2px solid var(--vx-accent);
+    outline-offset: -2px;
+}
+
+/* Segmented control: the one pattern for every either/or in the reader. */
+.vx-seg {
+    display: inline-flex;
+    align-items: stretch;
+    padding: 2px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+}
+
+.vx-seg__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 10px;
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background 0.14s ease,
+        color 0.14s ease;
+}
+
+.vx-seg--sm .vx-seg__btn {
+    height: 20px;
+    padding: 0 9px;
+    font-size: 11px;
+}
+
+.vx-seg__btn .material-icons {
+    font-size: 15px;
+    margin: 0;
+}
+
+.vx-seg__btn:hover:not(:disabled):not(.is-active) {
+    color: var(--text-primary);
+}
+
+.vx-seg__btn.is-active {
+    background: var(--vx-accent);
+    color: var(--vx-on-accent);
+    box-shadow: var(--shadow-sm);
+}
+
+.vx-seg__btn:disabled {
+    opacity: 0.38;
+    cursor: default;
+}
+
+.vx-chip {
+    height: 24px;
+    padding: 0 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background 0.14s ease,
+        color 0.14s ease,
+        border-color 0.14s ease;
+}
+
+.vx-chip--sm {
+    height: 20px;
+    font-size: 11px;
+}
+
+.vx-chip:hover {
+    color: var(--text-primary);
+}
+
+.vx-chip.is-active {
+    background: var(--vx-accent-soft);
+    border-color: var(--vx-accent-line);
+    color: var(--vx-accent);
+}
+
+.vx-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 24px;
+    padding: 0 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.vx-range__label {
+    font-weight: 600;
+}
+
+.vx-range input[type="range"] {
+    width: 74px;
+    height: 4px;
+    margin: 0;
+    accent-color: var(--vx-accent);
+    cursor: pointer;
+}
+
+.vx-range__value {
+    min-width: 30px;
+    text-align: right;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   The reader surface
+   ============================================================ */
+
+/* Fixed rather than absolute, so fullscreen covers the window whatever the
+   layout underneath is doing. */
+.vx-reader {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    background: var(--bg-viewer);
+    overflow: hidden;
+}
+
+/* The continuous view *is* the editor's stage underneath (the strip is built
+   inside `#imageContainer`), so the surface must not paint over it -- only the
+   chrome does. */
+.vx-reader--vertical {
+    background: transparent;
+    pointer-events: none;
+}
+
+.vx-reader--vertical .vx-reader__chrome,
+.vx-reader--vertical .vx-reader__zone {
+    pointer-events: auto;
+}
+
+/* ---- click-to-turn zones ---- */
+
+.vx-reader__zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* `height: auto` is load-bearing, not a reset: the shared `button` rule in
+       `static/style.css` gives every button `height: 38px`, and an absolutely
+       positioned box with `top` + `height` + `bottom` drops the `bottom` and
+       pins itself 38px tall to the top. `auto` restores the top-to-bottom
+       stretch the arrow's centring depends on. */
+    height: auto;
+    width: 7.7%;
+    min-width: 39px;
+    max-width: 105px;
+    display: flex;
+    align-items: center;
+    padding: 0 var(--vx-space-3);
+    background: none;
+    border: none;
+    /* Square corners on the region itself, by requirement. (The region paints
+       nothing today, so this binds future backgrounds/borders, not pixels.) */
+    border-radius: 0;
+    cursor: pointer;
+    /* Above the pager, or the pager's own surface would swallow every click and
+       the zones would be decoration. The cost is that the outer ~8% of each edge
+       cannot start a pan -- the middle ~85% can, and the arrow keys and the bar's
+       own buttons work regardless. */
+    z-index: 3;
+}
+
+.vx-reader__zone--start {
+    left: 0;
+    justify-content: flex-start;
+}
+
+.vx-reader__zone--end {
+    right: 0;
+    justify-content: flex-end;
+}
+
+/*
+ * The edge veil: a frosted band behind each turn zone, on hover.
+ *
+ * A `::before` rather than a background on the button, because `backdrop-filter`
+ * applies to the whole of an element's box and ends at a hard edge. Masking a
+ * pseudo-element is what lets the blur itself fade out, so the effect dissolves
+ * into the page instead of drawing a visible seam down the artwork.
+ *
+ * The gradient runs from the screen edge (full strength) to the page (nothing), so
+ * the artwork is never veiled and the arrow always has something to sit on. Both
+ * the tint and the blur are masked together by the one gradient, which is why the
+ * fill is flat rather than a second gradient -- two overlapping fades read as muddy.
+ *
+ * `--bg-viewer` rather than a fixed colour: the band is dark over the dark theme
+ * and light over the light one, and tracks the Vulpes palette when that is active.
+ *
+ * Invisible until the zone is hovered or focused, like the arrow it sits behind.
+ * At rest a tinted band over the edges of the page reads as a shadow on the
+ * artwork -- which is the one thing the reader should never show -- so there is
+ * nothing to see until the pointer is actually in that half of the screen.
+ */
+.vx-reader__zone::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--bg-viewer) 58%, transparent);
+    /* No `backdrop-filter` at rest, rather than a transparent one: a filter on an
+       invisible element is still a filter the compositor has to evaluate, and at
+       rest is almost always. It is declared in the hover rule below instead, where
+       `opacity` fades the already-blurred result in. */
+    opacity: 0;
+    transition: opacity 0.16s ease;
+}
+
+.vx-reader__zone:hover::before,
+.vx-reader__zone:focus-visible::before {
+    opacity: 1;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.vx-reader__zone--start::before {
+    mask-image: linear-gradient(to right, #000 0%, rgba(0, 0, 0, 0.5) 48%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, #000 0%, rgba(0, 0, 0, 0.5) 48%, transparent 100%);
+}
+
+.vx-reader__zone--end::before {
+    mask-image: linear-gradient(to left, #000 0%, rgba(0, 0, 0, 0.5) 48%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to left, #000 0%, rgba(0, 0, 0, 0.5) 48%, transparent 100%);
+}
+
+/*
+ * No live blur while the page is being dragged.
+ *
+ * A `backdrop-filter` re-computes from whatever is behind it, so during a pan it is
+ * re-blurred every frame -- and a pan is exactly when the reader is least able to
+ * spare the work. A drag that began in the middle of the page can still end up
+ * under a zone, so hover and panning do overlap. The pager sets `is-panning` on
+ * itself for the duration and the zones are its later siblings, so this needs no
+ * JavaScript. The tint stays, so the band does not blink out; only the expensive
+ * half of it pauses.
+ */
+.vx-pager.is-panning ~ .vx-reader__zone:hover::before,
+.vx-pager.is-panning ~ .vx-reader__zone:focus-visible::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/*
+ * The arrow itself.
+ *
+ * Vertically centred by the zone's own flex alignment rather than by a `top: 50%`
+ * offset, so it stays centred in whatever height the window happens to be --
+ * including fullscreen, and including the moment of a resize.
+ *
+ * Hidden until the pointer is in that half of the screen: an arrow permanently
+ * over the edge of the artwork is exactly the thing a reader does not want to look
+ * at. The zone stays clickable whether the arrow is showing or not.
+ */
+.vx-reader__arrow {
+    /* Positioned, so it paints above the veil. A `::before` with `inset: 0` is a
+       positioned box and would otherwise cover in-flow content; being later in tree
+       order at the same z-index, a positioned arrow lands on top without either of
+       them needing an explicit `z-index`. */
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    /* The button stays a disc; only its rendering is soft rather than crisp: a
+       wider, more diffuse shadow plus a more translucent fill. No `backdrop-filter`
+       of its own -- the veil behind it is already blurring that patch of artwork,
+       so a second live blur on a 42px disc would pay twice for one effect. */
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+    border: 1px solid var(--border-default);
+    box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+    color: var(--text-primary);
+    opacity: 0;
+    transform: scale(0.9);
+    transition:
+        opacity 0.16s ease,
+        transform 0.16s ease;
+    pointer-events: none;
+}
+
+.vx-reader__arrow .material-icons {
+    font-size: 26px;
+    margin: 0;
+}
+
+.vx-reader__zone:hover .vx-reader__arrow,
+.vx-reader__zone:focus-visible .vx-reader__arrow {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.vx-reader__zone:focus-visible {
+    outline: none;
+}
+
+.vx-reader__zone:active .vx-reader__arrow {
+    transform: scale(0.94);
+}
+
+/* ---- the pager ---- */
+
+.vx-pager {
+    position: absolute;
+    inset: 0;
+    /* Flex centring, so the row's *layout* position is the middle and the
+       transform only has to carry the pan and the zoom. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    z-index: 2;
+    /* The row is moved by transform, not scrolled, so the browser's own touch
+       panning would fight it. */
+    touch-action: none;
+}
+
+/* `is-pannable` is toggled by the pager's `paint`, from the live size: a grab
+   cursor is a promise that there is somewhere to drag to. */
+.vx-pager.is-pannable {
+    cursor: grab;
+}
+
+.vx-pager.is-panning {
+    cursor: grabbing;
+}
+
+/*
+ * The row carries the whole live view in one transform: `translate3d(...) scale()`,
+ * written straight to the DOM by the pager's pointer and wheel handlers.
+ *
+ * `flex: 0 0 auto` matters -- the row is routinely wider than the stage once zoomed
+ * in, and a shrinkable flex item would be squeezed back to fit instead of
+ * overflowing. The pages inside are laid out at their natural size and never
+ * relayout for a zoom, which is what keeps dragging at frame rate.
+ */
+.vx-pager__row {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    transform-origin: 50% 50%;
+    will-change: transform;
+}
+
+.vx-pane {
+    flex: 0 0 auto;
+    margin: 0;
+    line-height: 0;
+}
+
+.vx-pane__img {
+    display: block;
+    max-width: none;
+    background: var(--vx-page-bg);
+    /* A tight shadow rather than a wide blur: this element is re-rasterised at
+       every new zoom level, and a 24px spread is the expensive part of that. */
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+/* Captions sit outside the scaled row, one cell per pane, so they stay legible at
+   any zoom instead of being blown up with the artwork. */
+.vx-pager__captions {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: var(--vx-space-3);
+    z-index: 4;
+    display: flex;
+    pointer-events: none;
+}
+
+.vx-pager__caption {
+    flex: 1 1 0;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+}
+
+.vx-pane__label {
+    padding: 3px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: 1.6;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.vx-pager__empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-faint);
+}
+
+.vx-pager__empty .material-icons {
+    font-size: 40px;
+    margin: 0;
+}
+
+.vx-pager__empty p {
+    margin: 0;
+    font-size: 13px;
+}
+
+/* ---- reader chrome ---- */
+
+.vx-reader__chrome {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    justify-content: center;
+    padding: var(--vx-space-3);
+    /* Only the bar itself is a target: the strip has to stay scrollable through
+       the space either side of it. */
+    pointer-events: none;
+}
+
+.vx-reader__bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: calc(100vw - 2 * var(--vx-space-3));
+    padding: 7px 9px;
+    box-sizing: border-box;
+    /* Opaque, deliberately. A `backdrop-filter` here would be re-computed from the
+       artwork beneath it on every frame of a pan or a zoom, which is a blur of the
+       whole bar 60 times a second for an effect nobody is looking at. */
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    box-shadow: var(--shadow-lg);
+    pointer-events: auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* Dimmed until aimed at, so it is never over the artwork while reading. The
+       bar is still fully reachable: hovering anywhere in the chrome strip, or
+       tabbing into it, brings it back. */
+    opacity: 0.4;
+    transition: opacity 0.18s ease;
+}
+
+.vx-reader__chrome:hover .vx-reader__bar,
+.vx-reader__bar:focus-within,
+.vx-reader__bar:hover {
+    opacity: 1;
+}
+
+.vx-reader__bar::-webkit-scrollbar {
+    display: none;
+}
+
+.vx-reader__sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 20px;
+    background: var(--border-default);
+}
+
+.vx-reader__page {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 72px;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+}
+
+.vx-reader__page-num {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.vx-reader__page-sub {
+    font-size: 9.5px;
+    color: var(--text-faint);
+}
+
+.vx-reader__zoom {
+    min-width: 42px;
+    text-align: center;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+/* ============================================================
+   Idle — a still pointer hides the reader completely
+
+   Driven by `is-idle` on `.vx-reader`, which `Reader.tsx` adds
+   after a few seconds with no pointer, key or wheel input and
+   removes on the first sign of life. Everything the reader draws
+   over the artwork goes, the cursor included, so what is left is
+   the page and nothing else.
+
+   `visibility` as well as `opacity`: a fully transparent bar would
+   still take the clicks aimed at the page behind it. `pointer-events`
+   alone would not stop a hover from re-dimming it either.
+   ============================================================ */
+
+.vx-reader.is-idle {
+    cursor: none;
+}
+
+.vx-reader.is-idle .vx-reader__chrome,
+.vx-reader.is-idle .vx-reader__zone,
+.vx-reader.is-idle .vx-pager__captions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+        opacity var(--vx-idle-fade) ease,
+        visibility var(--vx-idle-fade) ease;
+}
+
+/* The strip's own scroller sits outside `.vx-reader`, so hiding the cursor has to
+   reach the element the pointer is actually over. */
+body.workspace-reader.is-reader-idle,
+body.workspace-reader.is-reader-idle #imageContainer,
+body.workspace-reader.is-reader-idle #strip-scroller {
+    cursor: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vx-reader__arrow,
+    .vx-reader__bar,
+    .vx-reader.is-idle .vx-reader__chrome,
+    .vx-reader.is-idle .vx-reader__zone,
+    .vx-reader.is-idle .vx-pager__captions {
+        transition: none;
+    }
+}
+
+/* The control strip is the first thing to run out of room, so its labels go
+   before anything is dropped. */
+@media (max-width: 900px) {
+    .vx-reader__bar .vx-icon-btn__label,
+    .vx-reader__bar .vx-seg__label {
+        display: none;
+    }
+
+    /* A segment with no label is an icon button: keep it square. */
+    .vx-reader__bar .vx-seg__btn {
+        padding: 0 7px;
+    }
+
+    .vx-reader__bar .vx-range input[type="range"] {
+        width: 54px;
+    }
+}

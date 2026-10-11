@@ -1,17 +1,20 @@
 # Fox Reader
 
-Manga reader with bubble detection, OCR, translation, and typesetting.
+Manga translator and reader with OCR, bubble detection, image cleaning, and typesetting.
 
 Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect, or whole page), OCR them, translate them, style each entry, then render clean typeset pages to a destination folder — all locally, with optional DeepL / JPDB / custom endpoints.
 
-- Local-first: bubble detection, PaddleOCR, local MTL models (Gemma, VNTL), OpenCV / TextSeg text cleaning.
-- Live SVG overlay preview that mirrors the backend renderer (wrapping, spacing, scale, tilt, spin, shift).
-- Per-entry layers, backgrounds, fonts, outline, spacing, transforms, speaker tags, and detector tuning.
-- Standalone executables built with Nuitka (no install needed on the target machine).
-
 *This is an early release. Expect bugs, rough edges, and ongoing changes as Fox Reader continues to develop.*
 
-**Version:** `0.1.0` (`pyproject.toml`). The C launcher reports its own `FOX_LAUNCHER_VERSION "1.0.0"` (`packaging/launcher/launcher.c`).
+**Version:** `0.2.0` (`pyproject.toml`). The C launcher reports its own `FOX_LAUNCHER_VERSION "1.0.0"` (`packaging/launcher/launcher.c`).
+
+![Fox Reader translating a manga page](docs/examples/workspace.png)
+
+**Before:** the original Japanese page. **After:** the English typeset copy -- side by side in the reader Compare view:
+
+![Before/after comparison: original Japanese page beside the English typeset copy](docs/examples/reader_compare.png)
+
+*Manga artwork: "Go Go! Encyclopedia Girls" by Kasuga ([page 3](https://commons.wikimedia.org/wiki/File:Wikipe-tan_manga_page3.jpg)), under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/). English dialogue above was typeset by Fox Reader; screenshots are shared under the same license.*
 
 ## Table of Contents
 
@@ -47,6 +50,7 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 ### Capture & OCR
 
 - Four capture flows: rectangle (`c`), freehand (`f`), bubble auto-detect, whole-page capture.
+- Bubble auto-detect outline padding: `Bubble pad` slider in Options (0–10 px, default 5).
 - Right-to-left reading order by default, switchable to left-to-right, with manual reorder + resort.
 - Two OCR engines, switchable in Settings: classic PaddleOCR and PaddleOCR-VL (GGUF vision-language side job).
 - Greyscale toggle, Auto-OCR-on-select, click-to-re-read per entry.
@@ -77,7 +81,9 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 
 - Split flow: draw a cut across a region to divide it; pieces inherit styling and slot.
 - Characters roster (VNTL speaker tags) with CSV import/export.
-- Workspaces, layouts (`basic` / `default`), dark/light themes.
+- Layouts (`basic` / `vulpes`), dark/light themes.
+- Vulpes layout: pages rail + canvas + editor, resizable sections, entry actions in the footer.
+- Reader mode (both layouts, in each one's colours): single page, double-page spread (reading-direction aware; cover and landscape pages stand alone), continuous vertical scroll with an adjustable gap, and a before/after comparison of the original against the typeset copy. Centred page-turn arrows, and the whole overlay hides itself once the pointer goes still.
 - Session + folder state APIs, single-instance launcher, graceful shutdown (`POST /api/shutdown`).
 
 ## Quick Start
@@ -360,7 +366,7 @@ Typing in inputs/textareas (or the editable translation panel) disables hotkeys.
 
 On-disk state (repo root, gitignored except `fox_config.yaml`):
 
-- `config/fox_config.yaml` — `host: 127.0.0.1`, `port: 7954`, `mtl_dir: models`, `theme: dark|light`, `layout: basic|default`. `host`/`port` are immutable at runtime.
+- `config/fox_config.yaml` — `host: 127.0.0.1`, `port: 7954`, `mtl_dir: models`, `theme: dark|light`, `layout: basic|vulpes`. `host`/`port` are immutable at runtime.
 - `config/settings.yaml` — `mtl_defaults` per language (`japanese/korean/chinese`), `devices` (`paddleocr/paddleocr_vl/bubble/translator/textseg: auto|<device>`, `mtl_threads`), `deepl_api_token` / `jpdb_api_token`, `ocr_engine: paddleocr|paddleocr-vl`.
 - `config/user_endpoints.yaml` — custom translation endpoints.
 - `config/workspaces.yaml` — panel layout sizes.
@@ -553,9 +559,11 @@ foxreader/
   frontend/              Preact + Vite UI (src/, templates/, static/)
     src/components/      Toolbar, Viewer, Gallery, Translation, Entries, FontSelector,
                          SVGOverlay, Folder, Appearance, Characters, common
-    src/layouts/         Basic / Default (+ ActiveLayout switch)
-    src/workspace/       work/reader modes, strip, overlays
-    src/themes/          dark / light
+    src/layouts/         Basic / Vulpes (+ ActiveLayout switch)
+    src/workspace/       work/reader mode, splitter, strip stylesheet
+    src/reader/          shared reader: page views, pager, idle, keys
+    src/vulpes/          Vulpes chrome: top bar, status bar, panel sizes
+    src/themes/          dark / light / vulpes (palette layer)
     src/entries/         geometry, textFit (preview layout), shapes (overlay),
                          split, inpaint, pageTl
   packaging/             Nuitka build, toolchain + launcher (C), llama.cpp helper, asset embed

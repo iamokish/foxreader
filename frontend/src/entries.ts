@@ -683,7 +683,9 @@ function updateEntryHead(entry: Entry): void {
     const preview = head.querySelector<HTMLElement>(".entry-text-preview");
     if (preview) {
         preview.textContent = entry.text || entry.ocr_text || "";
-        preview.style.fontFamily = entry.ocr_text ? entry.fontname : "";
+        // The face dresses the entry's own text; the OCR fallback below it
+        // always renders in the default face.
+        preview.style.fontFamily = entry.text ? entry.fontname : "";
     }
     paintNumberBadge(head.querySelector<HTMLElement>(".entry-layer-badge"), entry, entryNumber(entry));
     const position = entryNumber(entry);
@@ -771,7 +773,8 @@ function buildEntryCard(entry: Entry, num: number): HTMLElement {
     const preview = document.createElement("div");
     preview.className = "entry-text-preview";
     preview.textContent = entry.text || entry.ocr_text || "";
-    if (entry.ocr_text) preview.style.fontFamily = entry.fontname;
+    // As above: the face follows `text`, never the OCR fallback.
+    if (entry.text) preview.style.fontFamily = entry.fontname;
     head.appendChild(preview);
 
     const glyph = bgChipIcon(entry);

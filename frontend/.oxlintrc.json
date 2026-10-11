@@ -33,10 +33,12 @@
         "getComputedStyle": "readonly",
         "CSS": "readonly",
         "IntersectionObserver": "readonly",
+        "ResizeObserver": "readonly",
         "Blob": "readonly",
         "process": "readonly",
         "Event": "readonly",
         "MouseEvent": "readonly",
+        "PointerEvent": "readonly",
         "KeyboardEvent": "readonly"
     },
     "rules": {

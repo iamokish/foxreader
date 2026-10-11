@@ -94,6 +94,7 @@ class TestThemeAndLayout:
         [
             ("basic", "basic"),
             (" Default ", "default"),
+            ("Vulpes", "vulpes"),
             ("READER", "reader"),
             ("Translation", "translation"),
         ],

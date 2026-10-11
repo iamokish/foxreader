@@ -147,7 +147,12 @@ def _sort_vertical(boxes):
 # ============================================================================
 # PADDLE OCR WRAPPER
 # ============================================================================
-from paddleocr import TextDetection, TextRecognition
+# `ocr_predict` replaces `paddleocr.TextDetection` / `TextRecognition`: same
+# weights, same resolved settings, same `predict` contract, but straight on
+# torch over `fox_reader.hf` instead of through paddleocr -> paddlex ->
+# transformers. There is no `engine=` to choose any more -- safetensors on
+# torch is the only thing it ever ran.
+from fox_reader.ocr_predict import TextDetection, TextRecognition
 
 
 class PaddleOCRModelManager:
@@ -162,7 +167,6 @@ class PaddleOCRModelManager:
         if key not in cls._detectors:
             cls._detectors[key] = TextDetection(
                 model_dir=(paddle_ocr_path / model_name),
-                engine="transformers",
                 device=device,
             )
 
@@ -176,7 +180,6 @@ class PaddleOCRModelManager:
         if key not in cls._recognizers:
             kwargs = dict(
                 model_dir=(paddle_ocr_path / model_name),
-                engine="transformers",
                 device=device,
             )
             if config_model_name:

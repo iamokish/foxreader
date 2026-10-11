@@ -19,7 +19,7 @@ startup crash, in two lines.
 """
 import importlib.metadata as im
 
-for name in ("huggingface_hub", "huggingface-hub", "hf_xet", "hf-xet", "transformers"):
+for name in ("huggingface_hub", "huggingface-hub", "hf_xet", "hf-xet"):
     try:
         print(f"  {name:20} -> {im.version(name)}")
     except Exception as exc:

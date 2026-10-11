@@ -41,8 +41,9 @@ export function TranslatorButtons() {
         // Immediate pass from the server-injected flags so unavailable
         // buttons never flash before the fetch returns.
         try {
-            const config = (window as unknown as { __FOX_CONFIG__?: { deeplAvailable?: boolean; jpdbAvailable?: boolean } })
-                .__FOX_CONFIG__;
+            const config = (
+                window as unknown as { __FOX_CONFIG__?: { deeplAvailable?: boolean; jpdbAvailable?: boolean } }
+            ).__FOX_CONFIG__;
             if (config && (config.deeplAvailable !== undefined || config.jpdbAvailable !== undefined)) {
                 setTranslateStatus({
                     deepl: !!config.deeplAvailable,
@@ -102,7 +103,12 @@ export function TranslatorButtons() {
                 </button>
             )}
 
-            <button data-lang-group="japanese" data-endpoint="/translate/ml" data-lang="japanese" data-requires-ml="true">
+            <button
+                data-lang-group="japanese"
+                data-endpoint="/translate/ml"
+                data-lang="japanese"
+                data-requires-ml="true"
+            >
                 MTL
             </button>
             <button data-lang-group="chinese" data-endpoint="/translate/ml" data-lang="chinese" data-requires-ml="true">

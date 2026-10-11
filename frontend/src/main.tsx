@@ -18,7 +18,7 @@ import {
     updateReaderPageIndicator,
     toggleStripMode,
 } from "./viewer";
-import { startCapture, startFreeCapture, bubbleCapture } from "./ocr";
+import { normalizeBubblePadding, startCapture, startFreeCapture, bubbleCapture } from "./ocr";
 import { initTranslatorListeners } from "./translate";
 import { showNotify, showLoading, hideLoading, cycleTextAlignment, updateActionRow } from "./ui";
 import { loadFolder, folderState, mlLoad, mlUnload } from "./api";
@@ -41,6 +41,7 @@ import { state } from "./state";
 import { on } from "./eventbus";
 import { syncMLStateFromBackend } from "./mlStatus";
 import { clearCharacters } from "./characters";
+import { handleReaderKey } from "./reader";
 
 function toggleReaderFullscreen() {
     if (document.fullscreenElement) {
@@ -166,6 +167,20 @@ document.addEventListener("DOMContentLoaded", () => {
         showNotify(state.isCharactersEnabled ? "Characters: ON" : "Characters: OFF");
     });
     syncCharactersButtonVisibility();
+
+    // Bubble outline padding: live readout while dragging, one toast on release.
+    const bubblePadInput = document.getElementById("bubblePadding") as HTMLInputElement | null;
+    const bubblePadValue = document.getElementById("bubblePaddingValue");
+    const paintBubblePadding = () => {
+        state.bubblePadding = normalizeBubblePadding(bubblePadInput?.value);
+        if (bubblePadValue) bubblePadValue.textContent = `${state.bubblePadding}px`;
+    };
+    bubblePadInput?.addEventListener("input", paintBubblePadding);
+    bubblePadInput?.addEventListener("change", () => {
+        paintBubblePadding();
+        showNotify(`Bubble padding: ${state.bubblePadding}px`);
+    });
+    paintBubblePadding();
 
     document.querySelectorAll(".dropdown").forEach((dropdown) => {
         const trigger = dropdown.querySelector(".dropdown-trigger");
@@ -390,6 +405,11 @@ window.addEventListener("keydown", (e) => {
     // Reader mode: navigation/zoom take over; editor hotkeys are suppressed.
     if (document.body.classList.contains("workspace-reader")) {
         if (e.ctrlKey || e.altKey || state.isDrawing || state.isCaptureMode) return;
+        // The reader has four views and a spread that moves two pages at a time, so
+        // it gets first refusal. It returns false for the keys that mean the same
+        // thing everywhere (Escape, F), which fall through below, and it registers
+        // nothing while reader mode is off, so this is a no-op then.
+        if (handleReaderKey(e)) return;
         switch (e.key.toLowerCase()) {
             case "arrowright":
             case "arrowdown":
@@ -436,8 +456,11 @@ window.addEventListener("keydown", (e) => {
     switch (e.key.toLowerCase()) {
         case "h":
             e.preventDefault();
-            if (document.body.classList.contains("layout-default")) {
-                (window as any).togglePanel?.("gallery");
+            // Each layout hides a different thing: Vulpes has a pages rail with a
+            // panel model behind it, and Basic has no panel model at all, so its
+            // gallery element is toggled directly.
+            if (document.body.classList.contains("layout-vulpes")) {
+                (window as any).vulpesTogglePanel?.("pages");
             } else {
                 document.getElementById("gallery")?.classList.toggle("hidden");
             }

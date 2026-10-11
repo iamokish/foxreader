@@ -47,6 +47,7 @@ stderr.log
 Thumbs.db
 
 /frontend/node_modules/
+/frontend/package-lock.json
 /frontend/static/app.js
 /frontend/static/app.js.map
 /frontend/static/.vite/

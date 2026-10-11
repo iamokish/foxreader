@@ -13,15 +13,16 @@
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { endCapture, splitCapture, startCapture, startFreeCapture } from "./ocr";
+import { bubbleCapture, endCapture, normalizeBubblePadding, splitCapture, startCapture, startFreeCapture } from "./ocr";
 import { state } from "./state";
 
 vi.mock("./api", () => ({
     ocrCrop: vi.fn(async () => ({ text: "captured" })),
     ocrFreeform: vi.fn(async () => ({ text: "captured free" })),
+    bubbleDetect: vi.fn(async () => []),
 }));
 
-import { ocrCrop, ocrFreeform } from "./api";
+import { ocrCrop, ocrFreeform, bubbleDetect } from "./api";
 
 const stylesheet = readFileSync(resolvePath(process.cwd(), "static/style.css"), "utf8");
 
@@ -162,12 +163,103 @@ describe("startFreeCapture (lasso)", () => {
         }
     });
 
+    it("maps canvas points through the live canvas origin", async () => {
+        // A Vulpes-like stage: the canvas sits far from the viewport origin, so
+        // dropping its offset (as a zero rect would) shifts every point up-left.
+        dom();
+        vi.spyOn(canvasPrototype(), "getContext").mockReturnValue(fakeCtx());
+        try {
+            await startFreeCapture();
+            const canvas = document.getElementById("drawCanvas") as HTMLCanvasElement;
+            const img = document.getElementById("mainImage") as HTMLImageElement;
+            const liveRect = (left: number, top: number, width: number, height: number): DOMRect =>
+                ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+            // Like a real browser: hidden elements report a zero rect.
+            vi.spyOn(canvas, "getBoundingClientRect").mockImplementation(() =>
+                canvas.style.display === "none"
+                    ? liveRect(0, 0, 0, 0)
+                    : liveRect(165, 48, 800, 600),
+            );
+            vi.spyOn(img, "getBoundingClientRect").mockReturnValue(liveRect(432, 48, 400, 600));
+            state.zoomLevel = 0.5;
+
+            canvas.dispatchEvent(new window.MouseEvent("mousedown", { clientX: 492, clientY: 108, bubbles: true }));
+            for (let i = 1; i <= 6; i++) {
+                canvas.dispatchEvent(
+                    new window.MouseEvent("mousemove", { clientX: 492 + i * 10, clientY: 108, bubbles: true }),
+                );
+            }
+            await fireWindowMouseUp();
+            await flush();
+
+            expect(ocrFreeform).toHaveBeenCalledTimes(1);
+            const sent = vi.mocked(ocrFreeform).mock.calls[0][0];
+            // client 502 -> canvas-local 337 -> image (337 + 165 - 432) / 0.5.
+            expect(sent.points[0]).toEqual({ x: 140, y: 120 });
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+
     it("lowers the flag when the canvas cannot start", async () => {
         dom();
         // No canvas 2d context in jsdom: the flow aborts before drawing.
         await startFreeCapture();
         expect(document.body.classList.contains(CAPTURING)).toBe(false);
         expect(state.isCaptureMode).toBe(false);
+    });
+});
+
+describe("normalizeBubblePadding", () => {
+    it("keeps values inside 0-10", () => {
+        expect(normalizeBubblePadding(0)).toBe(0);
+        expect(normalizeBubblePadding(5)).toBe(5);
+        expect(normalizeBubblePadding(10)).toBe(10);
+    });
+
+    it("clamps instead of refusing", () => {
+        expect(normalizeBubblePadding(-3)).toBe(0);
+        expect(normalizeBubblePadding(15)).toBe(10);
+    });
+
+    it("falls back on garbage, like the backend does", () => {
+        expect(normalizeBubblePadding(null)).toBe(5);
+        expect(normalizeBubblePadding(undefined)).toBe(5);
+        expect(normalizeBubblePadding("")).toBe(5);
+        expect(normalizeBubblePadding("abc")).toBe(5);
+        expect(normalizeBubblePadding(Number.NaN)).toBe(5);
+    });
+
+    it("reads numeric strings and floors fractions", () => {
+        expect(normalizeBubblePadding("7")).toBe(7);
+        expect(normalizeBubblePadding(4.7)).toBe(4);
+    });
+});
+
+describe("bubbleCapture", () => {
+    it("sends the slider padding with the request", async () => {
+        dom();
+        state.currentImageFile = "p.png";
+        state.bubblePadding = 8;
+        await bubbleCapture();
+        expect(bubbleDetect).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(bubbleDetect).mock.calls[0][0]).toEqual({
+            filename: "p.png",
+            isGrayScale: false,
+            padding: 8,
+        });
+    });
+
+    it("names the backend's reason instead of a dead-end toast", async () => {
+        dom();
+        state.currentImageFile = "p.png";
+        vi.mocked(bubbleDetect).mockRejectedValueOnce(new Error("CUDA out of memory"));
+        await bubbleCapture();
+        const toasts = Array.from(document.querySelectorAll(".toast-notification"))
+            .map((t) => t.textContent ?? "")
+            .join(" | ");
+        expect(toasts).toContain("Bubble detection failed");
+        expect(toasts).toContain("CUDA out of memory");
     });
 });
 

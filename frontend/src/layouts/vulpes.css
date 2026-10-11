@@ -1,0 +1,1160 @@
+/* ============================================================
+   Vulpes — layout
+
+   Everything here is scoped to `body.layout-vulpes`, the class
+   `LayoutContext` puts on the body, so the Basic layout is
+   untouched. Colours come from `themes/vulpes.css`, which restates
+   every theme token for both the dark and the light side, so there
+   is no fork of this file per theme.
+
+   The reader is NOT here: it is mounted by both layouts, so it
+   lives unscoped in `src/reader/reader.css` along with the control
+   primitives it shares with this layout's chrome (`.vx-icon-btn`,
+   `.vx-seg`, `.vx-chip`, `.vx-range`).
+
+   Structure (see VulpesLayout.tsx for the diagram):
+     .vx-root      the grid: topbar / body / statusbar
+     .vx-body      rail | splitter | canvas | splitter | editor
+     .vx-canvas    tools / stage / splitter / captured text
+   ============================================================ */
+
+body.layout-vulpes {
+    font-family: var(--vx-font-ui);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+/* The legacy shell is a flex column; the Vulpes root is the only child of it. */
+body.layout-vulpes .main-app-wrapper {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-root {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    grid-template-rows: var(--vx-topbar-h) minmax(0, 1fr) var(--vx-status-h);
+    background: var(--bg-primary);
+}
+
+/* ---------------------------------------------------------------- topbar --- */
+
+body.layout-vulpes .vx-topbar {
+    display: flex;
+    align-items: center;
+    gap: var(--vx-space-3);
+    min-width: 0;
+    padding: 0 var(--vx-space-3) 0 var(--vx-space-4);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-default);
+    box-sizing: border-box;
+}
+
+body.layout-vulpes .vx-brand {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    user-select: none;
+    border-radius: var(--radius-sm);
+}
+
+body.layout-vulpes .vx-brand__mark {
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    /* The icon is already a rounded tile; a radius here only softens its corners
+       against the bar's own colour rather than drawing a box around it. */
+    object-fit: contain;
+}
+
+/* No hover glow and no focus ring: the mark is a `span`, not a link, so it
+   takes no clicks and never receives focus -- either affordance would invite
+   pressing something that does nothing. */
+
+body.layout-vulpes .vx-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding-left: var(--vx-space-3);
+    border-left: 1px solid var(--border-default);
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-crumbs__empty {
+    color: var(--text-faint);
+    font-style: italic;
+}
+
+body.layout-vulpes .vx-crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+body.layout-vulpes .vx-crumb__sep {
+    color: var(--text-faint);
+}
+
+body.layout-vulpes .vx-crumb__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.layout-vulpes .vx-crumb__text.is-current {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+/* The folder field. `.folder-nav` is also on it so the legacy rules that style
+   `#folderPathInput` and `#loadFolderBtn` still apply; these override the parts
+   that belong to the old top bar. */
+body.layout-vulpes .vx-folder {
+    display: flex;
+    align-items: center;
+    gap: var(--vx-space-2);
+    flex: 1 1 auto;
+    min-width: 120px;
+    max-width: 460px;
+    margin: 0 0 0 auto;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+body.layout-vulpes .vx-folder #folderPathInput {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 30px;
+    margin: 0;
+    padding: 0 11px;
+    box-sizing: border-box;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+body.layout-vulpes .vx-folder #folderPathInput::placeholder {
+    color: var(--text-faint);
+}
+
+body.layout-vulpes .vx-folder #folderPathInput:focus-visible {
+    outline: none;
+    border-color: var(--vx-accent);
+    box-shadow: 0 0 0 3px var(--vx-ring);
+}
+
+body.layout-vulpes .vx-folder #loadFolderBtn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 30px;
+    margin: 0;
+    padding: 0 13px;
+    box-sizing: border-box;
+    background: var(--vx-accent);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    color: #fff;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+body.layout-vulpes .vx-folder #loadFolderBtn:hover {
+    background: var(--vx-accent-hover);
+}
+
+body.layout-vulpes .vx-folder #loadFolderBtn .material-icons {
+    font-size: 16px;
+    margin: 0;
+}
+
+body.layout-vulpes .vx-topbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------- body ------ */
+
+body.layout-vulpes .vx-body {
+    display: flex;
+    align-items: stretch;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Splitters. Invisible until aimed at, then the accent: a 5px hit target with a
+   1px seam reads as a border rather than as furniture. */
+body.layout-vulpes .ws-splitter {
+    flex: 0 0 auto;
+    position: relative;
+    background: var(--border-default);
+    z-index: 4;
+}
+
+body.layout-vulpes .ws-splitter--vertical {
+    width: 1px;
+    cursor: col-resize;
+}
+
+body.layout-vulpes .ws-splitter--horizontal {
+    height: 1px;
+    cursor: row-resize;
+}
+
+/* The grab area, wider than the seam, without the seam itself getting fatter. */
+body.layout-vulpes .ws-splitter::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+}
+
+body.layout-vulpes .ws-splitter:hover,
+body.layout-vulpes .ws-splitter:active {
+    background: var(--vx-accent);
+}
+
+/* ----------------------------------------------------------- pages rail ---- */
+
+/*
+ * Section sizes are an inline style, written by `VulpesPanelsContext`: from JSX on
+ * the committed size, and straight onto the element during a drag. These values are
+ * the fallback for the frame before the first write, and they match
+ * VX_DEFAULT_PANELS.
+ *
+ * They were `--vx-size-*` custom properties on `<body>`; measured head-to-head
+ * at full load both designs hold 60fps, and the direct writes keep per-frame
+ * work to one element plus the relayout the drag needs.
+ */
+body.layout-vulpes .vx-rail {
+    flex: 0 0 auto;
+    width: 164px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-rail.is-collapsed {
+    display: none;
+}
+
+body.layout-vulpes .vx-rail__head,
+body.layout-vulpes .vx-editor__head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--vx-section-h);
+    padding: 0 var(--vx-space-3);
+    box-sizing: border-box;
+    background: var(--panel-header-bg);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+body.layout-vulpes .vx-rail__title,
+body.layout-vulpes .vx-editor__title,
+body.layout-vulpes .vx-section__title {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+body.layout-vulpes .vx-rail__body {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+}
+
+/*
+ * The gallery, stood up as a vertical rail.
+ *
+ * Same `#gallery` element the other layouts use -- `renderGallery` fills it and
+ * `navigateGallery` reads `.active` off its children -- turned into a column. The
+ * wheel handler in `viewer.ts` detects the orientation and leaves a rail that
+ * scrolls vertically alone, instead of translating the wheel onto `scrollLeft`.
+ */
+body.layout-vulpes .vx-rail .gallery-bar {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--vx-space-2);
+    padding: var(--vx-space-2);
+    overflow-x: hidden;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border: none;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+body.layout-vulpes .vx-rail .gallery-item-container {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    margin: 0;
+    padding: 4px;
+    box-sizing: border-box;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    /* A folder can run to hundreds of pages. Thumbnails off-screen are skipped
+       entirely rather than laid out and painted; the intrinsic size keeps the
+       scrollbar honest while they are. (The images are already `loading="lazy"`,
+       so their bytes were never the problem -- the layout was.) */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 200px;
+    transition:
+        background 0.14s ease,
+        border-color 0.14s ease;
+}
+
+body.layout-vulpes .vx-rail .gallery-item-container:hover {
+    background: var(--bg-tertiary);
+}
+
+body.layout-vulpes .vx-rail .gallery-item-container.active {
+    background: var(--vx-accent-soft);
+    border-color: var(--vx-accent-line);
+}
+
+/* A page-shaped thumbnail rather than the 80x80 square the horizontal bar uses:
+   `contain` keeps every aspect honest inside it. */
+body.layout-vulpes .vx-rail .gallery-item {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 3 / 4;
+    object-fit: contain;
+    background: var(--vx-thumb-bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    box-sizing: border-box;
+}
+
+body.layout-vulpes .vx-rail .gallery-item-container.active .gallery-item {
+    border-color: var(--vx-accent);
+}
+
+body.layout-vulpes .vx-rail .gallery-index {
+    margin: 0;
+    font-size: 10.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+body.layout-vulpes .vx-rail .gallery-item-container.active .gallery-index {
+    color: var(--vx-accent);
+}
+
+body.layout-vulpes .vx-rail .gallery-saved {
+    top: 7px;
+    right: 7px;
+}
+
+/* --------------------------------------------------------------- canvas ---- */
+
+body.layout-vulpes .vx-canvas {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+}
+
+/* The capture rail. `.buttons` and its children are the shared toolbar, so this
+   only sets the strip they sit in; the pill shapes come from the block below. */
+body.layout-vulpes .vx-tools {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--vx-space-2);
+    padding: var(--vx-space-2) var(--vx-space-3);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-default);
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+body.layout-vulpes .vx-tools .buttons {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+
+body.layout-vulpes .vx-tools #languageSelect {
+    margin: 0;
+}
+
+/* The stage: the editor's viewport, and the only place artwork is drawn in work
+   mode. `#imageContainer` is `position: relative` already, and `.variant-switch`
+   anchors to this box (see variant.css). */
+body.layout-vulpes .vx-stage {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    background: var(--bg-viewer);
+}
+
+body.layout-vulpes .vx-stage > #imageContainer {
+    flex: 1;
+    width: 100%;
+    /* The legacy stylesheet pins this to 80vh, which would push the captured-text
+       section off the bottom of the window. */
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: var(--bg-viewer);
+}
+
+/* --------------------------------------------------------- sections -------- */
+
+body.layout-vulpes .vx-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-section__head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--vx-space-2);
+    height: var(--vx-section-h);
+    padding: 0 var(--vx-space-3) 0 var(--vx-space-2);
+    box-sizing: border-box;
+    background: var(--panel-header-bg);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+body.layout-vulpes .vx-section__head--static {
+    padding-left: var(--vx-space-3);
+}
+
+body.layout-vulpes .vx-section__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    /* Sized to the bar: without a height of its own this inherits the shared
+       `button` 38px, which overflows a 30px header top and bottom. */
+    height: 22px;
+    padding: 0 4px 0 0;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* No hover background: this control's hover language is the brightening title
+   and chevron below, and a pill here would spill past the 30px bar anyway.
+   `!important` outranks the shared `button:hover:not(...)` chain, which would
+   otherwise paint its tertiary pill on top of this. */
+body.layout-vulpes .vx-section__toggle:hover {
+    background-color: transparent !important;
+}
+
+body.layout-vulpes .vx-section__toggle .material-icons {
+    font-size: 16px;
+    margin: 0;
+    color: var(--text-dim);
+}
+
+body.layout-vulpes .vx-section__toggle:hover .vx-section__title,
+body.layout-vulpes .vx-section__toggle:hover .material-icons {
+    color: var(--text-primary);
+}
+
+body.layout-vulpes .vx-section__note {
+    font-size: 10.5px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.layout-vulpes .vx-section__actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+body.layout-vulpes .vx-section__body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+body.layout-vulpes .vx-section.is-collapsed {
+    flex: 0 0 auto !important;
+}
+
+body.layout-vulpes .vx-section.is-collapsed .vx-section__body {
+    display: none;
+}
+
+/* ------------------------------------------------------- captured text ----- */
+
+body.layout-vulpes .vx-capture {
+    flex: 0 0 auto;
+    height: 150px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border-default);
+}
+
+body.layout-vulpes .vx-capture.is-collapsed {
+    height: auto !important;
+}
+
+body.layout-vulpes .vx-capture > .vx-section {
+    flex: 1;
+    min-height: 0;
+}
+
+body.layout-vulpes .vx-capture__body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--vx-space-2);
+    padding: var(--vx-space-2);
+    box-sizing: border-box;
+}
+
+body.layout-vulpes .vx-capture__body .textarea-wrapper {
+    flex: 1;
+    min-height: 44px;
+    margin: 0;
+}
+
+body.layout-vulpes .vx-capture__body #textArea {
+    width: 100%;
+    height: 100%;
+    min-height: 44px;
+    max-height: none;
+    margin: 0;
+    padding: 9px 11px;
+    box-sizing: border-box;
+    resize: none;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: inherit;
+}
+
+/* Focus stays readable through the border alone: no glow ring. The ring used to
+   live here (`box-shadow: 0 0 0 3px var(--vx-ring)`) and is deliberately gone;
+   do not re-add it without checking with the people who read OCR text all day. */
+body.layout-vulpes .vx-capture__body #textArea:focus-visible {
+    outline: none;
+    border-color: var(--vx-accent);
+    box-shadow: none;
+}
+
+body.layout-vulpes .vx-editor__translation > .vx-section__head .vx-section__title {
+    flex: 0 0 auto;
+}
+
+/* The translator picker rides in the Translation header: the title stays put
+   while the buttons scroll beside it. The header height never moves
+   (`--vx-section-h` above): the row does not wrap, each button is header-tall
+   and unsquashable, and overflow scrolls invisibly -- a 9px scrollbar inside a
+   30px header would eat the row it serves. */
+body.layout-vulpes .vx-editor__translation > .vx-section__head .translator-buttons {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+body.layout-vulpes .vx-editor__translation > .vx-section__head .translator-buttons::-webkit-scrollbar {
+    display: none;
+}
+
+body.layout-vulpes .vx-editor__translation > .vx-section__head .translator-buttons button {
+    flex: 0 0 auto;
+    height: 22px;
+    padding: 0 9px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+/*/* --------------------------------------------------------------- editor ---- */
+
+body.layout-vulpes .vx-editor {
+    flex: 0 0 auto;
+    width: 360px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-editor.is-collapsed {
+    display: none;
+}
+
+body.layout-vulpes .vx-editor__body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+body.layout-vulpes .vx-editor__body > .vx-section {
+    background: transparent;
+}
+
+/* The entry list's height is the splitter's to set, as an inline `height`; the
+   basis is `auto` so that height is what flex honours. Collapsed, the height
+   must go too -- `flex-basis: auto` alone cannot shrink a pinned `height`,
+   and the section would keep a 300px dead box under its header. */
+body.layout-vulpes .vx-editor__body > [data-section="entries"] {
+    flex: 0 0 auto;
+    height: 300px;
+}
+
+body.layout-vulpes .vx-editor__body > [data-section="entries"].is-collapsed {
+    flex: 0 0 auto;
+    height: auto;
+}
+
+/* The entry list fills its section. `#savedEntriesList` carries an inline
+   `display:flex` from `EntriesRegion`, so position rather than display is what
+   this has to control. */
+body.layout-vulpes .vx-editor .vx-section__body #savedEntriesList {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: var(--vx-space-2);
+    box-sizing: border-box;
+    overflow-y: auto;
+}
+
+body.layout-vulpes .vx-editor__translation {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border-default);
+}
+
+body.layout-vulpes .vx-translation {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--vx-space-2);
+    padding: var(--vx-space-2);
+    box-sizing: border-box;
+}
+
+/*
+ * The translation result. `translate.ts` renders these panels straight into
+ * `#translationContainer`, outside `.translation-wrapper` -- whose legacy rules
+ * would otherwise have styled them.
+ *
+ * `flex: 1` is what makes the panel fill the region rather than hugging its text.
+ * The container carries an inline `justify-content: center` from
+ * `TranslationRegion`, which a stylesheet cannot override; it does not need to be
+ * overridden, because centring only distributes *free* space and a growing child
+ * leaves none.
+ */
+body.layout-vulpes #translationContainer .panel,
+body.layout-vulpes #translationContainer .panel.error {
+    flex: 1 1 auto;
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+    padding: 11px 13px;
+    box-sizing: border-box;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: none;
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* The placeholder ("Select a translator") is a message, not content: it fills the
+   same box so the region never changes shape, but centres what little it says. */
+body.layout-vulpes #translationContainer .panel.error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: transparent;
+    border-style: dashed;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+/* `renderTranslationUI` reuses the one `#translatedText` element, swapping its
+   class, so this gap only ever separates it from anything a future build adds
+   beside it. Costs nothing today and avoids a flush join if that happens. */
+body.layout-vulpes #translationContainer {
+    gap: var(--vx-space-2);
+}
+
+body.layout-vulpes #translationContainer .panel.translated {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+body.layout-vulpes #translationContainer .panel.translating {
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+body.layout-vulpes #translationContainer .alt_translated {
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px dashed var(--border-default);
+    color: var(--text-muted);
+    font-weight: 425;
+}
+
+body.layout-vulpes #confirmActionRow {
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* --------------------------------------------------------- status bar ------ */
+
+body.layout-vulpes .vx-statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--vx-space-2);
+    padding: 0 var(--vx-space-3);
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-default);
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+
+body.layout-vulpes .vx-statusbar__group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+body.layout-vulpes .vx-statusbar__group--center {
+    flex: 1 1 auto;
+    justify-content: center;
+}
+
+/* The editing verbs, in the footer rather than under the translation panel.
+   `ConfirmActionRow` is the app's own component and carries the ids every module
+   looks up, so the geometry stays in `components/Translation/actionRow.css`; this
+   only decides how the row sits in the bar and hides the words for the glyphs, which
+   is the whole reason the row moved down here. */
+body.layout-vulpes .vx-statusbar__group--actions {
+    flex: 0 0 auto;
+    padding-left: var(--vx-space-3);
+    border-left: 1px solid var(--border-default);
+}
+
+body.layout-vulpes .vx-action-row {
+    width: auto;
+    gap: 4px;
+}
+
+body.layout-vulpes .vx-action-row .custom-font-dropdown {
+    /* Same share as the Basic row, so the menu it opens is the same width too. */
+    flex: 0 1 200px;
+}
+
+/* The trigger is 32px tall everywhere else; at 32px in this 34px bar its border
+   all but touches the statusbar's own. 24px matches the verbs beside it and
+   restores the clearance, without moving any other row of any layout. */
+body.layout-vulpes .vx-action-row .custom-font-dropdown .font-select-trigger {
+    height: 24px;
+}
+
+body.layout-vulpes .vx-action-row .confirm-action-row__btn {
+    height: 24px;
+    padding: 0 8px;
+}
+
+/* Icon only, at this height: the words are what the translation panel had room
+   for, and the title on each button still names them. */
+body.layout-vulpes .vx-action-row .btn-label {
+    display: none;
+}
+
+body.layout-vulpes .vx-action-row .btn-icon {
+    display: inline-flex;
+}
+
+/* The floating Original/Saved switch over the artwork stays in Basic, where it
+   is the only copy. Vulpes drives the same choice from the footer's segmented
+   control, so the overlay would sit over the page for nothing. Kept mounted --
+   `viewer.ts` and the id contract require exactly one -- but never painted;
+   `!important` outranks the inline `display` `updateVariantSwitch` writes. */
+body.layout-vulpes #variantSwitch {
+    display: none !important;
+}
+
+body.layout-vulpes .vx-statusbar__group--end {
+    justify-content: flex-end;
+}
+
+body.layout-vulpes .vx-statusbar__page {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 62px;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+}
+
+body.layout-vulpes .vx-statusbar__page strong {
+    color: var(--text-primary);
+    font-size: 12.5px;
+}
+
+body.layout-vulpes .vx-statusbar__of {
+    color: var(--text-faint);
+}
+
+body.layout-vulpes .vx-statusbar__note {
+    min-width: 62px;
+    color: var(--text-faint);
+}
+
+body.layout-vulpes .vx-statusbar__zoom {
+    min-width: 46px;
+    height: 20px;
+    padding: 0 7px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+}
+
+body.layout-vulpes .vx-statusbar__zoom:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+body.layout-vulpes .vx-statusbar__sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 2px;
+    background: var(--border-default);
+}
+
+body.layout-vulpes .vx-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--border-hover);
+}
+
+body.layout-vulpes .vx-dot.is-on {
+    background: var(--color-success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 22%, transparent);
+}
+
+/* ============================================================
+   Reader mode
+
+   The workspace chrome steps aside so the stage is full-bleed --
+   which is what the continuous strip needs, since `buildStrip`
+   builds inside `#imageContainer`. The pager views then draw an
+   opaque overlay on top of it. `#imageContainer` and `#gallery`
+   are never hidden with `display: none`: `navigateGallery` reads
+   the thumbnails, and the editor's pan/zoom listeners are bound
+   to the container once at startup.
+   ============================================================ */
+
+body.layout-vulpes.workspace-reader .vx-topbar,
+body.layout-vulpes.workspace-reader .vx-statusbar,
+body.layout-vulpes.workspace-reader .vx-rail,
+body.layout-vulpes.workspace-reader .vx-editor,
+body.layout-vulpes.workspace-reader .vx-tools,
+body.layout-vulpes.workspace-reader .vx-capture,
+body.layout-vulpes.workspace-reader .ws-splitter {
+    display: none;
+}
+
+body.layout-vulpes.workspace-reader .vx-root {
+    grid-template-rows: minmax(0, 1fr);
+}
+
+body.layout-vulpes.workspace-reader .vx-canvas {
+    background: var(--bg-viewer);
+}
+
+body.layout-vulpes.workspace-reader .vx-stage {
+    flex: 1;
+    height: 100%;
+}
+
+/* ============================================================
+   Shared-component tuning
+
+   The toolbar, entry cards, dropdowns, font picker and modals are
+   the app's own components, styled by `static/style.css`. These
+   rules re-shape them for Vulpes; every value is a theme token, so
+   both the dark and the light side follow.
+   ============================================================ */
+
+body.layout-vulpes .buttons > button,
+body.layout-vulpes .ml-control-box,
+body.layout-vulpes .dropdown-trigger,
+body.layout-vulpes #languageSelect,
+body.layout-vulpes select,
+body.layout-vulpes .btn-primary,
+body.layout-vulpes .btn-secondary,
+body.layout-vulpes .btn-danger,
+body.layout-vulpes .btn-success,
+body.layout-vulpes .btn-purple,
+body.layout-vulpes .font-select-trigger,
+body.layout-vulpes .translator-buttons button {
+    border-radius: 999px;
+}
+
+body.layout-vulpes .buttons > button {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    transition:
+        background 0.14s ease,
+        border-color 0.14s ease,
+        color 0.14s ease;
+}
+
+body.layout-vulpes .buttons > button:hover:not(:disabled) {
+    background: var(--bg-highlight);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
+}
+
+body.layout-vulpes .buttons > button.active-capture {
+    background: var(--vx-accent-soft);
+    border-color: var(--vx-accent);
+    color: var(--vx-accent);
+}
+
+body.layout-vulpes .translator-buttons button.active-translator {
+    background: var(--vx-accent) !important;
+    border-color: transparent !important;
+    color: #fff !important;
+    box-shadow: var(--shadow-sm);
+}
+
+body.layout-vulpes .dropdown-content {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-default);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+}
+
+body.layout-vulpes .saved-entry-card {
+    border-radius: var(--radius-md);
+    transition:
+        border-color 0.14s ease,
+        box-shadow 0.14s ease;
+}
+
+body.layout-vulpes .saved-entry-card:hover {
+    box-shadow: var(--shadow-md);
+}
+
+/* A selected entry stays flat even while hovered: the shared highlighted rule
+   cannot outrank this file's hover elevation on specificity (`body` breaks the
+   tie), so the exemption lives beside the rule that needs it. */
+body.layout-vulpes .saved-entry-card.highlighted-entry:hover {
+    box-shadow: none;
+}
+
+body.layout-vulpes .font-options-container {
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+}
+
+/*
+ * Scrollbars.
+ *
+ * Named containers, not `*`. A universal pseudo-element selector is matched
+ * against every element in the layout, and -- more importantly -- styling
+ * `::-webkit-scrollbar` at all opts an element out of the platform's overlay
+ * scrollbars into classic ones that take layout space.
+ *
+ * `#imageContainer` is deliberately **not** in this list. `syncContainerOverflow`
+ * flips its `overflow` between `hidden` and `auto` on every zoom step, and with
+ * space-taking scrollbars each flip moves the content box by the scrollbar's width
+ * -- so the page jumps, which re-centres it, which can flip the overflow back. The
+ * stage keeps the platform default so that toggle costs no layout at all.
+ */
+body.layout-vulpes .vx-rail .gallery-bar::-webkit-scrollbar,
+body.layout-vulpes .vx-editor__body::-webkit-scrollbar,
+body.layout-vulpes #savedEntriesList::-webkit-scrollbar,
+body.layout-vulpes #translationContainer .panel::-webkit-scrollbar,
+body.layout-vulpes #textArea::-webkit-scrollbar,
+body.layout-vulpes .vx-tools::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+body.layout-vulpes .vx-rail .gallery-bar::-webkit-scrollbar-track,
+body.layout-vulpes .vx-editor__body::-webkit-scrollbar-track,
+body.layout-vulpes #savedEntriesList::-webkit-scrollbar-track,
+body.layout-vulpes #translationContainer .panel::-webkit-scrollbar-track,
+body.layout-vulpes #textArea::-webkit-scrollbar-track,
+body.layout-vulpes .vx-tools::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.layout-vulpes .vx-rail .gallery-bar::-webkit-scrollbar-thumb,
+body.layout-vulpes .vx-editor__body::-webkit-scrollbar-thumb,
+body.layout-vulpes #savedEntriesList::-webkit-scrollbar-thumb,
+body.layout-vulpes #translationContainer .panel::-webkit-scrollbar-thumb,
+body.layout-vulpes #textArea::-webkit-scrollbar-thumb,
+body.layout-vulpes .vx-tools::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 999px;
+}
+
+body.layout-vulpes .vx-rail .gallery-bar::-webkit-scrollbar-thumb:hover,
+body.layout-vulpes .vx-editor__body::-webkit-scrollbar-thumb:hover,
+body.layout-vulpes #savedEntriesList::-webkit-scrollbar-thumb:hover,
+body.layout-vulpes #translationContainer .panel::-webkit-scrollbar-thumb:hover,
+body.layout-vulpes #textArea::-webkit-scrollbar-thumb:hover,
+body.layout-vulpes .vx-tools::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* ============================================================
+   Narrow windows
+
+   Below ~1100px the editor and the rail cannot both have room, so
+   the rail becomes a slim strip of numbers and the chrome drops its
+   labels. Nothing is removed -- the status bar's section buttons
+   toggle whatever is in the way. The reader's own narrowing lives
+   with the reader, in reader.css.
+   ============================================================ */
+
+@media (max-width: 1100px) {
+    body.layout-vulpes .vx-crumbs,
+    body.layout-vulpes .vx-folder__label {
+        display: none;
+    }
+}
+
+@media (max-width: 900px) {
+    body.layout-vulpes .vx-rail {
+        width: 84px !important;
+    }
+}
+
+/* ============================================================
+   Reduced motion
+
+   `prefers-reduced-motion` asks for less *decorative* movement. It
+   does not ask for progress indicators to stop: the OCR waveform,
+   the inpaint spinner and the strip's loading shimmer are the only
+   thing on screen saying work is happening, and freezing them reads
+   as a hung app.
+
+   So this disables the decoration and leaves the indicators alone.
+
+   What was here before was the canonical snippet with its second
+   half missing:
+
+       body.layout-vulpes * {
+           animation-duration: 0.01ms !important;
+       }
+
+   -- no `animation-iteration-count: 1`. An `infinite` animation with
+   a 0.01ms duration restarts about a hundred thousand times a
+   second, and each frame samples a different phase, so every
+   looping animation in the layout vibrated instead of running.
+   That is also why the blunt `*` selector is gone: a universal
+   selector carrying `!important` reaches every animation in the
+   app, including ones this file has no business touching.
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+    body.layout-vulpes .vx-icon-btn,
+    body.layout-vulpes .vx-seg__btn,
+    body.layout-vulpes .vx-chip,
+    body.layout-vulpes .vx-rail .gallery-item-container,
+    body.layout-vulpes .saved-entry-card,
+    body.layout-vulpes .buttons > button,
+    body.layout-vulpes .ws-splitter {
+        transition: none;
+    }
+}

@@ -115,7 +115,7 @@
         <div class="folder-nav">
           <input type="text" id="folderPathInput" placeholder="Input Folder Path Here (e.g., X:\My Comic\XYZ)">
           <button id="loadFolderBtn" onclick="loadLocalFolder()">
-            <span class="material-icons">folder_open</span> Load Folder
+            <span class="material-icons">folder_open</span> Load
           </button>
         </div>
 
@@ -258,15 +258,14 @@
             </div>
           </div>
 
-          <button id="charactersBtn" type="button" title="Manage characters (speaker metadata for VNTL models)">
+          <button id="charactersBtn" type="button" title="Manage characters (speaker metadata for VNTL models)" aria-label="Characters">
             <span class="material-icons" aria-hidden="true">group</span>
-            <span class="ml-label">Characters</span>
           </button>
 
         </div>
 
         <div class="textarea-wrapper">
-          <textarea id="textArea" placeholder="Recognized text will appear here..."></textarea>
+          <textarea id="textArea" placeholder="Recognized text will appear here..." spellcheck="false"></textarea>
 
           <div id="ocrLoader" class="ocr-loader">
             <span></span>

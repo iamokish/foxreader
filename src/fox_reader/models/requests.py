@@ -24,6 +24,10 @@ class CropRequest(BaseModel):
 class BubbleRequest(BaseModel):
     filename: str
     isGrayScale: bool
+    #: Outline padding in px (0-10), as the Options slider sends it. Defaults to
+    #: the long-standing constant so older clients are unaffected; out-of-range
+    #: values are clamped, not refused, by the detector itself.
+    padding: int = 5
 
 
 class Point(BaseModel):

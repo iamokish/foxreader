@@ -117,7 +117,7 @@ describe("row packing", () => {
         const rows = rowsOf(mount(makeEntry()));
 
         expect(labelsOf(rows[0])).toEqual(["Layer", "Align", "Speaker"]);
-        // The family select is the one wide control in the panel and it used to
+        // The family picker is the one wide control in the panel and it used to
         // sit alone, with the outline on a row of its own below it.
         expect(labelsOf(rows[1])).toEqual(["Font", "Outline"]);
         // Geometry in the order it is applied: fitted first, then post-fit.
@@ -129,8 +129,9 @@ describe("row packing", () => {
         expect(rows).toHaveLength(5);
 
         const fields = Array.from(rows[1].querySelectorAll<HTMLElement>(".eo-field"));
-        // Font family, font size, font colour.
-        expect(fields[0].querySelectorAll("select")).toHaveLength(2);
+        // Family picker (custom dropdown), font size, font colour.
+        expect(fields[0].querySelector(".eo-font-trigger")).not.toBeNull();
+        expect(fields[0].querySelectorAll("select")).toHaveLength(1);
         expect(fields[0].querySelectorAll(".eo-color-btn")).toHaveLength(1);
         // Outline width and outline colour, hugging their content so the family
         // select keeps the leftover width.
@@ -218,6 +219,120 @@ describe("speaker select", () => {
         const panel = mount(makeEntry());
         const texts = Array.from(speakerOf(panel)!.options).map((o) => o.text);
         expect(texts).toEqual(["None", "Eren (♂)", "Mikasa (♀)", "Annie"]);
+    });
+});
+
+describe("entry font picker", () => {
+    const triggerOf = (panel: HTMLElement): HTMLButtonElement | null =>
+        panel.querySelector<HTMLButtonElement>(".eo-font-trigger");
+
+    const openMenu = (panel: HTMLElement): HTMLElement => {
+        triggerOf(panel)!.click();
+        const pop = document.querySelector<HTMLElement>(".eo-font-pop");
+        expect(pop).not.toBeNull();
+        return pop as HTMLElement;
+    };
+
+    it("shows the current family in its own face", () => {
+        const panel = mount(makeEntry({ fontfile: "b.ttf", fontname: "'Beta', sans-serif" }));
+        const trigger = triggerOf(panel)!;
+        expect(trigger.querySelector(".eo-font-trigger__text")?.textContent).toBe("Beta");
+        expect(trigger.style.fontFamily).toContain("Beta");
+        expect(trigger.title).toContain("Beta");
+    });
+
+    it("renders every face in its own font and marks the current one", () => {
+        const panel = mount(makeEntry({ fontfile: "b.ttf" }));
+        const pop = openMenu(panel);
+        const rows = Array.from(pop.querySelectorAll<HTMLElement>(".font-option-item"));
+        expect(rows).toHaveLength(2);
+        expect(rows.map((r) => r.textContent)).toEqual(["Alpha", "Beta"]);
+        expect(rows[0].style.fontFamily).toContain("Alpha");
+        expect(rows[1].style.fontFamily).toContain("Beta");
+        expect(rows[1].classList.contains("selected")).toBe(true);
+    });
+
+    it("writes a pick onto the entry, repaints and closes without rebuilding", () => {
+        const entry = makeEntry({ fontfile: "a.ttf" });
+        const ctx = makeCtx(entry);
+        const panel = mount(entry, ctx);
+        const pop = openMenu(panel);
+
+        pop.querySelectorAll<HTMLElement>(".font-option-item")[1].click();
+        expect(entry.fontfile).toBe("b.ttf");
+        expect(entry.fontname).toContain("Beta");
+        expect(triggerOf(panel)?.querySelector(".eo-font-trigger__text")?.textContent).toBe("Beta");
+        expect(document.querySelector(".eo-font-pop")).toBeNull();
+        expect(ctx.refresh).toHaveBeenCalled();
+        expect(ctx.rebuild).not.toHaveBeenCalled();
+    });
+
+    it("toggles closed on a second click", () => {
+        const panel = mount(makeEntry());
+        triggerOf(panel)!.click();
+        expect(document.querySelector(".eo-font-pop")).not.toBeNull();
+        triggerOf(panel)!.click();
+        expect(document.querySelector(".eo-font-pop")).toBeNull();
+    });
+
+    it("matches the trigger width and sits flush against it", () => {
+        const panel = mount(makeEntry());
+        const trigger = triggerOf(panel)!;
+        trigger.getBoundingClientRect = () =>
+            ({
+                width: 200,
+                height: 22,
+                top: 100,
+                bottom: 122,
+                left: 50,
+                right: 250,
+                x: 50,
+                y: 100,
+                toJSON: () => {},
+            }) as DOMRect;
+        trigger.click();
+        const pop = document.querySelector<HTMLElement>(".eo-font-pop")!;
+        expect(pop.style.width).toBe("200px");
+        // Flush: 1px overlap so the borders read as one seam, no gap.
+        expect(pop.style.top).toBe("121px");
+        expect(pop.style.left).toBe("50px");
+        expect(pop.classList.contains("eo-font-pop--below")).toBe(true);
+    });
+
+    it("arms the marquee only for rows that overflow", () => {
+        const panel = mount(makeEntry());
+        const pop = openMenu(panel);
+        const rows = Array.from(pop.querySelectorAll<HTMLElement>(".font-option-item"));
+
+        const fitting = rows[0];
+        fitting.dispatchEvent(new Event("mouseenter"));
+        expect(fitting.classList.contains("scroll-active")).toBe(false);
+
+        const overflowing = rows[1];
+        const overflowingText = overflowing.querySelector<HTMLElement>(".font-option-item__text")!;
+        Object.defineProperty(overflowingText, "scrollWidth", { value: 200, configurable: true });
+        Object.defineProperty(overflowingText, "clientWidth", { value: 120, configurable: true });
+        overflowing.dispatchEvent(new Event("mouseenter"));
+        expect(overflowing.classList.contains("scroll-active")).toBe(true);
+        expect(overflowing.style.getPropertyValue("--marquee-dist")).toBe("80px");
+        expect(overflowing.style.getPropertyValue("--marquee-dur")).not.toBe("");
+
+        overflowing.dispatchEvent(new Event("mouseleave"));
+        expect(overflowing.classList.contains("scroll-active")).toBe(false);
+    });
+
+    it("moves the highlight with the arrow keys and picks with Enter", () => {
+        const entry = makeEntry({ fontfile: "a.ttf" });
+        const ctx = makeCtx(entry);
+        mount(entry, ctx);
+        // Not through the panel: the menu is body-anchored.
+        (document.querySelector(".eo-font-trigger") as HTMLElement).click();
+        const pop = document.querySelector<HTMLElement>(".eo-font-pop")!;
+
+        pop.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        pop.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        expect(entry.fontfile).toBe("b.ttf");
+        expect(ctx.refresh).toHaveBeenCalled();
     });
 });
 
@@ -377,7 +492,7 @@ describe("numeric controls", () => {
         const entry = makeEntry();
         const ctx = makeCtx(entry);
         const rows = rowsOf(mount(entry, ctx));
-        const size = rows[1].querySelectorAll("select")[1] as HTMLSelectElement;
+        const size = rows[1].querySelectorAll("select")[0] as HTMLSelectElement;
 
         expect(size.disabled).toBe(false);
         expect(size.value).toBe("");
@@ -399,8 +514,9 @@ describe("numeric controls", () => {
     it("offers Auto plus outline widths 0..8", () => {
         const entry = makeEntry();
         const rows = rowsOf(mount(entry, makeCtx(entry)));
-        // Third select on the font row: family, size, then the outline width.
-        const width = rows[1].querySelectorAll("select")[2] as HTMLSelectElement;
+        // Second select on the font row: size, then the outline width (the
+        // family picker is a custom dropdown, not a select).
+        const width = rows[1].querySelectorAll("select")[1] as HTMLSelectElement;
 
         expect(width.disabled).toBe(false);
         expect(width.options).toHaveLength(MAX_STROKE_WIDTH - MIN_STROKE_WIDTH + 2);
@@ -415,8 +531,8 @@ describe("numeric controls", () => {
     it("shows an explicit size as the selected option", () => {
         const entry = makeEntry({ font_size: 30, stroke_width: 3 });
         const selects = rowsOf(mount(entry, makeCtx(entry)))[1].querySelectorAll("select");
-        expect((selects[1] as HTMLSelectElement).value).toBe("30");
-        expect((selects[2] as HTMLSelectElement).value).toBe("3");
+        expect((selects[0] as HTMLSelectElement).value).toBe("30");
+        expect((selects[1] as HTMLSelectElement).value).toBe("3");
     });
 });
 

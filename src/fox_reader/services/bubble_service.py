@@ -167,10 +167,14 @@ class BubbleService:
         self.device = FOX_DEVICE.bubble
         self._model = getBubbleModel(MODELS_DIR / "bubble" / "model.safetensors", device=self.device)
 
-    def detect(self, image: Image.Image, grayscale: bool) -> list[dict]:
+    def detect(self, image: Image.Image, grayscale: bool, padding: int | None = None) -> list[dict]:
         # Grayscale lives in the model (`fox_reader.bubble._to_grayscale`), so
-        # every caller binarises identically; the service only forwards.
-        return self._model.detect(image, grayscale=bool(grayscale))
+        # every caller binarises identically; padding is normalised there too.
+        # `None` is not forwarded at all, so the model's own default -- the
+        # historical constant -- applies untouched.
+        if padding is None:
+            return self._model.detect(image, grayscale=bool(grayscale))
+        return self._model.detect(image, grayscale=bool(grayscale), padding=padding)
 
     @staticmethod
     def split(region_coords: list, split_object: list) -> list[dict]:

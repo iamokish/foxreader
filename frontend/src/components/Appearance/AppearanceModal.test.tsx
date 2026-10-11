@@ -40,19 +40,33 @@ describe("AppearanceModal", () => {
         expect(layouts.length).toBe(2);
         expect(themes.length).toBe(2);
         expect(container.querySelector('[data-layout="basic"]')).not.toBeNull();
-        expect(container.querySelector('[data-layout="default"]')).not.toBeNull();
+        expect(container.querySelector('[data-layout="vulpes"]')).not.toBeNull();
+        // The Default layout was retired; Vulpes replaced it.
+        expect(container.querySelector('[data-layout="default"]')).toBeNull();
         expect(container.querySelector('[data-theme="light"]')).not.toBeNull();
         expect(container.querySelector('[data-theme="dark"]')).not.toBeNull();
     });
 
     it("marks the active layout and theme as checked", () => {
-        localStorage.setItem("fox-reader-layout", "default");
+        localStorage.setItem("fox-reader-layout", "vulpes");
         localStorage.setItem("fox-reader-theme", "light");
         const { container } = renderModal(true);
-        expect(container.querySelector('[data-layout="default"]')?.getAttribute("aria-checked")).toBe("true");
+        expect(container.querySelector('[data-layout="vulpes"]')?.getAttribute("aria-checked")).toBe("true");
         expect(container.querySelector('[data-layout="basic"]')?.getAttribute("aria-checked")).toBe("false");
         expect(container.querySelector('[data-theme="light"]')?.getAttribute("aria-checked")).toBe("true");
         expect(container.querySelector('[data-theme="dark"]')?.getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("shows a profile stored on the retired Default layout as Vulpes", () => {
+        localStorage.setItem("fox-reader-layout", "default");
+        const { container } = renderModal(true);
+        expect(container.querySelector('[data-layout="vulpes"]')?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("names the active layout in the section header", () => {
+        localStorage.setItem("fox-reader-layout", "vulpes");
+        const { container } = renderModal(true);
+        expect(container.querySelector(".appearance-section__current")?.textContent).toContain("Vulpes");
     });
 
     it("switches theme live without closing", () => {
@@ -67,8 +81,8 @@ describe("AppearanceModal", () => {
 
     it("persists the picked layout (the app reload follows in the browser)", () => {
         const { container } = renderModal(true);
-        fireEvent.click(container.querySelector('[data-layout="default"]')!);
-        expect(localStorage.getItem("fox-reader-layout")).toBe("default");
+        fireEvent.click(container.querySelector('[data-layout="vulpes"]')!);
+        expect(localStorage.getItem("fox-reader-layout")).toBe("vulpes");
     });
 
     it("closes on Escape", () => {

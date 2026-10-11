@@ -164,7 +164,9 @@
 
 .appearance-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    /* auto-fit rather than a fixed count: the Theme group has two options and the
+       Layout group three, and both should fill the row they are given. */
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
     gap: 10px;
 }
 
@@ -283,10 +285,6 @@
     height: auto;
 }
 
-.ap-mock--default {
-    flex-direction: column;
-}
-
 .ap-mock__topbar {
     flex: 0 0 10px;
     border-radius: 3px;
@@ -294,32 +292,56 @@
     border: 1px solid var(--border-subtle);
 }
 
-.ap-mock__main {
+.ap-mock__cell {
     flex: 1;
-    display: flex;
-    gap: 3px;
-    min-height: 0;
+    border-radius: 3px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
 }
 
-.ap-mock__col-viewer {
-    flex: 1 1 46%;
+/* ---------- Vulpes preview: rail | stage | editor, plus a status bar ---- */
+
+.ap-mock--vulpes {
+    flex-direction: column;
+}
+
+.ap-mock--vulpes .ap-mock__main {
+    gap: 2px;
+}
+
+.ap-mock__rail {
+    flex: 0 0 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px;
+    box-sizing: border-box;
+    border-radius: 3px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+}
+
+.ap-mock__rail i {
+    flex: 1;
+    border-radius: 1px;
+    background: var(--bg-quaternary);
+}
+
+.ap-mock__stage {
+    flex: 1 1 auto;
     border-radius: 3px;
     background: var(--bg-viewer);
     border: 1px solid var(--border-subtle);
 }
 
-.ap-mock__col-side {
-    flex: 1 1 54%;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-height: 0;
+.ap-mock--vulpes .ap-mock__col-side {
+    flex: 0 0 22px;
 }
 
-.ap-mock__cell {
-    flex: 1;
-    border-radius: 3px;
-    background: var(--bg-surface);
+.ap-mock__statusbar {
+    flex: 0 0 5px;
+    border-radius: 2px;
+    background: var(--bg-quaternary);
     border: 1px solid var(--border-subtle);
 }
 
@@ -508,20 +530,20 @@
 
 /* ---------- per-layout rounding ---------- */
 
-body.layout-default .appearance-card {
+body.layout-vulpes .appearance-card {
     border-radius: 16px;
 }
 
-body.layout-default .appearance-option,
-body.layout-default .appearance-preview {
+body.layout-vulpes .appearance-option,
+body.layout-vulpes .appearance-preview {
     border-radius: 12px;
 }
 
-body.layout-default .appearance-close {
+body.layout-vulpes .appearance-close {
     border-radius: 20px;
 }
 
-body.layout-default .appearance-menu-btn {
+body.layout-vulpes .appearance-menu-btn {
     border-radius: 10px;
 }
 

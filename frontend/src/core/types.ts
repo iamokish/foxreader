@@ -53,6 +53,8 @@ export interface CropRequest {
 export interface BubbleRequest {
     filename: string;
     isGrayScale: boolean;
+    /** Outline padding in px, 0-10; the Options slider writes it. */
+    padding: number;
 }
 
 export interface SplitRequest {
@@ -400,6 +402,16 @@ export interface EventMap {
     "page:changed": [string];
     "entries:render": [];
     "gallery:navigate": [number];
+    /**
+     * A page now has a (new) typeset copy in the destination folder.
+     *
+     * Emitted by `markPageSaved`, i.e. once per save. Distinct from
+     * `entries:render`, which fires for every edit to an entry: listen here for
+     * the things that depend on a page *having been saved* -- the Saved badge, the
+     * Original/Saved switch, and the before/after comparison, whose two sides
+     * change meaning the moment the second one starts existing.
+     */
+    "page:saved": [string];
     /** Translator buttons were added or removed after the initial render. */
     "translators:changed": [];
     /** Strip (webtoon) mode was toggled or reset; reader controls should re-render. */

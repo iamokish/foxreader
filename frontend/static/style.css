@@ -98,7 +98,11 @@ body {
   /* Start locked */
   position: relative;
   background-color: var(--bg-tertiary);
-  transition: all 0.2s ease;
+  /* Background only: `all` animated width/height too, so every panel drag (and
+     every overflow write beside it) lagged 0.2s behind the pointer while the
+     refit logic chased a still-moving box -- the stage flicker. Size changes
+     from splitters must land immediately (see VulpesPanelsContext). */
+  transition: background-color 0.2s ease;
   display: flex;
   align-items: center;
   /* Vertical Center */
@@ -132,6 +136,10 @@ body {
 
   max-width: none;
   max-height: none;
+
+  /* Zoom/pan rewrite this transform every wheel tick: hint it onto the
+     compositor so the move is a GPU layer shift, not a repaint of the page. */
+  will-change: transform;
 
   /* Prevents the browser from treating the image as a draggable object */
   -webkit-user-drag: none;
@@ -313,7 +321,10 @@ body {
   max-width: 50%;
   display: flex;
   flex-direction: column;
-  padding: 10px 20px 20px 20px;
+  /* 10px below: the action row is the last child, so this padding is the gap
+     between it and the screen bottom. `.content-area` exists solely in the
+     Basic layout, so no other layout can tell. */
+  padding: 10px 20px 10px 20px;
   background: var(--bg-primary);
   overflow-y: auto;
   box-sizing: border-box;
@@ -540,6 +551,13 @@ button,
   vertical-align: middle;
 }
 
+/* Icon-only toolbar buttons: with no label the trailing margin would lean the
+   glyph left, so it is zeroed for exactly these two ids. */
+#readerModeBtn > .material-icons,
+#charactersBtn > .material-icons {
+  margin-right: 0;
+}
+
 
 /* Native Wrapper Styling */
 .translation-wrapper {
@@ -554,6 +572,14 @@ button,
   flex-direction: column;
   align-items: center;
   box-sizing: border-box;
+}
+
+/* The action row below the wrapper, Basic only: `.content-area` exists solely
+   in the Basic layout -- Vulpes nests the same row inside its footer instead --
+   so this selector structurally cannot match anything there. Mirrors the
+   wrapper's own 10px rhythm above it. */
+.content-area > #confirmActionRow {
+  margin-top: 10px;
 }
 
 #translationContainer {
@@ -863,6 +889,40 @@ input:checked+.slider:before {
   font-size: 13px;
 }
 
+/* Range row in the same menu (bubble padding): the input takes the leftover
+   width, the readout holds tabular figures so it never jitters while dragged.
+   Theme tokens only, so both themes and both layouts follow. */
+.ml-range-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-item input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent-gold);
+  cursor: pointer;
+}
+
+.menu-item input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent-active);
+  outline-offset: 1px;
+}
+
+.ml-range-value {
+  flex: 0 0 auto;
+  min-width: 34px;
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
 /* Settings entry: a full-row anchor that reads like the other menu rows and
    leads to the settings page. Kept here (not in a component stylesheet) so
    the server-rendered toolbar is styled before the bundle loads. */
@@ -1119,13 +1179,16 @@ button:disabled {
   background: #4a4542 !important;
   box-shadow: 0 0 8px rgba(255,255,255,0.15);
 }*/
-.saved-entry-card.highlighted-entry {
+.saved-entry-card.highlighted-entry,
+.saved-entry-card.highlighted-entry:hover {
   background: var(--bg-highlight) !important;
   border: 2px solid var(--accent-gold);
-  box-shadow:
-    0 0 12px rgba(255, 209, 102, 0.5),
-    0 0 24px rgba(255, 209, 102, 0.25),
-    var(--shadow-sm);
+  /* No shadow: the golden border alone marks the selection. `none`, not a
+     deletion -- the base card carries `var(--shadow-sm)`, which would show
+     through otherwise. The `:hover` half holds against the Vulpes hover
+     elevation at equal specificity, so a hovered selection stays flat too;
+     every other card keeps its own hover. */
+  box-shadow: none;
   transition: all 0.2s ease;
 }
 
@@ -1192,6 +1255,10 @@ body.fox-capturing #regionSvgOverlay .entry-shape * {
   /* Matches preview button color */
   border-radius: 50%;
   animation: modalSpinTransform 0.8s linear infinite;
+  /* The rotation is a pure transform, so hint it onto the compositor: it keeps
+     spinning on the GPU while the main thread is busy (e.g. building hundreds of
+     gallery nodes during a folder load) instead of stuttering with it. */
+  will-change: transform;
 }
 
 @keyframes modalSpinTransform {
@@ -1762,6 +1829,84 @@ body.no-bubble #bubCapture {
     min-width: 84px;
 }
 
+/* Entry font picker: a trigger button (`.eo-select` carries the box) plus a
+   body-anchored menu, because the entry list clips anything positioned
+   inside a card. The rows reuse the app-wide `.font-option-item` faces and
+   hover marquee; this only owns the trigger internals and the menu box. */
+.eo-font-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    text-align: left;
+    font-family: inherit;
+    /* Pinned, like the rows below: both are exactly 22px whatever the UA's
+       default button box model is, so trigger and menu read as one control. */
+    box-sizing: border-box;
+}
+
+.eo-font-trigger__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.eo-font-trigger__chev {
+    flex: 0 0 auto;
+    color: var(--text-faint);
+}
+
+.eo-font-pop {
+    position: fixed;
+    z-index: 10000;
+    max-height: 250px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm, 4px);
+    box-shadow: var(--shadow-md);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.eo-font-pop .font-option-item.is-hot {
+    background-color: var(--bg-tertiary);
+}
+
+/* Entry rows are the trigger's height: 22px border-box, same horizontal
+   padding and size as the `.eo-select` box, so each row lines up with the
+   bar it drops from. (Long names still fit -- they scroll in place.) */
+.eo-font-pop .font-option-item {
+    box-sizing: border-box;
+    height: 22px;
+    padding: 0 4px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+}
+
+/* A flex item defaults to `min-width: auto` and would refuse to shrink, so
+   without this the name would push past the row instead of ellipsising. */
+.eo-font-pop .font-option-item__text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Flush against the trigger (1px overlap), so the adjoining corners square
+   off and the two borders read as one seam. */
+.eo-font-pop--below {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.eo-font-pop--above {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
 /* Speed on the tweaks line hugs its content: the leftover width
    belongs to the switches beside it, which wrap if they do not get
    it. Wide enough for "Fastest". */
@@ -2199,6 +2344,10 @@ body.eyedropper-active #mainImage {
 }
 
 .inpaint-progress__fill {
+    /* Block: the fill is an empty `span`, and on an inline box `width`,
+       `height` and `transform` are all ignored -- without this neither the
+       determinate fraction nor the indeterminate stripe can paint at all. */
+    display: block;
     width: 0;
     height: 100%;
     background: var(--color-cyan);
@@ -2207,26 +2356,27 @@ body.eyedropper-active #mainImage {
 }
 
 /* No total reported yet: a moving stripe says "running" without
-   claiming a fraction the backend has not committed to. */
+   claiming a fraction the backend has not committed to. The stripe travels by
+   `transform`, not `background-position`: same 1.1s loop, but a compositor-layer
+   shift instead of a repaint of the bar every frame. */
 .inpaint-progress.is-indeterminate .inpaint-progress__fill {
-    width: 100% !important;
+    width: 40% !important;
     transition: none;
     background: linear-gradient(90deg,
             transparent 0%,
             var(--color-cyan) 50%,
             transparent 100%);
-    background-size: 40% 100%;
-    background-repeat: no-repeat;
+    transform: translateX(-110%);
     animation: inpaintIndeterminate 1.1s linear infinite;
 }
 
 @keyframes inpaintIndeterminate {
     from {
-        background-position: -45% 0;
+        transform: translateX(-101%);
     }
 
     to {
-        background-position: 145% 0;
+        transform: translateX(251%);
     }
 }
 

@@ -1,7 +1,8 @@
 import { useState } from "preact/hooks";
 import { useLayout } from "../../layouts/LayoutContext";
 import { useTheme } from "../../themes/ThemeContext";
-import { AppearanceModal } from "../Appearance";
+import { AppearanceModal, layoutLabel } from "../Appearance";
+import { ReaderButton } from "./ReaderButton";
 import { CharactersModal } from "../Characters";
 import { applyReadingDirection } from "../../entries";
 import { getInitialFoxConfig } from "../../core/initialConfig";
@@ -79,7 +80,7 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
         state.isCharactersEnabled = checked;
         setCharactersEnabled(checked);
     };
-    const layoutLabel = layout === "default" ? "Default" : "Basic";
+    const layoutLabelText = layoutLabel(layout);
     const themeLabel = theme === "light" ? "Light" : "Dark";
 
     const pickDirection = (next: ReadingDirection): void => {
@@ -100,12 +101,18 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                         placeholder="Input Folder Path Here (e.g., X:\My Comic\XYZ)"
                     />
                     <button id="loadFolderBtn" onClick={() => (window as any).loadLocalFolder?.()}>
-                        <span class="material-icons">folder_open</span> Load Folder
+                        <span class="material-icons">folder_open</span> Load
                     </button>
+                    {/* Beside Load, not in the button row: Vulpes draws its own
+                        reader toggle, with a label, in the top bar, and this
+                        whole row is hidden there -- so rendering both can never
+                        put two `#readerModeBtn` elements in the document. */}
+                    {layout !== "vulpes" && <ReaderButton />}
                 </div>
             )}
 
             <div class="buttons">
+
                 <button id="rectCapture" title="Capture Region" onClick={() => (window as any).startCapture?.()}>
                     <svg
                         xmlns="http://www.w3.org/2000/svg"
@@ -267,6 +274,26 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                         </div>
 
                         <div class="menu-item">
+                            <span class="ml-label" title="Outline padding for detected bubbles, in pixels">
+                                Bubble pad
+                            </span>
+                            <span class="ml-range-wrap">
+                                <input
+                                    type="range"
+                                    id="bubblePadding"
+                                    min="0"
+                                    max="10"
+                                    step="1"
+                                    defaultValue="5"
+                                    aria-label="Bubble padding in pixels"
+                                />
+                                <span class="ml-range-value" id="bubblePaddingValue">
+                                    5px
+                                </span>
+                            </span>
+                        </div>
+
+                        <div class="menu-item">
                             <span class="ml-label">Reading</span>
                             <div class="reading-dir-group" role="group" aria-label="Reading direction">
                                 <button
@@ -306,7 +333,7 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                                 <span class="appearance-menu-btn__text">
                                     <span class="ml-label">Appearance</span>
                                     <span class="appearance-menu-btn__value">
-                                        {layoutLabel} · {themeLabel}
+                                        {layoutLabelText} · {themeLabel}
                                     </span>
                                 </span>
                                 <span class="material-icons" aria-hidden="true">
@@ -331,6 +358,7 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                     id="charactersBtn"
                     type="button"
                     title="Manage characters (speaker metadata for VNTL models)"
+                    aria-label="Characters"
                     hidden={!charactersEnabled}
                     style={{ display: charactersEnabled ? "" : "none" }}
                     // Opens the roster only: never touches `enableCharacters` /
@@ -340,7 +368,6 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                     <span class="material-icons" aria-hidden="true">
                         group
                     </span>
-                    <span class="ml-label">Characters</span>
                 </button>
             </div>
 
