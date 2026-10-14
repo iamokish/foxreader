@@ -307,8 +307,8 @@ python packaging/build.py --device cpu --cpu-baseline sse42
 # Target specific GPUs instead of the defaults (quote it: the shell eats `;`)
 python packaging/build.py --device cu129 --cuda-arch "75-real;86-real"
 
-# Split the finished archive into 1900 MB parts (for GitHub's 2 GB limit)
-python packaging/build.py --device cu130 --split-bin 1900
+# Split the finished archive into 1000 MB (1 GB) parts
+python packaging/build.py --device cu130 --split-bin 1000
 ```
 
 The finished archive lands in `dist/`, e.g.
@@ -329,22 +329,23 @@ The finished archive lands in `dist/`, e.g.
 
 Only needed if you are **uploading** a build somewhere with a file-size
 limit. GitHub refuses a release file over 2 GB, and a CUDA build with the
-translator backend in it is 3–4 GB.
+translator backend in it is 3–4 GB. Splitting into 1 GB parts ensures reliable,
+fast uploads.
 
 ```bash
-python packaging/build.py --device cu130 --split-bin 1900
+python packaging/build.py --device cu130 --split-bin 1000
 ```
 
 What it does, after the archive is built:
 
-- **Archive under 1900 MB?** Nothing happens. The file is left exactly as
+- **Archive under 1000 MB?** Nothing happens. The file is left exactly as
   it is and can be uploaded directly.
-- **Archive over 1900 MB?** It is cut into
-  `fox-reader-….zip.001`, `….zip.002`, … of at most 1900 MB each, and the
+- **Archive over 1000 MB?** It is cut into
+  `fox-reader-….zip.001`, `….zip.002`, … of at most 1000 MB each, and the
   oversized archive is **deleted** — so an upload glob cannot pick up a
   file the host will reject.
 
-The number is in megabytes and optional: a bare `--split-bin` uses 1900.
+The number is in megabytes and optional: a bare `--split-bin` uses 1000.
 
 > Needs room for one extra copy of the archive while it is being cut
 > (the parts are written before the original is removed). Add 4 GB of free
@@ -423,7 +424,7 @@ gh attestation verify <file> --repo iamokish/foxreader
 | `--no-blas` | Same as `--openblas off` |
 | `--cpu-baseline {avx2,avx,sse42}` | Oldest CPU the result must run on (default `avx2`) |
 | `--cuda-arch LIST` / `--hip-arch LIST` | Override GPU architectures (e.g. `75-real;86-real`) |
-| `--split-bin [MB]` | Cut the finished archive into parts of at most MB megabytes (default 1900) if it is larger; see [4a](#4a-splitting-a-big-archive---split-bin) |
+| `--split-bin [MB]` | Cut the finished archive into parts of at most MB megabytes (default 1000) if it is larger; see [4a](#4a-splitting-a-big-archive---split-bin) |
 | `--skip-frontend` | Reuse an already built `frontend/static` |
 | `--keep-venv` | Keep the build environment for the next rebuild |
 | `--clean` | Delete all previous build outputs first |
@@ -461,7 +462,7 @@ translation works, on any machine.
 | `cblas_sgemm was not declared` (GGUF compile) | System OpenBLAS missing/misdetected — install `libopenblas-dev` (2d) or rebuild with `--openblas download` |
 | Out of disk halfway | Free 15 GB (CPU) / 25 GB (CUDA); the same gigabytes are written three times before archiving. `--split-bin` wants one more copy of the archive on top |
 | `could not split …: No space left on device` | The archive itself is untouched — free some space and re-run, or upload it by hand |
-| GitHub rejects the upload: file too large | Build again with `--split-bin 1900`, or join and re-split by hand (see [4a](#4a-splitting-a-big-archive---split-bin)) |
+| GitHub rejects the upload: file too large | Build again with `--split-bin 1000`, or join and re-split by hand (see [4a](#4a-splitting-a-big-archive---split-bin)) |
 | A downloaded `.zip.001` will not open | It is one part of a split archive. Get every part and join them first — see [4a](#4a-splitting-a-big-archive---split-bin) |
 | Rebuild behaves oddly | Add `--clean` and build again |
 | GGUF compile problems you don't need | Add `--no-gguf` — builds everything else, skips llama.cpp |

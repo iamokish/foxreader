@@ -1,0 +1,253 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Build Executables"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build run ID to release from. If blank, finds latest run for the tag."
+        required: false
+        type: string
+      tag:
+        description: "Release tag name. If blank, inferred from the build run."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Run ID and Tag
+        id: target
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          INPUT_RUN_ID="${{ inputs.run_id }}"
+          INPUT_TAG="${{ inputs.tag }}"
+
+          if [ -n "$INPUT_RUN_ID" ]; then
+            RUN_ID="$INPUT_RUN_ID"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+          else
+            if [ -z "$INPUT_TAG" ]; then
+              echo "Error: Either run_id or tag must be provided when manually dispatching." >&2
+              exit 1
+            fi
+            echo "Searching latest 'Build Executables' run for branch/tag '$INPUT_TAG'..."
+            RUN_ID=$(gh run list --workflow "Build Executables" --branch "$INPUT_TAG" --limit 1 --json databaseId -q ".[0].databaseId")
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "Error: Could not find any workflow run for '$INPUT_TAG'." >&2
+              exit 1
+            fi
+          fi
+
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          else
+            TAG=$(gh run view "$RUN_ID" --json headBranch -q .headBranch)
+          fi
+
+          # Strip refs/tags/ if present
+          TAG="${TAG#refs/tags/}"
+
+          echo "Target Run ID: $RUN_ID"
+          echo "Target Tag:    $TAG"
+
+          # Verify that TAG is a git tag (skip if build was just a branch push)
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && ! gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::notice ::Target '$TAG' is not a git tag. Release publishing skipped."
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_tag=true" >> "$GITHUB_OUTPUT"
+
+      # Download whole archives (uploaded with archive: false)
+      - name: Download whole archives
+        if: steps.target.outputs.is_tag == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: fox-reader-*
+          path: artifacts/
+          merge-multiple: true
+          skip-decompress: true
+          run-id: ${{ steps.target.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Download split parts (uploaded as wrapped artifacts, unwrap them)
+      - name: Download split parts
+        if: steps.target.outputs.is_tag == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: parts-*
+          path: artifacts/
+          merge-multiple: true
+          run-id: ${{ steps.target.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List downloaded artifacts
+        if: steps.target.outputs.is_tag == 'true'
+        run: ls -lh artifacts/
+
+      # One manifest over everything that is about to be attached.
+      - name: Write SHA256SUMS.txt
+        if: steps.target.outputs.is_tag == 'true'
+        working-directory: artifacts
+        run: |
+          for whole in $(ls fox-reader-*.001 2>/dev/null | sed 's/\.001$//'); do
+            echo "# $whole (rejoined)  $(cat "$whole".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)"
+          done > SHA256SUMS.txt
+          sha256sum fox-reader-* >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Prepare release notes
+        if: steps.target.outputs.is_tag == 'true'
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          cat << 'EOF' > release_body.md
+          ## What's new
+
+          - See release commit notes.
+
+          ## What to download
+
+          Pick the archive matching your OS and GPU, extract it anywhere,
+          and start `launcher` (`launcher.exe` on Windows).
+
+          | Your machine | Download |
+          |---|---|
+          | Windows or Linux, no NVIDIA GPU | the `cpu` archive for your OS (runs anywhere) |
+          | NVIDIA GPU | the `cuXXX` archive matching your card (`cu118` older, `cu126`/`cu129` current, `cu130` newest). CUDA builds need that CUDA driver installed |
+          | Only OCR/typesetting, no local translation | a build *without* `gguf` in its name (smaller, no translator backend) |
+          | Local GGUF translation models | a build *with* `gguf` in its name (bundled llama.cpp, no toolchain needed) |
+
+          Archive names read as
+          `fox-reader-v{version}-{device}[-gguf]-{platform}`:
+          `cpu` = PyTorch backend, `gguf` = translator backend included,
+          `windows-x64` = `.zip`, `linux-x64` = `.tar.gz`. Missing your
+          combination? Build it yourself with
+          [`packaging/build.md`](../blob/master/packaging/build.md).
+
+          ### Downloads in parts (`.001`, `.002`, …)
+
+          The larger CUDA builds are 3-4 GB, so those are split into ~1 GB parts.
+          If the download you want is listed as `….zip.001`, `….zip.002`, … then
+          **get every part** and join them back into one file first — they are not
+          separate archives and none of them opens on its own.
+
+          **Windows** (PowerShell or Command Prompt, in the download folder):
+
+          ```
+          cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002+… fox-reader-….zip"
+          ```
+
+          **Linux / macOS**:
+
+          ```
+          cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
+          ```
+
+          Then extract the joined file as usual and delete the parts.
+
+          ### Checking your download
+
+          `SHA256SUMS.txt` lists every file attached here. Verify with
+          `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
+          `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
+          split download, the `#` line naming the archive gives the digest of
+          the **joined** file, so you can check the result of the step above.
+
+          Every file is also covered by a signed GitHub build attestation —
+          proof it was produced by this repository's workflow from this tag:
+
+          ```
+          gh attestation verify <file> --repo ${{ github.repository }}
+          ```
+          EOF
+
+      - name: Ensure GitHub Release exists
+        if: steps.target.outputs.is_tag == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+          TITLE="Fox Reader v${TAG#v}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release '$TAG' already exists. Updating notes..."
+            gh release edit "$TAG" --title "$TITLE" -F release_body.md
+          else
+            echo "Creating release '$TAG'..."
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              -F release_body.md \
+              --verify-tag \
+              --generate-notes
+          fi
+
+      - name: Upload assets sequentially
+        if: steps.target.outputs.is_tag == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.target.outputs.tag }}"
+
+          shopt -s nullglob
+          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "Error: No release assets found to upload." >&2
+            exit 1
+          fi
+
+          echo "Found ${#files[@]} assets to upload."
+
+          for file in "${files[@]}"; do
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+            size=$(du -h "$file" | cut -f1)
+            echo "----------------------------------------------------"
+            echo "Uploading $filename ($size)..."
+
+            uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "$file" --clobber; then
+                echo "Successfully uploaded $filename"
+                uploaded=true
+                break
+              else
+                echo "Upload attempt $attempt failed for $filename. Retrying in 10s..."
+                sleep 10
+              fi
+            done
+
+            if [ "$uploaded" != "true" ]; then
+              echo "Error: Failed to upload $filename after 3 attempts." >&2
+              exit 1
+            fi
+          done
+
+          echo "===================================================="
+          echo "All release assets uploaded successfully."
