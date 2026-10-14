@@ -37,7 +37,7 @@ Usage::
     python packaging/build.py --deep-compile       # compile the dependencies too
     python packaging/build.py --skip-frontend      # reuse a built frontend/static
     python packaging/build.py --clean              # discard previous artifacts
-    python packaging/build.py --split-bin 1900     # cut the archive into 1900 MB parts
+    python packaging/build.py --split-bin 1000     # cut the archive into 1000 MB parts
 
 Either way ``dist/SHA256SUMS.txt`` is written beside the output, covering the
 files this build means to be uploaded -- the archive, or its parts.
@@ -2495,9 +2495,9 @@ def package_output(root: Path, version: str, device: str, gguf_device: str | Non
 # parts under that ceiling; `SHA256SUMS.txt` is written either way, because a
 # download worth attaching is a download worth being able to check.
 
-#: What `--split-bin` uses when it is given no number. Just under GitHub's 2 GiB
-#: asset ceiling, with room for the ceiling being 2 GiB rather than 2 GB.
-DEFAULT_SPLIT_MB = 1900
+#: What `--split-bin` uses when it is given no number. Defaults to 1000 MB (1 GB)
+#: parts for fast, reliable release uploads.
+DEFAULT_SPLIT_MB = 1000
 
 #: The checksum manifest, beside the files it covers. `sha256sum -c` reads this
 #: format directly, and ignores the `#` lines.

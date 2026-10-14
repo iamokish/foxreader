@@ -229,7 +229,7 @@ jobs:
           # stdout (which is what a CI log is) block-buffers print() while the
           # uv/Nuitka children stream past it, so the log reads backwards.
           PYTHONUNBUFFERED: "1"
-        run: python -u packaging/build.py --skip-frontend --split-bin 1900 --device ${{ matrix.device }} ${{ matrix.extra }}
+        run: python -u packaging/build.py --skip-frontend --split-bin 1000 --device ${{ matrix.device }} ${{ matrix.extra }}
 
       # Always reports, even when the build failed: a 0% hit rate on a warm
       # cache means the cache key or BASEDIR is wrong, which is worth knowing.
@@ -237,8 +237,8 @@ jobs:
         if: runner.os == 'Linux' && !cancelled()
         run: ccache --show-stats || true
 
-      # `--split-bin 1900` leaves either one archive (under GitHub's 2 GiB asset
-      # ceiling) or a set of `.001`/`.002`/... parts with the whole deleted. The
+      # `--split-bin 1000` leaves either one archive (under 1000 MB)
+      # or a set of `.001`/`.002`/... parts with the whole deleted. The
       # two cases upload differently -- see the two steps below -- so which one
       # happened is settled here, once, by looking at what is actually in dist/.
       - name: Inspect dist
@@ -300,131 +300,3 @@ jobs:
           name: parts-${{ matrix.name }}
           path: dist/fox-reader-*.[0-9][0-9][0-9]
           if-no-files-found: error
-
-  # ── Create GitHub Release ────────────────────────────────────────────────
-  # Runs on version tags only. Collects every archive the matrix uploaded --
-  # whichever variants are active -- and attaches them to one release with
-  # both Windows (.zip) and Linux (.tar.gz) builds, plus the parts of any
-  # build too large for a single asset and one SHA256SUMS.txt over the lot.
-  create-release:
-    needs: [build]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    permissions:
-      contents: write
-    steps:
-      # Two download steps, because the two upload shapes need opposite
-      # treatment. Whole archives went up with `archive: false` (the artifact IS
-      # the file): `.tar.gz` passes through as-is, but a `.zip` would be
-      # auto-extracted without `skip-decompress: true`.
-      - name: Download whole archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: fox-reader-*
-          path: artifacts/
-          merge-multiple: true
-          skip-decompress: true
-
-      # Parts went up as ordinary wrapped artifacts (`archive: false` takes only
-      # one file), so these DO need decompressing -- that unwraps the artifact
-      # and leaves the `.001`/`.002`/... files in artifacts/.
-      - name: Download split parts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: parts-*
-          path: artifacts/
-          merge-multiple: true
-
-      - name: List downloaded artifacts
-        run: ls -l artifacts/
-
-      # One manifest over everything that is about to be attached. Recomputed
-      # here rather than collected from the jobs: each job's dist/SHA256SUMS.txt
-      # covers only its own variant and they would all arrive under the same
-      # name. Lines for the *parts* are what `sha256sum -c` checks; the comment
-      # lines carry the digest of each rejoined archive, which does not exist as
-      # a file and which coreutils therefore skips.
-      - name: Write SHA256SUMS.txt
-        working-directory: artifacts
-        run: |
-          for whole in $(ls fox-reader-*.001 2>/dev/null | sed 's/\.001$//'); do
-            echo "# $whole (rejoined)  $(cat "$whole".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)"
-          done > SHA256SUMS.txt
-          sha256sum fox-reader-* >> SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      # Release title and description live here. Before tagging a release,
-      # edit the "What's new" list below to say what the update added --
-      # everything else (title, download table) stays correct as-is.
-      - name: Create release
-        uses: softprops/action-gh-release@v3
-        with:
-          name: Fox Reader v${{ github.ref_name }}
-          files: |
-            artifacts/fox-reader-*-windows-x64.zip
-            artifacts/fox-reader-*-linux-x64.tar.gz
-            artifacts/fox-reader-*.[0-9][0-9][0-9]
-            artifacts/SHA256SUMS.txt
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          body: |
-            ## What's new
-
-            - TODO: Notes.
-
-            ## What to download
-
-            Pick the archive matching your OS and GPU, extract it anywhere,
-            and start `launcher` (`launcher.exe` on Windows).
-
-            | Your machine | Download |
-            |---|---|
-            | Windows or Linux, no NVIDIA GPU | the `cpu` archive for your OS (runs anywhere) |
-            | NVIDIA GPU | the `cuXXX` archive matching your card (`cu118` older, `cu126`/`cu129` current, `cu130` newest). CUDA builds need that CUDA driver installed |
-            | Only OCR/typesetting, no local translation | a build *without* `gguf` in its name (smaller, no translator backend) |
-            | Local GGUF translation models | a build *with* `gguf` in its name (bundled llama.cpp, no toolchain needed) |
-
-            Archive names read as
-            `fox-reader-v{version}-{device}[-gguf]-{platform}`:
-            `cpu` = PyTorch backend, `gguf` = translator backend included,
-            `windows-x64` = `.zip`, `linux-x64` = `.tar.gz`. Missing your
-            combination? Build it yourself with
-            [`packaging/build.md`](../blob/master/packaging/build.md).
-
-            ### Downloads in parts (`.001`, `.002`, …)
-
-            GitHub refuses a release file over 2 GB, and the larger CUDA builds
-            are 3-4 GB, so those are split. If the download you want is listed
-            as `….zip.001`, `….zip.002`, … then **get every part** and join
-            them back into one file first — they are not separate archives and
-            none of them opens on its own.
-
-            **Windows** (PowerShell or Command Prompt, in the download folder):
-
-            ```
-            cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002 fox-reader-….zip"
-            ```
-
-            **Linux / macOS**:
-
-            ```
-            cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
-            ```
-
-            Then extract the joined file as usual and delete the parts.
-
-            ### Checking your download
-
-            `SHA256SUMS.txt` lists every file attached here. Verify with
-            `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
-            `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
-            split download, the `#` line naming the archive gives the digest of
-            the **joined** file, so you can check the result of the step above.
-
-            Every file is also covered by a signed GitHub build attestation —
-            proof it was produced by this repository's workflow from this tag:
-
-            ```
-            gh attestation verify <file> --repo ${{ github.repository }}
-            ```
