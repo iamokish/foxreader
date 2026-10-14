@@ -8,7 +8,7 @@ import {
     renderCurrentPageEntries,
     resortPageEntries,
 } from "./entries";
-import { MAX_FONT_SCALE, MAX_TEXT_ANGLE, MIN_LINE_SPACING, PLAIN_GEOMETRY, state } from "./state";
+import { MAX_FONT_SCALE, MAX_TEXT_ANGLE, MIN_LINE_SPACING, PLAIN_GEOMETRY, UNMEASURED, state } from "./state";
 import type { Entry } from "./state";
 import type { Region } from "./types";
 import * as api from "./api";
@@ -360,5 +360,119 @@ describe("typesetting geometry", () => {
         expect(item.font_scale_x).toBe(MAX_FONT_SCALE);
         expect(item.angle_z).toBe(MAX_TEXT_ANGLE);
         expect(item.line_spacing).toBe(MIN_LINE_SPACING);
+    });
+});
+
+describe("the colours the OCR step measured", () => {
+    const MEASURED = { font_color: "#f2f2f0", stroke_color: "#101010", bg_color: "#1b1b1e" };
+
+    const measurementsOf = (entry: Entry) => ({
+        detected_font_color: entry.detected_font_color,
+        detected_stroke_color: entry.detected_stroke_color,
+        detected_bg: entry.detected_bg,
+    });
+
+    beforeEach(() => {
+        state.pageEntriesCache = {};
+        state.currentImageFile = "p.png";
+        state.lastCapturedRegion = REGION;
+        state.lastCapturedColors = null;
+        state.currentTrackingColorIdx = 0;
+        document.body.innerHTML = "";
+    });
+
+    it("starts a bubble sweep unmeasured", () => {
+        // The detector finds regions; nobody has read them, so there is nothing
+        // to know about their colours yet.
+        addNewEntries([rectRegion(10, 10)]);
+        expect(measurementsOf(saved()[0])).toEqual({ ...UNMEASURED });
+    });
+
+    it("attaches the capture's colours when it is confirmed", () => {
+        state.lastCapturedColors = MEASURED;
+        editor("panel translated", "Hello");
+        confirmCurrentTranslation();
+
+        expect(measurementsOf(saved()[0])).toEqual({
+            detected_font_color: "#f2f2f0",
+            detected_stroke_color: "#101010",
+            detected_bg: "#1b1b1e",
+        });
+    });
+
+    it("does not attach them to regions nobody read", () => {
+        // A bubble sweep running while an unrelated capture is still in the
+        // editor must not have the sweep's regions claim that capture's colours.
+        state.lastCapturedColors = MEASURED;
+        addNewEntries([rectRegion(120, 10)]);
+        expect(measurementsOf(saved()[0])).toEqual({ ...UNMEASURED });
+    });
+
+    it("refreshes them when the same region is confirmed again", () => {
+        state.lastCapturedColors = MEASURED;
+        editor("panel translated", "Hello");
+        confirmCurrentTranslation();
+
+        state.lastCapturedColors = { font_color: "#000000", stroke_color: null, bg_color: "#ffffff" };
+        confirmCurrentTranslation();
+
+        expect(measurementsOf(saved()[0])).toEqual({
+            detected_font_color: "#000000",
+            detected_stroke_color: null,
+            detected_bg: "#ffffff",
+        });
+    });
+
+    it("hands a split piece its source's colours", () => {
+        // The pieces are parts of the bubble that was read, so the reading holds.
+        state.lastCapturedColors = MEASURED;
+        editor("panel translated", "Hello");
+        confirmCurrentTranslation();
+        const source = saved()[0];
+
+        addNewEntries([rectRegion(8, 10), rectRegion(30, 10)], false, source);
+        const pieces = saved().filter((entry) => entry.id !== source.id);
+        expect(pieces).toHaveLength(2);
+        for (const piece of pieces) expect(measurementsOf(piece)).toEqual(measurementsOf(source));
+    });
+
+    it("normalises and rejects what it is handed", () => {
+        // They come off the wire, and a project may have been written by a build
+        // that stored something else. Short hex is expanded so comparing against
+        // a palette swatch stays a string compare; anything unreadable is null,
+        // which both renderers read as "work it out the old way".
+        state.lastCapturedColors = {
+            font_color: "#F0C",
+            stroke_color: "not a colour",
+            bg_color: null,
+        } as unknown as typeof MEASURED;
+        editor("panel translated", "Hello");
+        confirmCurrentTranslation();
+
+        expect(measurementsOf(saved()[0])).toEqual({
+            detected_font_color: "#ff00cc",
+            detected_stroke_color: null,
+            detected_bg: null,
+        });
+    });
+
+    it("sends them with every item, under the backend's field names", async () => {
+        state.lastCapturedColors = MEASURED;
+        editor("panel translated", "Hello");
+        confirmCurrentTranslation();
+        addNewEntries([rectRegion(200, 10)]);
+
+        await executeInpaintAction("preview");
+        const payload = vi.mocked(runInpaint).mock.calls[0][1].buildPayload();
+
+        expect(payload?.data).toHaveLength(2);
+        expect(measurementsOf(payload!.data[0] as unknown as Entry)).toEqual({
+            detected_font_color: "#f2f2f0",
+            detected_stroke_color: "#101010",
+            detected_bg: "#1b1b1e",
+        });
+        // An unmeasured entry still carries the three fields, null: the backend
+        // reads them off every item rather than guessing at a missing one.
+        expect(measurementsOf(payload!.data[1] as unknown as Entry)).toEqual({ ...UNMEASURED });
     });
 });

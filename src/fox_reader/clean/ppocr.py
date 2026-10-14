@@ -59,13 +59,36 @@ def _as_rgb(bgr: np.ndarray) -> np.ndarray:
 
 def boxes(detector: Any, bgr: np.ndarray,
           **kw: Any) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(polys, scores)`` -- an ``(N, 4, 2)`` float array and ``(N,)``."""
+    """Return ``(polys, scores)`` -- an ``(N, 4, 2)`` float array and ``(N,)``.
+
+    Takes BGR, because that is what the clean chain carries a page around as.
+    Callers that already hold RGB should use :func:`boxes_rgb` instead rather
+    than converting twice for nothing.
+    """
+    return boxes_rgb(detector, _as_rgb(bgr), **kw)
+
+
+def boxes_rgb(detector: Any, rgb: Any,
+              **kw: Any) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`boxes`, for an image already in the order the detector wants.
+
+    The detector has always been fed RGB -- see :func:`_as_rgb` above, and
+    `PaddleOCRWrapper._preprocess`, which hands it `np.array(img.convert("RGB"))`.
+    This is the same call with the conversion left out, so a caller that already
+    holds RGB (the colour read in :mod:`fox_reader.services.ocr_service`) does
+    not pay an RGB->BGR->RGB round trip -- two full-frame copies on a page-sized
+    freeform selection.
+
+    ``rgb`` is passed to the model untouched, so it may be either of the things
+    `fox_reader.ocr_predict._as_pil` accepts: an RGB ndarray, or a PIL image.
+    A PIL crop is the cheapest of all, since that is what the detector's own
+    preprocessing wants and it would otherwise rebuild one from the array.
+    """
     if detector is None:
         raise DetectorUnavailable(
             "the OCR detector is not loaded, so PaddleOCR text clean is "
             "unavailable")
     opts = {k: v for k, v in kw.items() if k in _PREDICT_KEYS and v is not None}
-    rgb = _as_rgb(bgr)
     t0 = time.time()
     try:
         result = detector.predict(rgb, **opts) if opts else detector.predict(rgb)

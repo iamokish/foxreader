@@ -17,7 +17,7 @@ import type { Mock } from "vitest";
 import { buildEntryShape, collectPlacedBadges, planNumberBadges } from "./shapes";
 import { resetPerspectiveCache, resetTextMetrics, supportsPerspective, tiltStyle } from "./textFit";
 import { runSplit } from "./split";
-import { PLAIN_GEOMETRY, state } from "../state";
+import { PLAIN_GEOMETRY, UNMEASURED, state } from "../state";
 import type { Entry } from "../state";
 import { defaultCleanOptions } from "../entryOptions";
 import { splitCapture } from "../ocr";
@@ -62,6 +62,7 @@ function makeEntry(over: Partial<Entry> = {}): Entry {
         bg_color: null,
         clean: defaultCleanOptions(),
         ...PLAIN_GEOMETRY,
+        ...UNMEASURED,
         ...over,
     };
 }
@@ -527,5 +528,118 @@ describe("the typesetting geometry on the preview", () => {
         const plain = shapeOf(textEntry({ text: "one two three four five six" })).text;
         const wide = shapeOf(textEntry({ id: "w", text: "one two three four five six", font_scale_x: 2 })).text;
         expect(wide.querySelectorAll("tspan").length).toBeGreaterThan(plain.querySelectorAll("tspan").length);
+    });
+});
+
+describe("the colours on the preview", () => {
+    let metrics: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+        state.isLiveInpaintedEnabled = true;
+        // Same fiction as the geometry block above: jsdom measures every token
+        // at zero, which collapses the fit and leaves no text node to inspect.
+        metrics = Object.getOwnPropertyDescriptor(SVGElement.prototype, "getComputedTextLength");
+        Object.defineProperty(SVGElement.prototype, "getComputedTextLength", {
+            configurable: true,
+            value(this: SVGElement): number {
+                return (this.textContent || "").length * 40;
+            },
+        });
+        resetTextMetrics();
+    });
+
+    afterEach(() => {
+        if (metrics) Object.defineProperty(SVGElement.prototype, "getComputedTextLength", metrics);
+        else delete (SVGElement.prototype as unknown as Record<string, unknown>).getComputedTextLength;
+        resetTextMetrics();
+    });
+
+    function drawn(over: Partial<Entry> = {}): { fill: string | null; stroke: string | null; plate: string | null } {
+        const group = buildEntryShape(
+            makeEntry({
+                text: "Hello there",
+                region: { type: "rectangle", coords: { x: 20, y: 20, w: 360, h: 260 } },
+                ...over,
+            }),
+            makeOverlay(),
+            noopHandlers,
+        )!;
+        const text = group.querySelector(".entry-text") as SVGTextElement;
+        expect(text).not.toBeNull();
+        return {
+            fill: text.getAttribute("fill"),
+            stroke: text.getAttribute("stroke"),
+            plate: group.querySelector(".entry-plate")?.getAttribute("fill") ?? null,
+        };
+    }
+
+    it("falls back to the stand-ins for a region nobody has read", () => {
+        // What the overlay has always drawn, and what the backend works out for
+        // the same entry: a white plate, black text, outlined in the plate.
+        expect(drawn()).toEqual({ fill: "#000000", stroke: "#ffffff", plate: "#ffffff" });
+    });
+
+    it("draws what the OCR step measured instead", () => {
+        // The case the stand-ins got wrong: white lettering on a dark panel used
+        // to preview as black text on white.
+        expect(
+            drawn({
+                detected_font_color: "#ffffff",
+                detected_stroke_color: "#101010",
+                detected_bg: "#1b1b1e",
+            }),
+        ).toEqual({ fill: "#ffffff", stroke: "#101010", plate: "#1b1b1e" });
+    });
+
+    it("outlines in the measured plate when the lettering has no outline of its own", () => {
+        // `detected_stroke_color` is only sent for real outlines, so a null one
+        // has to keep meaning "the plate's colour" -- not "no outline".
+        const { stroke, plate } = drawn({ detected_font_color: "#101010", detected_bg: "#f6f1e7" });
+        expect(stroke).toBe("#f6f1e7");
+        expect(plate).toBe("#f6f1e7");
+    });
+
+    it("lets the user's own picks win over the measurements", () => {
+        const { fill, stroke } = drawn({
+            font_color: "#ff0000",
+            stroke_color: "#00ff00",
+            detected_font_color: "#ffffff",
+            detected_stroke_color: "#101010",
+        });
+        expect(fill).toBe("#ff0000");
+        expect(stroke).toBe("#00ff00");
+    });
+
+    it("drops a measurement that would vanish into an explicit plate", () => {
+        // White lettering measured on a dark panel, then set on a white plate the
+        // user chose. Mirrors `typeset._legible_on`, so the preview and the render
+        // reach the same answer.
+        const { fill, plate } = drawn({
+            bg_mode: "color",
+            bg_color: "#ffffff",
+            detected_font_color: "#fdfdfd",
+            detected_bg: "#1b1b1e",
+        });
+        expect(plate).toBe("#ffffff");
+        expect(fill).toBe("#000000");
+    });
+
+    it("keeps a measurement that still reads on the new plate", () => {
+        const { fill } = drawn({
+            bg_mode: "color",
+            bg_color: "#fffaf0",
+            detected_font_color: "#b21824",
+        });
+        expect(fill).toBe("#b21824");
+    });
+
+    it("paints no plate for a clean entry, measured or not", () => {
+        const { plate, fill } = drawn({
+            bg_mode: "clean",
+            detected_bg: "#1b1b1e",
+            detected_font_color: "#ffffff",
+        });
+        expect(plate).toBeNull();
+        expect(fill).toBe("#ffffff");
     });
 });

@@ -311,3 +311,133 @@ class TestFrozenSymbolSource:
         monkeypatch.setattr(assets, "symbol_font_bytes", lambda *a, **k: None)
 
         assert typeset._symbol_font_bytes() is None
+
+
+class TestEntryColours:
+    """The three tiers an ``auto`` colour resolves through.
+
+    The user's own pick wins; failing that, what the OCR step measured off the
+    artwork (:mod:`fox_reader.ocr_colors`); failing that, the rule that works
+    from the plate alone, which is all there was before the measurements
+    existed. The last tier has to keep behaving exactly as it did, because it is
+    what every entry nobody has OCR'd still renders through.
+    """
+
+    class Recorder:
+        """A draw surface that remembers the plate and the text colours."""
+
+        def __init__(self):
+            self.plate = None
+            self.text_calls = []
+
+        def polygon(self, _points, fill=None):
+            self.plate = fill
+
+        def text(self, _xy, _line, **kw):
+            self.text_calls.append(kw)
+
+        @property
+        def fill(self):
+            return self.text_calls[0]["fill"]
+
+        @property
+        def stroke(self):
+            return self.text_calls[0]["stroke_fill"]
+
+    @staticmethod
+    def _item(**over):
+        from fox_reader.models.requests import DataItem
+
+        fields = dict(
+            og_text="x", text="Hi", fontfile="", text_align="center",
+            points=[(0, 0), (80, 0), (80, 60), (0, 60)],
+        )
+        fields.update(over)
+        return DataItem(**fields)
+
+    def _render(self, item, plate_rgb=(255, 255, 255)):
+        from PIL import Image
+
+        from fox_reader.typeset import _draw_entry
+
+        img = Image.new("RGBA", (80, 60), (*plate_rgb, 255))
+        recorder = self.Recorder()
+        _draw_entry(img, recorder, item)
+        assert recorder.text_calls, "nothing was drawn, so no colours were chosen"
+        return recorder
+
+    def test_without_measurements_the_old_rule_still_decides(self):
+        """White paper, so black text outlined in the paper's own colour."""
+        drawn = self._render(self._item())
+        assert drawn.fill == (0, 0, 0, 255)
+        assert drawn.stroke == (255, 255, 255, 255)
+
+    def test_a_measurement_beats_the_old_rule(self):
+        """The whole point: white lettering measured on a dark panel is set in
+        white, where the plate-and-contrast rule would have made it black."""
+        drawn = self._render(
+            self._item(detected_font_color="#ffffff",
+                       detected_stroke_color="#101010",
+                       detected_bg="#1b1b1e"),
+        )
+        assert drawn.fill == (255, 255, 255, 255)
+        assert drawn.stroke == (16, 16, 16, 255)
+        assert drawn.plate == (27, 27, 30, 255), "the measured plate was not painted"
+
+    def test_the_users_own_pick_beats_a_measurement(self):
+        drawn = self._render(
+            self._item(font_color="#ff0000", stroke_color="#00ff00",
+                       detected_font_color="#ffffff",
+                       detected_stroke_color="#101010"),
+        )
+        assert drawn.fill == (255, 0, 0, 255)
+        assert drawn.stroke == (0, 255, 0, 255)
+
+    def test_a_measurement_that_would_vanish_is_dropped(self):
+        """White lettering measured on a dark panel, then set on a white plate
+        the user chose. Keeping the measurement would draw white on white."""
+        drawn = self._render(
+            self._item(bg_mode="color", bg_color="#ffffff",
+                       detected_font_color="#fdfdfd",
+                       detected_bg="#1b1b1e"),
+        )
+        assert drawn.fill == (0, 0, 0, 255), "white-on-white survived the guard"
+        assert drawn.plate == (255, 255, 255, 255)
+
+    def test_a_measurement_that_still_reads_survives_a_new_plate(self):
+        """The guard is about legibility, not about the plate having changed: red
+        ink measured off the artwork still reads on a pale plate, so it stays."""
+        drawn = self._render(
+            self._item(bg_mode="color", bg_color="#fffaf0",
+                       detected_font_color="#b21824"),
+        )
+        assert drawn.fill == (178, 24, 36, 255)
+
+    @pytest.mark.parametrize("bad", ["", "   ", "auto", "not-a-colour", "#12345"])
+    def test_an_unreadable_measurement_falls_through(self, bad):
+        """They arrive over the wire, so they can be anything. An unreadable one
+        has to degrade to the old rule rather than fail the entry."""
+        drawn = self._render(
+            self._item(detected_font_color=bad, detected_stroke_color=bad,
+                       detected_bg=bad),
+        )
+        assert drawn.fill == (0, 0, 0, 255)
+        assert drawn.stroke == (255, 255, 255, 255)
+
+    def test_a_measured_plate_is_not_painted_over_a_clean(self):
+        """`clean` repaints the artwork and deliberately paints no plate. A
+        measured background must not reintroduce one."""
+        drawn = self._render(
+            self._item(bg_mode="clean", detected_bg="#1b1b1e",
+                       detected_font_color="#ffffff"),
+        )
+        assert drawn.plate is None
+        # The plate for contrast purposes is still the measured background, so
+        # the lettering is set as it was measured.
+        assert drawn.fill == (255, 255, 255, 255)
+
+    def test_a_transparent_measurement_cannot_hide_the_text(self):
+        """A pick may legitimately be transparent; a measurement never is, so one
+        that arrives that way is a bad hint rather than an instruction."""
+        drawn = self._render(self._item(detected_font_color="#00000000"))
+        assert drawn.fill == (0, 0, 0, 255)

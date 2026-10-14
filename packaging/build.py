@@ -37,6 +37,10 @@ Usage::
     python packaging/build.py --deep-compile       # compile the dependencies too
     python packaging/build.py --skip-frontend      # reuse a built frontend/static
     python packaging/build.py --clean              # discard previous artifacts
+    python packaging/build.py --split-bin 1900     # cut the archive into 1900 MB parts
+
+Either way ``dist/SHA256SUMS.txt`` is written beside the output, covering the
+files this build means to be uploaded -- the archive, or its parts.
 """
 from __future__ import annotations
 
@@ -105,7 +109,7 @@ STAGE_NAME = "fox-reader"
 OS_ENV = os.environ.copy()
 OS_ENV["UV_PROJECT_ENVIRONMENT"] = str(VENV_DIR)
 
-TOTAL_STEPS = 14
+TOTAL_STEPS = 15
 _step = 0
 
 
@@ -2485,6 +2489,219 @@ def package_output(root: Path, version: str, device: str, gguf_device: str | Non
     return archive
 
 
+# ── Release files: parts, and what they hash to ───────────────────────────────
+# GitHub refuses a release asset over 2 GiB, and a CUDA build with the GGUF
+# backend in it is three to four. `--split-bin` cuts the finished archive into
+# parts under that ceiling; `SHA256SUMS.txt` is written either way, because a
+# download worth attaching is a download worth being able to check.
+
+#: What `--split-bin` uses when it is given no number. Just under GitHub's 2 GiB
+#: asset ceiling, with room for the ceiling being 2 GiB rather than 2 GB.
+DEFAULT_SPLIT_MB = 1900
+
+#: The checksum manifest, beside the files it covers. `sha256sum -c` reads this
+#: format directly, and ignores the `#` lines.
+CHECKSUM_NAME = "SHA256SUMS.txt"
+
+#: Read size for hashing and splitting. A build's archive is gigabytes and the
+#: machine has just finished a Nuitka compile, so neither one slurps a file.
+_IO_CHUNK = 8 * 1024 * 1024
+
+#: Width of a part's suffix: `.001`, `.002`, ... Three digits sorts correctly in
+#: any listing up to 999 parts, which at the smallest sane part size is far more
+#: than anything this builds.
+_PART_DIGITS = 3
+
+
+def _part_paths(archive: Path) -> list[Path]:
+    """Existing parts of ``archive``, in order."""
+    return sorted(archive.parent.glob(f"{archive.name}.[0-9]" + "[0-9]" * (_PART_DIGITS - 1)))
+
+
+def split_archive(archive: Path, part_mb: float) -> tuple[list[Path], str]:
+    """Cut ``archive`` into parts of at most ``part_mb`` MiB.
+
+    Answers ``(parts, digest)`` -- the parts in order and the whole archive's
+    SHA-256, which is computed in the same pass that writes them, so the
+    gigabytes are read once rather than once per job. ``([], digest)`` means the
+    archive was already small enough and has not been touched.
+
+    The original is removed only after every part is on disk: a failure part way
+    through leaves the archive intact and takes the half-written parts with it,
+    because a build whose output is a partial set of parts has silently produced
+    nothing. Removing it on success is the point -- the release globs would
+    otherwise match both the parts and the whole, and GitHub would reject the
+    whole for being over the limit while the parts uploaded fine.
+    """
+    import hashlib
+
+    # Rounded down to whole bytes: `read` takes no float, and a fractional part
+    # size is only ever a caller driving the arithmetic backwards (the tests do).
+    limit = int(part_mb * 1024 * 1024)
+    if limit < 1:
+        raise BuildError(f"a part size of {part_mb} MB rounds to {limit} bytes")
+    total = archive.stat().st_size
+    digest = hashlib.sha256()
+
+    if total <= limit:
+        # Still hashed, for the manifest. One pass, and nothing is moved.
+        with archive.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(_IO_CHUNK), b""):
+                digest.update(chunk)
+        return [], digest.hexdigest()
+
+    # A rebuild must not leave a longer previous run's tail standing beside a
+    # shorter new one, which would rejoin into garbage.
+    for stale in _part_paths(archive):
+        stale.unlink(missing_ok=True)
+
+    parts: list[Path] = []
+    try:
+        with archive.open("rb") as source:
+            while True:
+                part = archive.with_name(f"{archive.name}.{len(parts) + 1:0{_PART_DIGITS}d}")
+                written = 0
+                with part.open("wb") as sink:
+                    while written < limit:
+                        chunk = source.read(min(_IO_CHUNK, limit - written))
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        sink.write(chunk)
+                        written += len(chunk)
+                if not written:
+                    # The archive divided exactly; the file just opened is empty.
+                    part.unlink(missing_ok=True)
+                    break
+                parts.append(part)
+                if written < limit:
+                    break
+    except OSError as exc:
+        for part in parts:
+            part.unlink(missing_ok=True)
+        raise BuildError(
+            f"could not split {archive.name}: {exc}\n"
+            "  The archive itself is untouched, so it can be uploaded by hand or "
+            "the build re-run."
+        ) from exc
+
+    archive.unlink()
+    return parts, digest.hexdigest()
+
+
+#: How the digest of a *rejoined* archive is recorded. It cannot be an ordinary
+#: line: the archive is not on disk once it has been split, and `sha256sum -c`
+#: would report it missing. It is the digest a person wants after putting the
+#: parts back together, though, so it goes in as a comment -- which GNU
+#: coreutils skips -- keyed by the archive's name so a rebuild can replace it.
+_REJOINED_NOTE = "# {name} (rejoined)  {digest}"
+_REJOINED_RE = re.compile(r"^#\s*(?P<name>\S+)\s+\(rejoined\)\s+(?P<digest>[0-9a-f]{64})\s*$")
+
+
+def write_checksums(entries: list[tuple[str, str]],
+                    rejoined: tuple[str, str] | None = None) -> Path:
+    """Write ``dist/SHA256SUMS.txt``, keeping what other builds put there.
+
+    ``entries`` are ``(digest, filename)`` for the files this build produced,
+    and ``rejoined`` the ``(archive name, digest)`` of a split archive's whole.
+    Lines naming a file that is no longer in ``dist/`` are dropped and lines this
+    build re-made are replaced; everything else is kept, because ``dist/`` holds
+    one archive per variant and each build only knows about its own. Sorted, so
+    two builds in either order produce the same file.
+    """
+    manifest = DIST_DIR / CHECKSUM_NAME
+    mine = {name: digest for digest, name in entries}
+    files: dict[str, str] = {}
+    notes: dict[str, str] = {}
+
+    if manifest.is_file():
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            note = _REJOINED_RE.match(stripped)
+            if note:
+                # Kept only while that archive's parts are still here: the note
+                # is the only record of a file that does not exist, so nothing
+                # else would ever clean it up.
+                name = note["name"]
+                if _part_paths(DIST_DIR / name):
+                    notes[name] = note["digest"]
+                continue
+            if stripped.startswith("#"):
+                continue
+            digest, _, name = stripped.partition("  ")
+            name = name.strip()
+            if name and name not in mine and (DIST_DIR / name).is_file():
+                files[name] = digest
+
+    files.update(mine)
+    if rejoined is not None:
+        notes[rejoined[0]] = rejoined[1]
+    else:
+        # This build produced the archive whole, so any note about splitting it
+        # is from a previous run and is now a lie.
+        for name in mine:
+            notes.pop(name, None)
+
+    lines = [_REJOINED_NOTE.format(name=name, digest=notes[name]) for name in sorted(notes)]
+    lines += [f"{files[name]}  {name}" for name in sorted(files)]
+    # `newline="\n"` rather than the platform default: on Windows the default
+    # turns every `\n` into `\r\n`, and `sha256sum -c` then reads the carriage
+    # return as part of the filename ("No such file or directory" on a download
+    # that is perfectly good). It also keeps the manifest byte-identical
+    # whichever runner built it.
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return manifest
+
+
+def _rejoin_hint(parts: list[Path]) -> str:
+    """How a person turns the parts back into the archive, on their own OS.
+
+    Concatenation, not an archiver: the parts are the archive's own bytes cut at
+    fixed offsets, so no tool beyond the shell is needed at either end.
+    """
+    whole = parts[0].name.rsplit(".", 1)[0]
+    if _platform_tag() == "windows-x64":
+        # `copy /b` is cmd's, and takes no spaces around the `+`. Reached the
+        # same way from PowerShell, which is what a Windows user is likely in.
+        return f'cmd /c "copy /b {"+".join(part.name for part in parts)} {whole}"'
+    return f"cat {whole}.* > {whole}"
+
+
+def finalize_release_files(archive: Path, split_mb: float | None) -> list[Path]:
+    """Split the archive if asked, then write the checksum manifest.
+
+    One step whether or not anything is split, so the progress counter does not
+    depend on a flag. Answers the files that are now meant to be uploaded.
+    """
+    step("Checksums...")
+
+    parts, whole_digest = (split_archive(archive, split_mb) if split_mb
+                           else ([], _hash_file(archive)))
+
+    if not parts:
+        files = [archive]
+        rejoined = None
+        digests = [(whole_digest, archive.name)]
+        if split_mb:
+            print(f"      {archive.name} is under {split_mb} MB; left whole.")
+    else:
+        files = parts
+        rejoined = (archive.name, whole_digest)
+        digests = [(_hash_file(part), part.name) for part in parts]
+        total_mb = sum(part.stat().st_size for part in parts) / (1024 * 1024)
+        print(f"      Split into {len(parts)} parts of at most {split_mb} MB "
+              f"({total_mb:.1f} MB total):")
+        for part in parts:
+            print(f"        {part.name}  ({part.stat().st_size / (1024 * 1024):.1f} MB)")
+        print(f"      Rejoin with:  {_rejoin_hint(parts)}")
+
+    manifest = write_checksums(digests, rejoined)
+    print(f"      {manifest.name}: {len(digests)} file(s)\n")
+    return files
+
+
 def cleanup(keep_venv: bool) -> None:
     """Remove the build venv. Nuitka's caches stay, so a rebuild is cheaper."""
     step("Cleaning up...")
@@ -2531,6 +2748,20 @@ def main() -> int:
         default="cpu",
         help="torch backend to bundle (default: cpu)",
     )
+    parser.add_argument(
+        "--split-bin",
+        nargs="?",
+        type=int,
+        const=DEFAULT_SPLIT_MB,
+        default=None,
+        metavar="MB",
+        help=f"split the finished archive into parts of at most MB megabytes "
+             f"(default {DEFAULT_SPLIT_MB} when the flag is given without a number), "
+             f"for release hosts that refuse a larger file. An archive already "
+             f"under the limit is left exactly as it is. The parts are named "
+             f"<archive>.001, .002, ... and the whole is deleted, so nothing "
+             f"over the limit is left to upload",
+    )
 
     gguf = parser.add_argument_group(
         "GGUF backend (llama-cpp-python)",
@@ -2559,6 +2790,12 @@ def main() -> int:
                       help="override the ROCm GPU targets, e.g. 'gfx1100;gfx1030'")
 
     args = parser.parse_args()
+
+    # A part size of zero or less would loop forever writing empty parts, and one
+    # of a few megabytes would produce hundreds of release assets. Checked here
+    # rather than at the split, which happens after an hour of compiling.
+    if args.split_bin is not None and args.split_bin < 1:
+        parser.error("--split-bin takes a size in megabytes, so at least 1")
 
     # Checked here rather than at the step that uses it: `--gguf-device cu125`
     # should be rejected in the first second, not after the frontend build and a
@@ -2596,6 +2833,7 @@ def main() -> int:
     print(f"BLAS:      {blas_mode}")
     print(f"Scope:     {'everything (--deep-compile)' if args.deep_compile else 'fox_reader + entry'}")
     print(f"Archive:   {archive_stem(version, args.device, gguf_device, platform_tag)}")
+    print(f"Split:     {'off (one archive)' if args.split_bin is None else f'parts of {args.split_bin} MB'}")
     print()
 
     if args.clean:
@@ -2633,10 +2871,13 @@ def main() -> int:
 
     root = stage_layout(dist, launcher)
     archive = package_output(root, version, args.device, gguf_device)
+    release_files = finalize_release_files(archive, args.split_bin)
     cleanup(args.keep_venv)
 
     print("=== Build Complete ===")
-    print(f"  {archive}")
+    for path in release_files:
+        print(f"  {path}")
+    print(f"  {DIST_DIR / CHECKSUM_NAME}")
     return 0
 
 

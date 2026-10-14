@@ -369,3 +369,93 @@ def test_a_project_that_stored_textseg_without_the_weights_is_left_alone(
     # inside the box would silently do something the user did not ask for.
     assert out is page
     assert plan.notes and "Text Seg" in plan.notes[0]
+
+
+class TestDetectorColourSpace:
+    """``ppocr.boxes`` takes BGR; ``ppocr.boxes_rgb`` takes what the detector
+    actually wants.
+
+    The detector has always been fed RGB -- ``boxes`` converted, and
+    ``PaddleOCRWrapper.predict`` hands it ``np.array(img.convert("RGB"))``
+    directly. Splitting the conversion out lets the colour read in
+    ``OCRService._vl_boxes`` pass its RGB crop straight through instead of
+    paying an RGB->BGR->RGB round trip, which on a page-sized freeform
+    selection is two full-frame copies. These pin the one thing that refactor
+    could have broken: both doors still put RGB in front of the model, and both
+    normalise its answer the same way.
+    """
+
+    class Recorder:
+        def __init__(self, result):
+            self.seen = []
+            self._result = result
+
+        def predict(self, image, **kw):
+            # The object itself, not a copy: one case asserts a PIL crop reaches
+            # the model untouched. Nothing downstream mutates it.
+            self.seen.append(image)
+            return self._result
+
+    #: A picture whose channels cannot be confused: pure red in RGB terms.
+    @staticmethod
+    def _red_rgb() -> np.ndarray:
+        field = np.zeros((8, 8, 3), np.uint8)
+        field[:, :, 0] = 255
+        return field
+
+    @staticmethod
+    def _answer():
+        return [{"dt_polys": [[[1, 2], [5, 2], [5, 6], [1, 6]]], "dt_scores": [0.8]}]
+
+    def test_both_doors_hand_the_model_rgb(self):
+        from fox_reader.clean import ppocr
+
+        rgb = self._red_rgb()
+        bgr = rgb[:, :, ::-1].copy()
+
+        direct = self.Recorder(self._answer())
+        converted = self.Recorder(self._answer())
+        ppocr.boxes_rgb(direct, rgb)
+        ppocr.boxes(converted, bgr)
+
+        assert np.array_equal(direct.seen[0], converted.seen[0]), \
+            "the two entry points disagree about which channel order the model gets"
+        # And it really is RGB, not whatever was passed in: red in channel 0.
+        assert converted.seen[0][0, 0].tolist() == [255, 0, 0]
+
+    def test_both_doors_normalise_the_answer_the_same_way(self):
+        from fox_reader.clean import ppocr
+
+        rgb = self._red_rgb()
+        polys_a, scores_a = ppocr.boxes_rgb(self.Recorder(self._answer()), rgb)
+        polys_b, scores_b = ppocr.boxes(self.Recorder(self._answer()),
+                                        rgb[:, :, ::-1].copy())
+
+        assert polys_a.shape == polys_b.shape == (1, 4, 2)
+        assert np.array_equal(polys_a, polys_b)
+        assert np.array_equal(scores_a, scores_b)
+
+    def test_neither_door_accepts_a_missing_detector(self):
+        from fox_reader.clean import ppocr
+
+        for call in (lambda: ppocr.boxes(None, self._red_rgb()),
+                     lambda: ppocr.boxes_rgb(None, self._red_rgb())):
+            with pytest.raises(ppocr.DetectorUnavailable):
+                call()
+
+    def test_boxes_rgb_hands_a_pil_crop_straight_to_the_model(self):
+        """The detector's own preprocessing wants a PIL image
+        (``ocr_predict._as_pil``), so the OCR service passes its crop through
+        rather than converting to an array that would be rebuilt on the other
+        side. Nothing in here may touch the image, or that saving is undone."""
+        from PIL import Image
+
+        from fox_reader.clean import ppocr
+
+        crop = Image.new("RGB", (8, 6), (10, 20, 30))
+        recorder = self.Recorder(self._answer())
+
+        polys, _ = ppocr.boxes_rgb(recorder, crop)
+
+        assert recorder.seen[0] is crop
+        assert polys.shape == (1, 4, 2)

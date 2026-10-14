@@ -145,6 +145,7 @@ export async function startCapture(): Promise<void> {
                 type: "rectangle",
                 coords: { x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height },
             };
+            state.lastCapturedColors = null;
             selector.style.display = "none";
 
             if (cropData.width < 5 || cropData.height < 5) return;
@@ -154,6 +155,9 @@ export async function startCapture(): Promise<void> {
                 const data = await api.ocrCrop(cropData);
                 const textArea = document.getElementById("textArea") as HTMLTextAreaElement | null;
                 if (textArea) textArea.value = data.text;
+                // Held for Confirm, which is what turns this region into an
+                // entry -- see `addNewEntries`.
+                state.lastCapturedColors = data.colors ?? null;
                 handleAutoTranslation();
             } catch {
                 showNotify("❌ OCR Failed");
@@ -285,6 +289,9 @@ export function splitCapture(): Promise<PolygonRegion | null> {
                 y: Math.round((p.y + canvasRect.top - imgRect.top) / state.zoomLevel),
             }));
             state.lastCapturedRegion = { type: "polygon", coords: realPoints };
+            // A cut, not a read: there are no colours for this shape, and the
+            // previous capture's must not be left standing for it.
+            state.lastCapturedColors = null;
             finish({ type: "polygon", coords: realPoints });
         };
     });
@@ -391,6 +398,7 @@ export async function startFreeCapture(): Promise<void> {
             });
 
             state.lastCapturedRegion = { type: "polygon", coords: realPoints };
+            state.lastCapturedColors = null;
             state.isCaptureMode = false;
             updateCursor();
             resumeRegionShapes();
@@ -405,6 +413,7 @@ export async function startFreeCapture(): Promise<void> {
                 });
                 const textArea = document.getElementById("textArea") as HTMLTextAreaElement | null;
                 if (textArea) textArea.value = data.text;
+                state.lastCapturedColors = data.colors ?? null;
                 handleAutoTranslation();
             } catch {
                 showNotify("❌ Freeform OCR Failed");

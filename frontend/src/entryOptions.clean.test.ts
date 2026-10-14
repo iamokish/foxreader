@@ -103,7 +103,7 @@ async function panelWith(methods: Method[] | null, over: Partial<Entry> = {}) {
     const options = await import("./entryOptions");
     // From the same fresh registry: the module under test reads this copy of
     // `state`, and a top-level import here would hold the previous one.
-    const { state, PLAIN_GEOMETRY } = await import("./state");
+    const { state, PLAIN_GEOMETRY, UNMEASURED } = await import("./state");
     state.currentFontsData = [
         { font_filename: "a.ttf", font_name: "Alpha", font_data_uri: "", font_format: "truetype" },
     ];
@@ -133,6 +133,7 @@ async function panelWith(methods: Method[] | null, over: Partial<Entry> = {}) {
         bg_color: null,
         clean: options.defaultCleanOptions(),
         ...PLAIN_GEOMETRY,
+        ...UNMEASURED,
         ...over,
     } as Entry;
 

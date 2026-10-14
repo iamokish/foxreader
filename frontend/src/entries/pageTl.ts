@@ -12,6 +12,7 @@ import { state } from "../state";
 import type { Entry } from "../state";
 import type { Point, RectangleCoords, TranslateEndpoint } from "../types";
 import * as api from "../api";
+import { applyDetectedColors } from "../entryOptions";
 import { hideLoading, showLoading, showNotify, updateLoadingText } from "../ui";
 import { beginCapture, endCapture, isCapturing } from "../ocr";
 import { buildTranslationCharacters, buildTranslationContext } from "../translationContext";
@@ -52,6 +53,12 @@ function blockedByML(): boolean {
     return !(document.getElementById("enableML") as HTMLInputElement | null)?.checked;
 }
 
+/**
+ * OCR one entry's region, storing the colours the read measured on it.
+ *
+ * The colours are a side effect on purpose: the caller is counting texts, and
+ * every entry it reads is one it owns and is about to re-render anyway.
+ */
 async function ocrEntry(entry: Entry, filename: string, lang: string): Promise<string> {
     if (entry.region.type === "polygon") {
         const data = await api.ocrFreeform({
@@ -60,6 +67,7 @@ async function ocrEntry(entry: Entry, filename: string, lang: string): Promise<s
             lang,
             isGrayScale: state.isGrayScaleEnabled,
         });
+        applyDetectedColors(entry, data.colors);
         return (data.text || "").trim();
     }
     const r = entry.region.coords as RectangleCoords;
@@ -72,6 +80,7 @@ async function ocrEntry(entry: Entry, filename: string, lang: string): Promise<s
         lang,
         isGrayScale: state.isGrayScaleEnabled,
     });
+    applyDetectedColors(entry, data.colors);
     return (data.text || "").trim();
 }
 

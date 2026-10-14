@@ -210,6 +210,7 @@ BACKEND = Domain(
         "test_models",
         "test_mtl_characters",
         "test_mtl_context",
+        "test_ocr_colors",
         "test_ocr_engine",
         "test_ocr_routes",
         "test_setup_downloads",

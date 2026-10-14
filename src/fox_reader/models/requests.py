@@ -4,14 +4,26 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 
-class FreeformRequest(BaseModel):
+class ColorReadingRequest(BaseModel):
+    """Shared by both OCR requests: whether to measure the region's colours.
+
+    On by default, so a client written before the colour read existed gets it
+    too -- the extra key in the response is additive, and the work is pixel
+    statistics over a crop that is already decoded and in memory. Callers that
+    only want text send ``false``.
+    """
+
+    colors: bool = True
+
+
+class FreeformRequest(ColorReadingRequest):
     filename: str
     points: list
     lang: str
     isGrayScale: bool
 
 
-class CropRequest(BaseModel):
+class CropRequest(ColorReadingRequest):
     filename: str
     x: int
     y: int
@@ -153,6 +165,18 @@ class DataItem(BaseModel):
     bg_mode: str = "auto"
     bg_color: str | None = None
     clean: CleanOptions | None = None
+
+    # What the OCR step measured off the artwork (see `fox_reader.ocr_colors`),
+    # as `#rrggbb`. Hints, not choices: the three fields above are the user's
+    # own picks and still win, and a hint that is absent or unreadable falls
+    # through to the detection in `fox_reader.typeset` that was there before.
+    #
+    # `detected_stroke_color` is only ever sent when the lettering really has an
+    # outline of its own; without one the typesetter's own rule (outline in the
+    # plate's colour) is already right, so there is nothing to hint.
+    detected_font_color: str | None = None
+    detected_stroke_color: str | None = None
+    detected_bg: str | None = None
 
     # Per-entry typesetting geometry (see `fox_reader.typeset`). The two
     # spacings are multipliers over the existing metrics, with `None` meaning

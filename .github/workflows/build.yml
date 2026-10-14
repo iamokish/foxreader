@@ -43,23 +43,34 @@ jobs:
           - { name: cpu-no-gguf-windows, os: windows-latest, device: cpu,       cuda: "",       gcc: "",   extra: "--no-gguf" }
           # CUDA 11.8's repos stop at Ubuntu 22.04, so its Linux job pins an older runner; every newer CUDA builds on 24.04.
           # - { name: cu118-gguf-linux,    os: ubuntu-22.04,   device: cu118,     cuda: "11.8.0", gcc: "11", extra: "" }
-          # - { name: cu118-no-gguf-linux, os: ubuntu-22.04,   device: cu118,     cuda: "11.8.0", gcc: "11", extra: "--no-gguf" }
+          - { name: cu118-no-gguf-linux, os: ubuntu-22.04,   device: cu118,     cuda: "11.8.0", gcc: "11", extra: "--no-gguf" }
           # - { name: cu118-gguf-windows,  os: windows-latest, device: cu118,     cuda: "11.8.0", gcc: "",   extra: "" }
-          # - { name: cu118-no-gguf-windows,  os: windows-latest, device: cu118,     cuda: "11.8.0", gcc: "",   extra: "--no-gguf" }
+          - { name: cu118-no-gguf-windows,  os: windows-latest, device: cu118,     cuda: "11.8.0", gcc: "",   extra: "--no-gguf" }
           # - { name: cu126-gguf-linux,    os: ubuntu-24.04,   device: cu126,     cuda: "12.6.0", gcc: "13", extra: "" }
-          # - { name: cu126-no-gguf-linux, os: ubuntu-24.04,   device: cu126,     cuda: "12.6.0", gcc: "13", extra: "--no-gguf" }
+          - { name: cu126-no-gguf-linux, os: ubuntu-24.04,   device: cu126,     cuda: "12.6.0", gcc: "13", extra: "--no-gguf" }
           # - { name: cu126-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "" }
-          # - { name: cu126-no-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "--no-gguf" }
+          - { name: cu126-no-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "--no-gguf" }
           # Windows uses the cu129_win torch extra (a different PyPI index); Linux uses cu129. Same CUDA toolkit either way.
           # - { name: cu129-gguf-linux,    os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "" }
-          # - { name: cu129-no-gguf-linux, os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "--no-gguf" }
+          - { name: cu129-no-gguf-linux, os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "--no-gguf" }
           # - { name: cu129-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "" }
-          # - { name: cu129-no-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "--no-gguf" }
+          - { name: cu129-no-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "--no-gguf" }
           # - { name: cu130-gguf-linux,    os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "" }
-          # - { name: cu130-no-gguf-linux, os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "--no-gguf" }
+          - { name: cu130-no-gguf-linux, os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "--no-gguf" }
           # - { name: cu130-gguf-windows,  os: windows-latest, device: cu130,     cuda: "13.0.0", gcc: "",   extra: "" }
-          # - { name: cu130-no-gguf-windows,  os: windows-latest, device: cu130,     cuda: "13.0.0", gcc: "",   extra: "--no-gguf" }
+          - { name: cu130-no-gguf-windows,  os: windows-latest, device: cu130,     cuda: "13.0.0", gcc: "",   extra: "--no-gguf" }
     runs-on: ${{ matrix.os }}
+    permissions:
+      # Build provenance: `id-token` mints the OIDC token the Sigstore signing
+      # certificate is issued against, and `attestations` stores the result.
+      # (`artifact-metadata: write` would also record a storage record; it is
+      # left out deliberately -- the action continues without one, and an
+      # unrecognised scope fails the whole workflow at parse time.)
+      # Attestations are available for public repositories on every current
+      # plan; a private repository needs GitHub Enterprise Cloud.
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -218,7 +229,7 @@ jobs:
           # stdout (which is what a CI log is) block-buffers print() while the
           # uv/Nuitka children stream past it, so the log reads backwards.
           PYTHONUNBUFFERED: "1"
-        run: python -u packaging/build.py --skip-frontend --device ${{ matrix.device }} ${{ matrix.extra }}
+        run: python -u packaging/build.py --skip-frontend --split-bin 1900 --device ${{ matrix.device }} ${{ matrix.extra }}
 
       # Always reports, even when the build failed: a 0% hit rate on a warm
       # cache means the cache key or BASEDIR is wrong, which is worth knowing.
@@ -226,25 +237,75 @@ jobs:
         if: runner.os == 'Linux' && !cancelled()
         run: ccache --show-stats || true
 
-      # build.py already writes the final compressed archive
-      # (`dist/fox-reader-*-windows-x64.zip` / `dist/fox-reader-*-linux-x64.tar.gz`).
-      # It is uploaded directly (`archive: false`), so there is no second zip
-      # wrapping it. The action fails if the glob matches anything but one file,
-      # which is intended: one job always produces exactly one archive.
+      # `--split-bin 1900` leaves either one archive (under GitHub's 2 GiB asset
+      # ceiling) or a set of `.001`/`.002`/... parts with the whole deleted. The
+      # two cases upload differently -- see the two steps below -- so which one
+      # happened is settled here, once, by looking at what is actually in dist/.
+      - name: Inspect dist
+        id: dist
+        shell: bash
+        run: |
+          ls -l dist/
+          if compgen -G "dist/fox-reader-*.[0-9][0-9][0-9]" > /dev/null; then
+            echo "split=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "split=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Signed SLSA build provenance for exactly the files that will be
+      # uploaded: the archive, or its parts. Users verify with
+      #   gh attestation verify <file> --repo ${{ github.repository }}
+      # Runs before the uploads so a failure here is not hidden behind them, and
+      # on both cases at once -- the glob matches whichever is on disk.
+      #
+      # `continue-on-error`: attestations need a public repository on the Free,
+      # Pro and Team plans (private ones need Enterprise Cloud), so a fork can
+      # legitimately be unable to sign. A warning annotation and a build whose
+      # artifacts still reach the release beats a hard failure for something
+      # that is an addition to the download, not the download itself.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        continue-on-error: true
+        with:
+          subject-path: |
+            dist/fox-reader-*-windows-x64.zip
+            dist/fox-reader-*-linux-x64.tar.gz
+            dist/fox-reader-*.[0-9][0-9][0-9]
+
+      # The unsplit case, unchanged: build.py already wrote the final compressed
+      # archive (`dist/fox-reader-*-windows-x64.zip` /
+      # `dist/fox-reader-*-linux-x64.tar.gz`) and it is uploaded directly
+      # (`archive: false`), so there is no second zip wrapping it. The action
+      # fails if the glob matches anything but one file, which is intended: a job
+      # that did not split always produces exactly one archive.
       # Note: with `archive: false` the artifact name is the file name, so every
       # matrix entry must produce a distinct archive name (it does: the stem
       # carries version + device + gguf + platform).
       - name: Upload artifact
+        if: steps.dist.outputs.split == 'false'
         uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.os == 'Windows' && 'dist/fox-reader-*-windows-x64.zip' || 'dist/fox-reader-*-linux-x64.tar.gz' }}
           archive: false
           if-no-files-found: error
 
+      # The split case. `archive: false` takes exactly one file, and a split job
+      # has two to four, so these go up as an ordinary (wrapped) artifact named
+      # after the matrix entry -- hence `name:`, which `archive: false` ignores.
+      # The release job unwraps it; see the second download step there.
+      - name: Upload parts
+        if: steps.dist.outputs.split == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: parts-${{ matrix.name }}
+          path: dist/fox-reader-*.[0-9][0-9][0-9]
+          if-no-files-found: error
+
   # ── Create GitHub Release ────────────────────────────────────────────────
   # Runs on version tags only. Collects every archive the matrix uploaded --
   # whichever variants are active -- and attaches them to one release with
-  # both Windows (.zip) and Linux (.tar.gz) builds.
+  # both Windows (.zip) and Linux (.tar.gz) builds, plus the parts of any
+  # build too large for a single asset and one SHA256SUMS.txt over the lot.
   create-release:
     needs: [build]
     runs-on: ubuntu-latest
@@ -252,25 +313,45 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Artifacts were uploaded with `archive: false` (single files, not
-      # wrapper zips). `.tar.gz` files pass through as-is, but the Windows
-      # `.zip` files would be auto-extracted without `skip-decompress: true`
-      # below.
-      - name: Download all artifacts
+      # Two download steps, because the two upload shapes need opposite
+      # treatment. Whole archives went up with `archive: false` (the artifact IS
+      # the file): `.tar.gz` passes through as-is, but a `.zip` would be
+      # auto-extracted without `skip-decompress: true`.
+      - name: Download whole archives
         uses: actions/download-artifact@v8
         with:
+          pattern: fox-reader-*
           path: artifacts/
           merge-multiple: true
-          # Artifacts were uploaded with `archive: false`, so the Windows
-          # .zip files ARE zip files. Without this, download-artifact
-          # extracts them into artifacts/ and the
-          # `artifacts/fox-reader-*-windows-x64.zip` release glob matches
-          # nothing (the Linux .tar.gz files pass through untouched, which
-          # is why only 2 of 4 files reached the release).
           skip-decompress: true
 
+      # Parts went up as ordinary wrapped artifacts (`archive: false` takes only
+      # one file), so these DO need decompressing -- that unwraps the artifact
+      # and leaves the `.001`/`.002`/... files in artifacts/.
+      - name: Download split parts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: parts-*
+          path: artifacts/
+          merge-multiple: true
+
       - name: List downloaded artifacts
-        run: ls -R artifacts/ || dir artifacts\
+        run: ls -l artifacts/
+
+      # One manifest over everything that is about to be attached. Recomputed
+      # here rather than collected from the jobs: each job's dist/SHA256SUMS.txt
+      # covers only its own variant and they would all arrive under the same
+      # name. Lines for the *parts* are what `sha256sum -c` checks; the comment
+      # lines carry the digest of each rejoined archive, which does not exist as
+      # a file and which coreutils therefore skips.
+      - name: Write SHA256SUMS.txt
+        working-directory: artifacts
+        run: |
+          for whole in $(ls fox-reader-*.001 2>/dev/null | sed 's/\.001$//'); do
+            echo "# $whole (rejoined)  $(cat "$whole".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)"
+          done > SHA256SUMS.txt
+          sha256sum fox-reader-* >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       # Release title and description live here. Before tagging a release,
       # edit the "What's new" list below to say what the update added --
@@ -282,6 +363,8 @@ jobs:
           files: |
             artifacts/fox-reader-*-windows-x64.zip
             artifacts/fox-reader-*-linux-x64.tar.gz
+            artifacts/fox-reader-*.[0-9][0-9][0-9]
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false
           prerelease: false
@@ -308,3 +391,40 @@ jobs:
             `windows-x64` = `.zip`, `linux-x64` = `.tar.gz`. Missing your
             combination? Build it yourself with
             [`packaging/build.md`](../blob/master/packaging/build.md).
+
+            ### Downloads in parts (`.001`, `.002`, …)
+
+            GitHub refuses a release file over 2 GB, and the larger CUDA builds
+            are 3-4 GB, so those are split. If the download you want is listed
+            as `….zip.001`, `….zip.002`, … then **get every part** and join
+            them back into one file first — they are not separate archives and
+            none of them opens on its own.
+
+            **Windows** (PowerShell or Command Prompt, in the download folder):
+
+            ```
+            cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002 fox-reader-….zip"
+            ```
+
+            **Linux / macOS**:
+
+            ```
+            cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
+            ```
+
+            Then extract the joined file as usual and delete the parts.
+
+            ### Checking your download
+
+            `SHA256SUMS.txt` lists every file attached here. Verify with
+            `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
+            `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
+            split download, the `#` line naming the archive gives the digest of
+            the **joined** file, so you can check the result of the step above.
+
+            Every file is also covered by a signed GitHub build attestation —
+            proof it was produced by this repository's workflow from this tag:
+
+            ```
+            gh attestation verify <file> --repo ${{ github.repository }}
+            ```

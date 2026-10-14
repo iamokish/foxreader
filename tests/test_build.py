@@ -42,6 +42,7 @@ Nuitka has compiled it. They are declared as helpers in :mod:`tests.suites` so t
 accounting knows about them without pretending they pass or fail.
 """
 import ast
+import hashlib
 import importlib.util
 import re
 import shlex
@@ -1935,3 +1936,273 @@ def test_helpers_exist():
 def test_script(script):
     """One build script. The ones needing a compiled distribution skip without FOX_TEST_DIST=1."""
     suites.check_script(script)
+
+
+# ── unit: the release files, and what they hash to ────────────────────────────
+# GitHub refuses a release asset over 2 GiB and a CUDA+GGUF build is three to
+# four, so `--split-bin` cuts the finished archive into parts. Two properties
+# carry the whole feature: the parts must rejoin to the original byte for byte,
+# and nothing over the limit may be left on disk for the release glob to find.
+
+@pytest.fixture
+def dist(build_module, monkeypatch, tmp_path) -> Path:
+    """A scratch ``dist/``, so nothing here touches a real build's output."""
+    scratch = tmp_path / "dist"
+    scratch.mkdir()
+    monkeypatch.setattr(build_module, "DIST_DIR", scratch)
+    return scratch
+
+
+def _written(dist: Path, name: str, data: bytes) -> Path:
+    path = dist / name
+    path.write_bytes(data)
+    return path
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _mb(byte_count: int) -> float:
+    """A part size in MB that comes out as ``byte_count`` bytes in the module.
+
+    The sizes a build really uses are gigabytes, which is not something to write
+    to a temp directory in a unit test. Driving the real megabyte arithmetic
+    backwards keeps the code under test unmodified -- including the branch where
+    the archive divides exactly.
+    """
+    return byte_count / (1024 * 1024)
+
+
+def test_an_archive_under_the_limit_is_left_exactly_alone(build_module, dist):
+    """A build small enough to upload must not be split, renamed or rewritten --
+    only hashed, so it still reaches the manifest. Exactly at the limit counts as
+    under it: GitHub's ceiling is what the parts have to stay below, and a file
+    of precisely that size is one file, not two."""
+    payload = bytes(range(256)) * 4
+    archive = _written(dist, "fox-reader-v1-cpu-linux-x64.tar.gz", payload)
+
+    parts, digest = build_module.split_archive(archive, _mb(len(payload)))
+
+    assert parts == []
+    assert archive.read_bytes() == payload
+    assert digest == _sha256(payload)
+
+
+def test_parts_rejoin_to_the_original_byte_for_byte(build_module, dist, monkeypatch):
+    """The one property the whole feature rests on.
+
+    Several part sizes -- 2500 divides the 5000-byte archive exactly, 4999 leaves
+    a single byte over -- and a read size far smaller than a part, so the inner
+    loop really iterates.
+    """
+    monkeypatch.setattr(build_module, "_IO_CHUNK", 7)
+    payload = bytes((i * 31 + 7) % 256 for i in range(5000))
+    archive = dist / "fox-reader-v1-cu130-gguf-linux-x64.tar.gz"
+
+    for limit in (1000, 999, 2500, 4999):
+        archive.write_bytes(payload)
+        parts, digest = build_module.split_archive(archive, _mb(limit))
+
+        assert parts, f"{limit}: nothing was split"
+        assert not archive.exists(), f"{limit}: the whole archive was left behind"
+        assert digest == _sha256(payload), f"{limit}: the whole's digest is wrong"
+        assert b"".join(part.read_bytes() for part in parts) == payload, \
+            f"{limit}: the parts do not rejoin to the original"
+        sizes = [part.stat().st_size for part in parts]
+        assert all(size == limit for size in sizes[:-1]), f"{limit}: {sizes}"
+        assert 0 < sizes[-1] <= limit, f"{limit}: {sizes}"
+        for part in parts:
+            part.unlink()
+
+
+def test_part_names_sort_in_order(build_module, dist, monkeypatch):
+    """``.001``, not ``.1``: the release page, the download glob and ``cat *`` all
+    read them in lexical order, and ``.10`` sorting before ``.2`` rejoins to
+    garbage."""
+    monkeypatch.setattr(build_module, "_IO_CHUNK", 64)
+    archive = _written(dist, "a.zip", b"x" * 1200)
+
+    parts, _ = build_module.split_archive(archive, _mb(100))
+
+    assert [part.name for part in parts] == [f"a.zip.{i:03d}" for i in range(1, 13)]
+    assert [part.name for part in parts] == sorted(part.name for part in parts)
+
+
+def test_a_rebuild_does_not_leave_a_longer_runs_tail_behind(build_module, dist, monkeypatch):
+    """Two parts replacing three: the third would stand, and ``cat *`` would
+    rejoin two good parts plus a stale tail into a broken archive."""
+    monkeypatch.setattr(build_module, "_IO_CHUNK", 64)
+    archive = dist / "a.zip"
+
+    archive.write_bytes(b"x" * 900)
+    build_module.split_archive(archive, _mb(300))
+    assert len(list(dist.glob("a.zip.0*"))) == 3
+
+    archive.write_bytes(b"y" * 500)
+    parts, _ = build_module.split_archive(archive, _mb(300))
+
+    assert len(parts) == 2
+    assert sorted(path.name for path in dist.glob("a.zip.0*")) == ["a.zip.001", "a.zip.002"]
+
+
+def test_a_failed_split_keeps_the_archive(build_module, dist, monkeypatch):
+    """A build whose output is half a set of parts has produced nothing. The
+    archive stays, so it can still be uploaded by hand or the build re-run."""
+    archive = _written(dist, "a.zip", b"x" * 900)
+    real_open = Path.open
+    opened = {"count": 0}
+
+    def flaky(self, *args, **kwargs):
+        if args and args[0] == "wb":
+            opened["count"] += 1
+            if opened["count"] == 2:
+                raise OSError("no space left on device")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", flaky)
+    with pytest.raises(build_module.BuildError) as caught:
+        build_module.split_archive(archive, _mb(300))
+
+    assert "no space left" in str(caught.value)
+    assert archive.is_file(), "the archive was removed by a failed split"
+    assert list(dist.glob("a.zip.0*")) == [], "half-written parts were left behind"
+
+
+def test_the_manifest_is_what_sha256sum_reads(build_module, dist):
+    """``<64 hex>``, exactly two spaces, the name -- GNU coreutils' own format,
+    so ``sha256sum -c SHA256SUMS.txt`` works with no flags.
+
+    And LF endings, even on Windows. A CRLF manifest makes `sha256sum -c` read
+    the carriage return as part of the filename and report every file missing,
+    on a download that is perfectly good.
+    """
+    archive = _written(dist, "a.zip", b"\x01" * 16)
+    digest = _sha256(archive.read_bytes())
+
+    build_module.write_checksums([(digest, "a.zip")])
+
+    manifest = dist / build_module.CHECKSUM_NAME
+    assert manifest.read_bytes() == f"{digest}  a.zip\n".encode()
+
+
+def test_the_manifest_keeps_other_variants_of_the_same_dist(build_module, dist):
+    """One ``dist/`` holds one archive per variant and a build only knows its own,
+    so rewriting the manifest from scratch would leave the last build's archive as
+    the only checkable one."""
+    cpu = _written(dist, "cpu.zip", b"\x01" * 16)
+    cuda = _written(dist, "cuda.zip", b"\x02" * 16)
+
+    build_module.write_checksums([(_sha256(cpu.read_bytes()), "cpu.zip")])
+    build_module.write_checksums([(_sha256(cuda.read_bytes()), "cuda.zip")])
+
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert f"{_sha256(cpu.read_bytes())}  cpu.zip" in body
+    assert f"{_sha256(cuda.read_bytes())}  cuda.zip" in body
+
+
+def test_the_manifest_drops_what_is_no_longer_there(build_module, dist):
+    """``--clean``, or a hand-deleted archive. A line naming a missing file makes
+    ``sha256sum -c`` fail on a download that is perfectly good."""
+    gone = _written(dist, "gone.zip", b"\x03" * 16)
+    build_module.write_checksums([(_sha256(gone.read_bytes()), "gone.zip")])
+    gone.unlink()
+    kept = _written(dist, "kept.zip", b"\x04" * 16)
+
+    build_module.write_checksums([(_sha256(kept.read_bytes()), "kept.zip")])
+
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert "gone.zip" not in body
+    assert "kept.zip" in body
+
+
+def test_a_rebuilt_file_gets_its_new_digest(build_module, dist):
+    archive = _written(dist, "a.zip", b"\x05" * 16)
+    build_module.write_checksums([(_sha256(archive.read_bytes()), "a.zip")])
+    stale = _sha256(archive.read_bytes())
+
+    archive.write_bytes(b"\x06" * 16)
+    build_module.write_checksums([(_sha256(archive.read_bytes()), "a.zip")])
+
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert stale not in body
+    assert _sha256(archive.read_bytes()) in body
+
+
+def test_the_rejoined_digest_is_a_comment_so_the_check_still_passes(build_module, dist):
+    """The archive is gone once it is split, so its digest cannot be a plain line
+    -- ``sha256sum -c`` would report it missing and exit non-zero. It is the digest
+    a person wants after rejoining, though, and coreutils skips ``#`` lines."""
+    first = _written(dist, "a.zip.001", b"\x07" * 16)
+    second = _written(dist, "a.zip.002", b"\x08" * 8)
+
+    build_module.write_checksums(
+        [(_sha256(first.read_bytes()), first.name),
+         (_sha256(second.read_bytes()), second.name)],
+        ("a.zip", "0" * 64),
+    )
+
+    lines = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    assert lines[0].startswith("#")
+    assert "a.zip (rejoined)" in lines[0] and "0" * 64 in lines[0]
+    assert all(not line.startswith("#") for line in lines[1:])
+
+
+def test_a_rejoined_note_goes_when_the_archive_stops_being_split(build_module, dist):
+    """Built with ``--split-bin`` once and without it next time: the note would
+    otherwise claim a digest for a file that is now whole on disk."""
+    first = _written(dist, "a.zip.001", b"\x09" * 16)
+    build_module.write_checksums([(_sha256(first.read_bytes()), first.name)],
+                                 ("a.zip", "0" * 64))
+    first.unlink()
+    whole = _written(dist, "a.zip", b"\x0a" * 24)
+
+    build_module.write_checksums([(_sha256(whole.read_bytes()), "a.zip")])
+
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert "rejoined" not in body
+    assert f"{_sha256(whole.read_bytes())}  a.zip" in body
+
+
+def test_the_rejoin_hint_names_every_part_on_windows(build_module, dist, monkeypatch):
+    """This line is what a person pastes, so both halves have to be right:
+    ``copy /b`` takes the parts explicitly and no spaces around the ``+``;
+    ``cat`` can glob, because the names sort."""
+    parts = [dist / "a.zip.001", dist / "a.zip.002"]
+
+    monkeypatch.setattr(build_module, "_platform_tag", lambda: "windows-x64")
+    assert build_module._rejoin_hint(parts) == 'cmd /c "copy /b a.zip.001+a.zip.002 a.zip"'
+
+    monkeypatch.setattr(build_module, "_platform_tag", lambda: "linux-x64")
+    assert build_module._rejoin_hint(parts) == "cat a.zip.* > a.zip"
+
+
+def test_finalizing_without_the_flag_touches_nothing_but_the_manifest(build_module, dist):
+    """The default path: one archive, left alone, and a manifest beside it."""
+    payload = b"\x0b" * 64
+    archive = _written(dist, "a.zip", payload)
+
+    files = build_module.finalize_release_files(archive, None)
+
+    assert files == [archive]
+    assert archive.read_bytes() == payload
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert body == f"{_sha256(payload)}  a.zip\n"
+
+
+def test_finalizing_with_the_flag_reports_the_parts_as_the_upload(build_module, dist,
+                                                                 monkeypatch):
+    """What the workflow globs for. The archive must not be among them."""
+    monkeypatch.setattr(build_module, "_IO_CHUNK", 16)
+    payload = bytes((i * 17) % 256 for i in range(500))
+    archive = _written(dist, "a.zip", payload)
+
+    files = build_module.finalize_release_files(archive, _mb(200))
+
+    assert [path.name for path in files] == ["a.zip.001", "a.zip.002", "a.zip.003"]
+    assert not archive.exists()
+    body = (dist / build_module.CHECKSUM_NAME).read_text(encoding="utf-8")
+    assert _sha256(payload) in body, "the rejoined digest is not recorded"
+    for part in files:
+        assert f"{_sha256(part.read_bytes())}  {part.name}" in body

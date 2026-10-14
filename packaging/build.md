@@ -306,11 +306,15 @@ python packaging/build.py --device cpu --cpu-baseline sse42
 
 # Target specific GPUs instead of the defaults (quote it: the shell eats `;`)
 python packaging/build.py --device cu129 --cuda-arch "75-real;86-real"
+
+# Split the finished archive into 1900 MB parts (for GitHub's 2 GB limit)
+python packaging/build.py --device cu130 --split-bin 1900
 ```
 
 The finished archive lands in `dist/`, e.g.
 `dist/fox-reader-v0.1.0-cpu-gguf-windows-x64.zip` /
-`dist/fox-reader-v0.1.0-cpu-gguf-linux-x64.tar.gz`.
+`dist/fox-reader-v0.1.0-cpu-gguf-linux-x64.tar.gz`, next to a
+`dist/SHA256SUMS.txt` listing its SHA-256.
 
 ### If the build stops with an error
 
@@ -318,6 +322,83 @@ The finished archive lands in `dist/`, e.g.
 2. Re-run with `--clean` (a stale `packaging/build/` or venv causes most
    repeat failures).
 3. See [Troubleshooting](#troubleshooting) below.
+
+---
+
+## 4a. Splitting a big archive (`--split-bin`)
+
+Only needed if you are **uploading** a build somewhere with a file-size
+limit. GitHub refuses a release file over 2 GB, and a CUDA build with the
+translator backend in it is 3–4 GB.
+
+```bash
+python packaging/build.py --device cu130 --split-bin 1900
+```
+
+What it does, after the archive is built:
+
+- **Archive under 1900 MB?** Nothing happens. The file is left exactly as
+  it is and can be uploaded directly.
+- **Archive over 1900 MB?** It is cut into
+  `fox-reader-….zip.001`, `….zip.002`, … of at most 1900 MB each, and the
+  oversized archive is **deleted** — so an upload glob cannot pick up a
+  file the host will reject.
+
+The number is in megabytes and optional: a bare `--split-bin` uses 1900.
+
+> Needs room for one extra copy of the archive while it is being cut
+> (the parts are written before the original is removed). Add 4 GB of free
+> disk to the figures at the top of this page if you use it.
+
+The parts are the archive's own bytes cut at fixed offsets, so putting them
+back needs nothing but your shell:
+
+**Windows:**
+
+```powershell
+cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002 fox-reader-….zip"
+```
+
+**Linux / macOS:**
+
+```bash
+cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
+```
+
+Then extract the joined file as usual.
+
+### `dist/SHA256SUMS.txt`
+
+Written on every build, split or not, in the format `sha256sum -c` reads:
+
+```
+# fox-reader-v0.2.0-cu130-gguf-windows-x64.zip (rejoined)  3f8a…
+4c1d…  fox-reader-v0.2.0-cu130-gguf-windows-x64.zip.001
+9b07…  fox-reader-v0.2.0-cu130-gguf-windows-x64.zip.002
+```
+
+```bash
+cd dist && sha256sum -c SHA256SUMS.txt
+```
+
+The plain lines cover the files as they are on disk. The `#` line — which
+`sha256sum -c` skips — carries the digest of the **joined** archive, which
+is not a file any more, so you can still check the result of rejoining:
+
+```bash
+cat fox-reader-….zip.* | sha256sum     # compare with the `#` line
+```
+
+Building more than one variant into the same `dist/` is fine: each build
+updates its own lines and leaves the others alone (and drops lines for
+files that are no longer there).
+
+Releases built by GitHub Actions carry one `SHA256SUMS.txt` over every
+attached file, plus a signed build attestation per file:
+
+```bash
+gh attestation verify <file> --repo iamokish/foxreader
+```
 
 ---
 
@@ -342,6 +423,7 @@ The finished archive lands in `dist/`, e.g.
 | `--no-blas` | Same as `--openblas off` |
 | `--cpu-baseline {avx2,avx,sse42}` | Oldest CPU the result must run on (default `avx2`) |
 | `--cuda-arch LIST` / `--hip-arch LIST` | Override GPU architectures (e.g. `75-real;86-real`) |
+| `--split-bin [MB]` | Cut the finished archive into parts of at most MB megabytes (default 1900) if it is larger; see [4a](#4a-splitting-a-big-archive---split-bin) |
 | `--skip-frontend` | Reuse an already built `frontend/static` |
 | `--keep-venv` | Keep the build environment for the next rebuild |
 | `--clean` | Delete all previous build outputs first |
@@ -377,6 +459,9 @@ translation works, on any machine.
 | nvcc refuses the host compiler (Linux) | Wrong GCC for the toolkit — see the 2c table (e.g. CUDA 12.9 wants `gcc-13`) |
 | CUDA build fails on MinGW (Windows) | Expected: install VS Build Tools (Option A in 1e); nvcc never drives MinGW |
 | `cblas_sgemm was not declared` (GGUF compile) | System OpenBLAS missing/misdetected — install `libopenblas-dev` (2d) or rebuild with `--openblas download` |
-| Out of disk halfway | Free 15 GB (CPU) / 25 GB (CUDA); the same gigabytes are written three times before archiving |
+| Out of disk halfway | Free 15 GB (CPU) / 25 GB (CUDA); the same gigabytes are written three times before archiving. `--split-bin` wants one more copy of the archive on top |
+| `could not split …: No space left on device` | The archive itself is untouched — free some space and re-run, or upload it by hand |
+| GitHub rejects the upload: file too large | Build again with `--split-bin 1900`, or join and re-split by hand (see [4a](#4a-splitting-a-big-archive---split-bin)) |
+| A downloaded `.zip.001` will not open | It is one part of a split archive. Get every part and join them first — see [4a](#4a-splitting-a-big-archive---split-bin) |
 | Rebuild behaves oddly | Add `--clean` and build again |
 | GGUF compile problems you don't need | Add `--no-gguf` — builds everything else, skips llama.cpp |

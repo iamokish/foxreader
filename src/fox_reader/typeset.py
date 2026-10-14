@@ -125,6 +125,31 @@ def _contrast_color(background: tuple[int, int, int, int]
     return BLACK if _brightness(background) > 127 else WHITE
 
 
+#: How far apart a hinted font colour and the plate have to be, on the 0-255
+#: brightness scale, for the hint to be worth using. The hint was measured off
+#: the original artwork (see `fox_reader.ocr_colors`), so when the user then
+#: paints an explicit plate under it the two can collide -- white lettering
+#: hinted off a dark panel, set on a white plate, would be invisible. Below this
+#: the hint is dropped and `_contrast_color` decides, which can never be.
+_MIN_PLATE_CONTRAST = 40.0
+
+
+def _legible_on(hint: tuple[int, int, int, int] | None,
+                plate: tuple[int, int, int, int]
+                ) -> tuple[int, int, int, int] | None:
+    """``hint``, unless it would disappear into ``plate``.
+
+    A hint that is transparent is dropped too. The user's own ``font_color`` is
+    allowed to be, because invisible text is a thing someone can mean to ask
+    for; a measurement that came out transparent is only ever a bad hint.
+    """
+    if hint is None or hint[3] == 0:
+        return None
+    if abs(_brightness(hint) - _brightness(plate)) < _MIN_PLATE_CONTRAST:
+        return None
+    return hint
+
+
 def _dominant_color(img: Image.Image, box: tuple[int, int, int, int]
                     ) -> tuple[int, int, int, int]:
     """The most common colour in ``box`` -- the region's background.
@@ -1562,8 +1587,13 @@ def _draw_entry(img: Image.Image, draw: ImageDraw.ImageDraw,
         return
 
     # 1. What the region looks like now -- needed for every "auto" below, and
-    #    read before the background is painted over it.
-    region_bg = _dominant_color(img, (min_x, min_y, max_x, max_y))
+    #    read before the background is painted over it. The OCR step may already
+    #    have measured it (`fox_reader.ocr_colors`), off the same pixels and with
+    #    the lettering excluded, which is both a better estimate than the raw
+    #    mode and one crop-and-count per entry saved.
+    region_bg = parse_color(getattr(item, "detected_bg", None), None)
+    if region_bg is None or region_bg[3] == 0:
+        region_bg = _dominant_color(img, (min_x, min_y, max_x, max_y))
 
     bg_mode = (getattr(item, "bg_mode", "auto") or "auto").strip().lower()
     bg_color: tuple[int, int, int, int] | None
@@ -1620,13 +1650,24 @@ def _draw_entry(img: Image.Image, draw: ImageDraw.ImageDraw,
     lines = _layout(font, text, wrap_w, align, symbol_font, primary_cmap,
                     symbol_cmap, word_extra)
 
-    # 4. Colours. Auto reads the plate the text sits on: the text takes whichever
-    #    of black or white it contrasts with, and the outline takes the plate's
-    #    own colour, which is what keeps lettering legible where it crosses the
-    #    bubble border.
+    # 4. Colours, in three tiers: the user's own pick, then what the OCR step
+    #    measured off the artwork, then the fallback that works from the plate
+    #    alone -- the text takes whichever of black or white it contrasts with,
+    #    and the outline takes the plate's own colour, which is what keeps
+    #    lettering legible where it crosses the bubble border.
+    #
+    #    The font hint has to survive the plate changing under it, so it is
+    #    dropped when it would not read there (`_legible_on`). The outline hint
+    #    needs no such guard: it is only ever sent when the lettering really has
+    #    an outline, and an outline's whole job is to separate the glyphs from
+    #    whatever is behind them.
     plate = bg_color if bg_color is not None and bg_color[3] > 0 else region_bg
-    fill = parse_color(getattr(item, "font_color", None), _contrast_color(plate))
-    stroke_fill = parse_color(getattr(item, "stroke_color", None), plate)
+    auto_fill = _legible_on(
+        parse_color(getattr(item, "detected_font_color", None), None), plate
+    ) or _contrast_color(plate)
+    fill = parse_color(getattr(item, "font_color", None), auto_fill)
+    auto_stroke = parse_color(getattr(item, "detected_stroke_color", None), plate)
+    stroke_fill = parse_color(getattr(item, "stroke_color", None), auto_stroke)
     raw_width = getattr(item, "stroke_width", None)
     if raw_width is None:
         # Auto: proportional to the type size, so a 60 px title is not outlined

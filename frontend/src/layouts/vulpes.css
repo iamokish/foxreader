@@ -778,9 +778,15 @@ body.layout-vulpes #translationContainer .alt_translated {
     font-weight: 425;
 }
 
+/* The footer action row stays on one line: it lives in the 34px status bar,
+   where a second line would spill past the bar and paint over the stage.
+   `nowrap` (not `wrap`) keeps the five verbs beside the font picker; the bar
+   itself never wraps either, so the failure mode on a narrow window is a
+   squeezed picker (ellipsis) rather than a taller bar. */
 body.layout-vulpes #confirmActionRow {
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-wrap: nowrap;
+    gap: 4px;
+    min-width: 0;
 }
 
 /* --------------------------------------------------------- status bar ------ */
@@ -790,24 +796,39 @@ body.layout-vulpes .vx-statusbar {
     align-items: center;
     justify-content: space-between;
     gap: var(--vx-space-2);
+    flex-wrap: nowrap;
+    min-width: 0;
     padding: 0 var(--vx-space-3);
     box-sizing: border-box;
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-default);
     font-size: 11.5px;
     color: var(--text-muted);
+    /* No `overflow: hidden` here (and none on the actions group below): the
+       font menu is `position: absolute; bottom: 100%` and escapes upward past
+       the bar's top edge, so any clipping ancestor would cut it. Horizontal
+       pressure is absorbed by the picker shrinking (ellipsis), never by
+       clipping the bar. */
 }
 
 body.layout-vulpes .vx-statusbar__group {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
     min-width: 0;
 }
 
 body.layout-vulpes .vx-statusbar__group--center {
-    flex: 1 1 auto;
+    /* Grows to keep Original/Saved centred when there is slack, never shrinks:
+       the segment is fixed text and cannot squeeze, so shrinking this group
+       would spill the segment over its neighbours (the overlap this fixes).
+       Narrow windows shrink the font picker instead; see below. */
+    flex: 1 0 auto;
     justify-content: center;
+    flex-wrap: nowrap;
+    white-space: nowrap;
 }
 
 /* The editing verbs, in the footer rather than under the translation panel.
@@ -816,7 +837,14 @@ body.layout-vulpes .vx-statusbar__group--center {
    only decides how the row sits in the bar and hides the words for the glyphs, which
    is the whole reason the row moved down here. */
 body.layout-vulpes .vx-statusbar__group--actions {
-    flex: 0 0 auto;
+    /* The only shrinkable group in the bar, and only through the picker: the
+       verb buttons are `flex: 0 0 auto` and never squeeze, so shrinking this
+       group narrows the dropdown (which ellipsises) rather than spilling
+       buttons over the Fit-width chip beside it. `overflow` stays visible so
+       the upward-opening font menu is never clipped. */
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
     padding-left: var(--vx-space-3);
     border-left: 1px solid var(--border-default);
 }
@@ -824,11 +852,16 @@ body.layout-vulpes .vx-statusbar__group--actions {
 body.layout-vulpes .vx-action-row {
     width: auto;
     gap: 4px;
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 
 body.layout-vulpes .vx-action-row .custom-font-dropdown {
     /* Same share as the Basic row, so the menu it opens is the same width too. */
     flex: 0 1 200px;
+    /* Narrow enough to stay usable (icon + a few letters, ellipsised) while
+       giving the bar ~140px of graceful shrink before anything has to hide. */
+    min-width: 64px;
 }
 
 /* The trigger is 32px tall everywhere else; at 32px in this 34px bar its border
@@ -863,7 +896,30 @@ body.layout-vulpes #variantSwitch {
 }
 
 body.layout-vulpes .vx-statusbar__group--end {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
     justify-content: flex-end;
+    white-space: nowrap;
+}
+
+/* Every control in the bar keeps its size: a squeezed icon button or chip
+   would wrap its label to a second line or spill over the verbs beside it
+   (the Fit-width-over-actions overlap). The picker above is the only thing
+   that shrinks; everything here is `0 0 auto` so shrinking stops at the
+   picker instead of crushing a button. One rule, not one per control, so a
+   future button gets the same guarantee for free. */
+body.layout-vulpes .vx-statusbar .vx-icon-btn,
+body.layout-vulpes .vx-statusbar .vx-seg,
+body.layout-vulpes .vx-statusbar .vx-seg__btn,
+body.layout-vulpes .vx-statusbar .vx-chip,
+body.layout-vulpes .vx-statusbar__zoom,
+body.layout-vulpes .vx-statusbar__sep,
+body.layout-vulpes .vx-statusbar__page,
+body.layout-vulpes .vx-statusbar__note,
+body.layout-vulpes .vx-dot,
+body.layout-vulpes .vx-action-row .confirm-action-row__btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 body.layout-vulpes .vx-statusbar__page {
@@ -1105,6 +1161,14 @@ body.layout-vulpes .vx-tools::-webkit-scrollbar-thumb:hover {
    labels. Nothing is removed -- the status bar's section buttons
    toggle whatever is in the way. The reader's own narrowing lives
    with the reader, in reader.css.
+
+   The status bar needs ~1070px for every group at full size
+   (page nav + Original/Saved + verbs + zoom + toggles), so below
+   that it sheds redundancy first: the Saved words go (the dot keeps
+   the state) and the font picker narrows (ellipsis, still usable).
+   No `overflow: hidden` on the bar itself -- that would clip the
+   upward-opening font menu -- so the savings have to come from
+   smaller content, not from clipping the container.
    ============================================================ */
 
 @media (max-width: 1100px) {
@@ -1112,11 +1176,37 @@ body.layout-vulpes .vx-tools::-webkit-scrollbar-thumb:hover {
     body.layout-vulpes .vx-folder__label {
         display: none;
     }
+
+    /* The dot keeps the saved state; the words are the redundant copy. */
+    body.layout-vulpes .vx-statusbar__note {
+        display: none;
+    }
+
+    body.layout-vulpes .vx-action-row .custom-font-dropdown {
+        flex-basis: 140px;
+    }
 }
 
 @media (max-width: 900px) {
     body.layout-vulpes .vx-rail {
         width: 84px !important;
+    }
+
+    body.layout-vulpes .vx-action-row .custom-font-dropdown {
+        flex-basis: 100px;
+    }
+
+    /* Density, not content: same controls, tighter rhythm. */
+    body.layout-vulpes .vx-statusbar {
+        gap: 6px;
+    }
+
+    body.layout-vulpes .vx-statusbar__group {
+        gap: 4px;
+    }
+
+    body.layout-vulpes .vx-statusbar__group--actions {
+        padding-left: 8px;
     }
 }
 

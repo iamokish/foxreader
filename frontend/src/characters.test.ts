@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { characterLabel, characterPickerLabel, charactersToCsv, parseCharactersCsv } from "./characters";
 import { ensureEntryDefaults } from "./entryOptions";
-import { PLAIN_GEOMETRY, state } from "./state";
+import { PLAIN_GEOMETRY, UNMEASURED, state } from "./state";
 import type { Entry } from "./state";
 
 vi.mock("./characters", async (importOriginal) => {
@@ -48,6 +48,7 @@ function entry(ocr_text: string, text: string, character_id: string | null = nul
             tile: 0,
         },
         ...PLAIN_GEOMETRY,
+        ...UNMEASURED,
     };
 }
 

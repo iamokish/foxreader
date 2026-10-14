@@ -2,26 +2,46 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from PIL import Image
 
+from fox_reader import ocr_colors
 from fox_reader.constants import DEFAULT_OCR_ENGINE, OCR_ENGINE_PADDLEOCR_VL
-from fox_reader.ocr import MultiLangOCR, describe_ocr_engines, normalize_ocr_engine
+from fox_reader.ocr import (
+    MultiLangOCR,
+    Transcription,
+    describe_ocr_engines,
+    normalize_ocr_engine,
+)
 from fox_reader.ocr_vl import PaddleOCRVLEngine
 
 logger = logging.getLogger(__name__)
 
 
+class Reading(NamedTuple):
+    """One OCR result: the text, and the colours the region is drawn in.
+
+    ``colors`` is a hint for the typesetter and the live preview, never a
+    requirement -- see :mod:`fox_reader.ocr_colors`. It is
+    :data:`fox_reader.ocr_colors.NOTHING` when nothing could be measured, which
+    both renderers read as "detect it the old way".
+    """
+
+    text: str
+    colors: ocr_colors.RegionColors = ocr_colors.NOTHING
+
+
 class OCRService:
     """Thread-safe wrapper around the configured OCR engine.
 
-    The classic pipeline's detector is always built: text clean borrows it
-    for ``ppocr`` boxes whatever the recognition engine is. Its recognizers
-    load only when classic recognition is selected or actually needed: in
-    PaddleOCR-VL mode they stay unloaded (two large models' worth of RAM
-    saved) and are loaded on first fallback use.
+    The classic pipeline's detector is always built, whatever the recognition
+    engine is: text clean borrows it for ``ppocr`` boxes, and the colour read
+    borrows it for the quads PaddleOCR-VL cannot provide (see ``_vl_boxes``).
+    Its recognizers load only when classic recognition is selected or actually
+    needed: in PaddleOCR-VL mode they stay unloaded (two large models' worth of
+    RAM saved) and are loaded on first fallback use.
 
     When PaddleOCR-VL is selected it loads eagerly here at startup, never on
     first predict: the first OCR request must not pay a gigabyte-scale model
@@ -129,7 +149,8 @@ class OCRService:
             self._vl_error = None
             return vl
 
-    def _classic_predict(self, lang: str, image: Image.Image, grayscale: bool) -> str:
+    def _classic_read(self, lang: str, image: Image.Image,
+                      grayscale: bool) -> Transcription:
         """Classic recognition, loading deferred recognizers first if needed.
 
         In PaddleOCR-VL mode the recognizers were skipped at startup, so the
@@ -141,34 +162,106 @@ class OCRService:
             self._engine.ensure_recognizers()
         except Exception as exc:
             raise RuntimeError(f"Classic OCR recognizers could not load: {exc}") from exc
-        return self._engine.predict(lang=lang, input=image, isGrayScaled=grayscale)
+        return self._engine.read(lang=lang, input=image, isGrayScaled=grayscale)
 
     def predict(self, lang: str, image: Image.Image, grayscale: bool) -> str:
+        """The recognised text, and nothing else."""
+        return self.read(lang=lang, image=image, grayscale=grayscale,
+                         colors=False).text
+
+    def read(self, lang: str, image: Image.Image, grayscale: bool, *,
+             colors: bool = True, mask: Any = None) -> Reading:
+        """Transcribe ``image``, and measure its colours while it is in hand.
+
+        ``mask`` restricts the colour read to the part of ``image`` that belongs
+        to the region -- a freeform selection arrives as a polygon inside a
+        white-filled rectangle, and the filler is not the plate. The read itself
+        is pixel work on one crop, outside any model; the text quads it samples
+        inside come free from the classic detector's own pass, or from borrowing
+        that detector when PaddleOCR-VL did the reading (``_vl_boxes``).
+        ``colors=False`` skips both for callers that only want text.
+
+        The colour step can never fail a transcription: everything it does is
+        wrapped in :func:`fox_reader.ocr_colors.estimate`, which answers
+        "nothing" rather than raising.
+        """
         with self._lock:
-            if self._requested_engine == OCR_ENGINE_PADDLEOCR_VL:
+            transcription = self._transcribe(lang, image, grayscale,
+                                             want_boxes=colors)
+        if not colors:
+            return Reading(transcription.text)
+        # Outside the lock on purpose: this is numpy and OpenCV over one crop,
+        # it touches no model, and holding the engine lock through it would
+        # serialise it against every other OCR request for nothing.
+        return Reading(transcription.text,
+                       ocr_colors.estimate(image, mask=mask,
+                                           polys=transcription.boxes or None))
+
+    def _vl_boxes(self, image: Image.Image) -> tuple[Any, ...]:
+        """Text quads for a crop the VL engine read. Call with the lock held.
+
+        PaddleOCR-VL transcribes a crop end to end and exposes no boxes, so the
+        classic detector is borrowed for them -- the same instance text clean
+        borrows, already loaded at startup even in VL mode (see the class
+        docstring), so this costs one forward pass on a crop and no extra RAM.
+        Worth it: the quads are what let the colour read sample the plate from
+        the paper immediately around the lettering instead of from the whole
+        crop, which is the difference between measuring a bubble and measuring
+        the panel it sits in.
+
+        Measured on the *unprocessed* crop, not the grayscale-thresholded one
+        the classic recognition path builds: binarising at a fixed level erases
+        light-on-dark lettering entirely, and all that is wanted here is where
+        the text is. The PIL crop goes straight through, which is what the
+        detector's own preprocessing wants -- converting it to an array first
+        would only have it rebuilt on the other side. Never raises -- no
+        detector, or a detector that fails, means an empty tuple and a
+        whole-crop colour read, which is exactly what this did before the
+        detector was borrowed.
+        """
+        detector = self.detector
+        if detector is None:
+            return ()
+        try:
+            from fox_reader.clean import ppocr
+
+            polys, _ = ppocr.boxes_rgb(detector, image)
+        except Exception as exc:  # noqa: BLE001 -- a hint, never worth an error
+            logger.debug("Could not borrow the detector for colour sampling: %s", exc)
+            return ()
+        # A tuple of per-quad arrays, not the (N, 4, 2) array itself: callers
+        # test it for emptiness, and an ndarray has no truth value.
+        return tuple(polys)
+
+    def _transcribe(self, lang: str, image: Image.Image, grayscale: bool, *,
+                    want_boxes: bool = False) -> Transcription:
+        """The engine half of :meth:`read`. Call with the lock held."""
+        if self._requested_engine == OCR_ENGINE_PADDLEOCR_VL:
+            try:
+                vl = self._ensure_vl()
+            except RuntimeError as exc:
+                # Fallback, not failure: classic is always available, and
+                # OCR must never 500 because an optional engine is broken.
+                logger.warning("%s -- falling back to classic PaddleOCR", exc)
+                self._active_engine = "paddleocr"
+                return self._classic_read(lang=lang, image=image, grayscale=grayscale)
+            try:
+                text = vl.predict(input=image, isGrayScaled=grayscale, lang=lang)
+            except Exception as exc:
+                logger.warning("PaddleOCR-VL failed (%s) -- falling back to classic", exc)
+                self._active_engine = "paddleocr"
                 try:
-                    vl = self._ensure_vl()
-                except RuntimeError as exc:
-                    # Fallback, not failure: classic is always available, and
-                    # OCR must never 500 because an optional engine is broken.
-                    logger.warning("%s -- falling back to classic PaddleOCR", exc)
-                    self._active_engine = "paddleocr"
-                    return self._classic_predict(lang=lang, image=image, grayscale=grayscale)
-                try:
-                    text = vl.predict(input=image, isGrayScaled=grayscale, lang=lang)
-                except Exception as exc:
-                    logger.warning("PaddleOCR-VL failed (%s) -- falling back to classic", exc)
-                    self._active_engine = "paddleocr"
-                    try:
-                        return self._classic_predict(lang=lang, image=image, grayscale=grayscale)
-                    except Exception:
-                        # If even classic fails, surface the VL error context
-                        # only when classic gave nothing to add.
-                        raise
-                self._active_engine = OCR_ENGINE_PADDLEOCR_VL
-                return text
-            self._active_engine = "paddleocr"
-            return self._engine.predict(lang=lang, input=image, isGrayScaled=grayscale)
+                    return self._classic_read(lang=lang, image=image, grayscale=grayscale)
+                except Exception:
+                    # If even classic fails, surface the VL error context
+                    # only when classic gave nothing to add.
+                    raise
+            self._active_engine = OCR_ENGINE_PADDLEOCR_VL
+            # The VL engine exposes no boxes of its own; the classic detector is
+            # borrowed for them, and only when someone is going to use them.
+            return Transcription(text, self._vl_boxes(image) if want_boxes else ())
+        self._active_engine = "paddleocr"
+        return self._engine.read(lang=lang, input=image, isGrayScaled=grayscale)
 
     def unload_vl(self) -> None:
         """Release VL weights (e.g. before process shutdown). Never raises."""

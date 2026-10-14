@@ -19,8 +19,10 @@ export interface Entry {
     color: string;
     text_align: TextAlignment;
     visible: boolean;
-    detected_bg?: string;
-    detected_text_color?: string;
+    /** What the OCR step measured off this region -- see `core/state.ts`. */
+    detected_font_color?: string | null;
+    detected_stroke_color?: string | null;
+    detected_bg?: string | null;
     character_id?: string | null;
 }
 

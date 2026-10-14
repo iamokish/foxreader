@@ -1,4 +1,13 @@
-import type { TextAlignment, Region, Point, BgMode, CleanOptions, TextGeometry } from "./types";
+import type {
+    TextAlignment,
+    Region,
+    Point,
+    BgMode,
+    CleanOptions,
+    ColorMeasurements,
+    DetectedColors,
+    TextGeometry,
+} from "./types";
 
 export type ReaderFitMode = "width" | "height";
 
@@ -60,7 +69,18 @@ export const PLAIN_GEOMETRY: Readonly<TextGeometry> = Object.freeze({
     angle_z: 0,
 });
 
-export interface Entry extends TextGeometry {
+/**
+ * A region nobody has read yet: no colour measurements at all. Frozen and
+ * shared for the same reason as `PLAIN_GEOMETRY` -- it is the canonical "work
+ * the colours out the old way", and it is what `applyDetectedColors` undoes.
+ */
+export const UNMEASURED: Readonly<ColorMeasurements> = Object.freeze({
+    detected_font_color: null,
+    detected_stroke_color: null,
+    detected_bg: null,
+});
+
+export interface Entry extends TextGeometry, ColorMeasurements {
     id: string;
     ocr_text: string;
     text: string;
@@ -70,8 +90,6 @@ export interface Entry extends TextGeometry {
     color: string;
     text_align: TextAlignment;
     visible: boolean;
-    detected_bg?: string;
-    detected_text_color?: string;
 
     /**
      * Speaker of this entry, as a character `meta_id` from the roster, or
@@ -84,7 +102,7 @@ export interface Entry extends TextGeometry {
     /** Stacking order. 1 is drawn first (bottom), 10 last (top). */
     layer: number;
 
-    /** `null` means auto -- the backend detects it from the artwork. */
+    /** `null` means auto -- resolved from the measurements below, or detected. */
     font_size: number | null;
     font_color: string | null;
     stroke_width: number | null;
@@ -95,7 +113,9 @@ export interface Entry extends TextGeometry {
     clean: CleanOptions;
 
     // ...and the nine `TextGeometry` fields -- word/line spacing, font scale,
-    // shift and rotation -- which travel to the backend under the same names.
+    // shift and rotation -- plus the three `ColorMeasurements` ones, which is
+    // what each `auto` above resolves to before anything is detected from the
+    // finished page. All twelve travel to the backend under the same names.
 }
 
 /**
@@ -112,6 +132,13 @@ export interface State {
     currentFontsData: FontData[];
     currentlySelectedEntryId: string | null;
     lastCapturedRegion: Region | null;
+    /**
+     * The colours the last rect/freeform capture measured, held until Confirm
+     * turns that region into an entry. Cleared with the region it belongs to --
+     * see `clearPageWorkspace` -- so a Confirm can never attach the previous
+     * capture's colours to a new bubble.
+     */
+    lastCapturedColors: DetectedColors | null;
     pageEntriesCache: Record<string, Entry[]>;
     currentTrackingColorIdx: number;
     svgOverlayElement: SVGSVGElement | null;
@@ -169,6 +196,7 @@ export const state: State = {
     currentFontsData: [],
     currentlySelectedEntryId: null,
     lastCapturedRegion: null,
+    lastCapturedColors: null,
     pageEntriesCache: {},
     currentTrackingColorIdx: 0,
     svgOverlayElement: null,

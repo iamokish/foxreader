@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CONTEXT_PAIRS, buildTranslationContext } from "./translationContext";
-import { PLAIN_GEOMETRY, state } from "./state";
+import { PLAIN_GEOMETRY, UNMEASURED, state } from "./state";
 import type { Entry } from "./state";
 
 let seq = 0;
@@ -34,6 +34,7 @@ function entry(ocr_text: string, text: string): Entry {
             tile: 0,
         },
         ...PLAIN_GEOMETRY,
+        ...UNMEASURED,
     };
 }
 

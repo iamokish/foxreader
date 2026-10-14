@@ -28,7 +28,7 @@ import {
     MAX_TEXT_SHIFT,
 } from "./state";
 import type { Entry } from "./state";
-import type { BgMode, CleanKnob, CleanMethod, CleanMethodsResponse, CleanOptions, TextAlignment } from "./types";
+import type { BgMode, CleanKnob, CleanMethod, CleanMethodsResponse, CleanOptions, DetectedColors, TextAlignment } from "./types";
 import * as api from "./api";
 import { checkAndStartMarquee, stopMarquee } from "./fonts";
 import { characterPickerLabel, getCharacters } from "./characters";
@@ -117,6 +117,19 @@ function fillWhole(value: unknown, lo: number, hi: number): number {
 }
 
 /**
+ * A colour that arrived from outside the page, as `#rrggbb`, or `null`.
+ *
+ * The gate on the backend's colour measurements and on an entry restored from
+ * an older shape. Hex only, even though the backend's `parse_color` also takes
+ * CSS names: a value the preview cannot read is one it would draw differently
+ * from the render, and `null` makes both sides fall back to the same stand-in.
+ * `normalizeHex` below does the parsing; this only guards the type.
+ */
+function hexOrNull(value: unknown): string | null {
+    return typeof value === "string" ? normalizeHex(value) : null;
+}
+
+/**
  * Fill in anything an entry is missing.
  *
  * Entries live in an in-memory cache that survives navigation, and a page
@@ -134,6 +147,13 @@ export function ensureEntryDefaults(entry: Entry): Entry {
     if (entry.stroke_color === undefined) entry.stroke_color = null;
     if (!entry.bg_mode) entry.bg_mode = "auto";
     if (entry.bg_color === undefined) entry.bg_color = null;
+    // The OCR step's measurements, run through the same hex gate as anything
+    // else that arrives from outside the page: a value the preview cannot parse
+    // is one it would draw differently from the render, so it becomes `null` and
+    // both sides fall back to the same stand-in.
+    entry.detected_font_color = hexOrNull(entry.detected_font_color);
+    entry.detected_stroke_color = hexOrNull(entry.detected_stroke_color);
+    entry.detected_bg = hexOrNull(entry.detected_bg);
     if (!entry.clean) entry.clean = defaultCleanOptions();
     else fillCleanDefaults(entry.clean);
     if (!TEXT_ALIGNMENTS.includes(entry.text_align)) entry.text_align = "center";
@@ -163,8 +183,35 @@ export function ensureEntryDefaults(entry: Entry): Entry {
     return entry;
 }
 
-// --------------------------------------------------------------------- layers
+/**
+ * Store what an OCR response measured about a region's colours on its entry.
+ *
+ * Returns whether anything changed, so a caller can skip a repaint. The three
+ * fields are replaced as a set rather than merged key by key: they describe one
+ * reading of one region, and keeping an outline colour from a previous read
+ * beside a font colour from this one would describe lettering that does not
+ * exist. A response with no `colors` at all leaves the entry alone -- that is
+ * "not measured", not "measured as nothing".
+ *
+ * Nothing here touches `font_color` / `stroke_color` / `bg_color`: those are the
+ * user's own picks, and re-reading a bubble must not undo them.
+ */
+export function applyDetectedColors(entry: Entry, colors: DetectedColors | null | undefined): boolean {
+    if (!colors) return false;
+    const font = hexOrNull(colors.font_color);
+    const stroke = hexOrNull(colors.stroke_color);
+    const background = hexOrNull(colors.bg_color);
+    if (entry.detected_font_color === font && entry.detected_stroke_color === stroke &&
+        entry.detected_bg === background) {
+        return false;
+    }
+    entry.detected_font_color = font;
+    entry.detected_stroke_color = stroke;
+    entry.detected_bg = background;
+    return true;
+}
 
+// --------------------------------------------------------------------- layers
 /**
  * The highest layer this entry may move to.
  *

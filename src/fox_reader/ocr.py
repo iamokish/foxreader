@@ -4,6 +4,7 @@
 import logging
 import os
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from fox_reader.device import FOX_DEVICE
 from fox_reader.utils import MODELS_DIR
@@ -15,6 +16,26 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 import numpy as np
 from PIL import Image
+
+
+class Transcription(NamedTuple):
+    """What one OCR pass produced: the text, and where it was read from.
+
+    ``boxes`` are the detector's quads, in the coordinates of the image that was
+    handed in, for the detections that actually yielded text. They cost nothing
+    here -- the classic pipeline has already computed them to crop by -- and
+    :mod:`fox_reader.ocr_colors` reads the region's colours inside them, which is
+    the one sample that cannot be polluted by the artwork around the lettering.
+
+    An engine with no notion of boxes transcribes the whole crop end to end and
+    fills this with whatever the service can borrow the classic detector for
+    (``OCRService._vl_boxes``), or with an empty tuple when there is no detector
+    to borrow -- and the colour read then falls back to the crop itself.
+    """
+
+    text: str
+    boxes: tuple[Any, ...] = ()
+
 
 # ============================================================================
 # READING-ORDER HELPERS
@@ -325,6 +346,17 @@ class PaddleOCRWrapper:
 
 
     def predict(self, input: Image.Image, isGrayScaled: bool, **kwargs) -> str:
+        return self.read(input, isGrayScaled, **kwargs).text
+
+
+    def read(self, input: Image.Image, isGrayScaled: bool, **kwargs) -> Transcription:
+        """Transcribe ``input``, keeping the quads the text was read from.
+
+        The quads are the detector's own output, already computed above to crop
+        the recognizer's inputs out of. Only the ones that produced text are
+        kept: a detection the recognizer read nothing in is not somewhere to
+        sample colours from.
+        """
         # Defensive: a detector-only wrapper must still transcribe if anyone
         # calls it directly instead of going through MultiLangOCR.
         self.ensure_recognizer()
@@ -346,7 +378,8 @@ class PaddleOCRWrapper:
                     "box": box,
                 })
 
-        return self._postprocess(results)
+        return Transcription(self._postprocess(results),
+                             tuple(item["box"] for item in results))
 
 
     def _extract_boxes(self, result):
@@ -495,12 +528,17 @@ class MultiLangOCR:
         self._recognizers_loaded = True
 
     def predict(self, lang: str, input: Image.Image, isGrayScaled: bool, **kwargs):
+        return self.read(lang, input, isGrayScaled, **kwargs).text
+
+    def read(self, lang: str, input: Image.Image, isGrayScaled: bool,
+             **kwargs) -> Transcription:
+        """Transcribe with the engine for ``lang``, keeping its detector quads."""
         # A detector-only instance still transcribes on demand: the first
         # classic predict pays the recognizer load instead of failing.
         self.ensure_recognizers()
         lang_clean = lang.strip().lower()
         engine = self._engines.get(lang_clean, self._engines["default"])
-        return engine.predict(input=input, isGrayScaled=isGrayScaled, **kwargs)
+        return engine.read(input=input, isGrayScaled=isGrayScaled, **kwargs)
 
 
 # ============================================================================

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from fox_reader import ocr as ocr_mod
 from fox_reader.constants import DEFAULT_OCR_ENGINE
+from fox_reader.ocr import Transcription
 
 
 def test_normalize_ocr_engine_defaults_to_classic():
@@ -357,22 +358,30 @@ def test_settings_manager_ocr_engine_roundtrip(tmp_path):
     assert mgr.get_ocr_engine() == "paddleocr-vl"
 
 
-def _stub_classic(monkeypatch):
+def _stub_classic(monkeypatch, detector=None):
     import fox_reader.services.ocr_service as svc_mod
+
+    borrowed = detector if detector is not None else object()
 
     class FakeClassic:
         last_kwargs: dict = {}
 
         def __init__(self, *args, **kwargs):
             FakeClassic.last_kwargs = dict(kwargs)
-            self._engines = {"default": type("D", (), {"detector": object()})()}
+            self._engines = {"default": type("D", (), {"detector": borrowed})()}
             self.ensure_calls = 0
 
         def ensure_recognizers(self):
             self.ensure_calls += 1
 
+        def read(self, lang, input, isGrayScaled, **kw):
+            # The classic pipeline answers with its detector quads alongside the
+            # text; none are needed here, and an empty tuple is what an engine
+            # with nothing to offer sends.
+            return Transcription("classic")
+
         def predict(self, lang, input, isGrayScaled, **kw):
-            return "classic"
+            return self.read(lang, input, isGrayScaled, **kw).text
 
     monkeypatch.setattr(svc_mod, "MultiLangOCR", FakeClassic)
     return FakeClassic
@@ -606,3 +615,163 @@ def test_ocr_settings_routes(tmp_path):
 
     assert client.put("/api/settings/ocr-engine", json={"engine": "bogus"}).status_code == 400
     assert client.put("/api/settings/ocr-engine", json={}).status_code == 400
+
+
+# ── borrowing the classic detector for the colour read ────────────────────────
+# PaddleOCR-VL transcribes a crop end to end and has no boxes to offer, but the
+# classic *detector* is loaded at startup in VL mode anyway (text clean needs
+# it). The colour read borrows it, because quads are what let it sample the
+# plate from the paper around the lettering rather than from the whole crop --
+# and must carry on without them when there is no detector to borrow.
+
+class FakeDetector:
+    """Stands in for PP-OCRv6 detection. Records every image it is handed."""
+
+    def __init__(self, polys=((0, 0), (10, 0), (10, 8), (0, 8)), fail=False):
+        self.seen = []
+        self.fail = fail
+        self._polys = polys
+
+    def predict(self, image, **kw):
+        self.seen.append(image)
+        if self.fail:
+            raise RuntimeError("simulated detector failure")
+        return [{"dt_polys": [list(self._polys)], "dt_scores": [0.9]}]
+
+
+def _spy_colors(monkeypatch):
+    """Record what reaches the colour estimator, and answer something fixed."""
+    import fox_reader.services.ocr_service as svc_mod
+    from fox_reader.ocr_colors import RegionColors
+
+    calls = []
+
+    def estimate(image, *, mask=None, polys=None):
+        calls.append({"size": image.size, "mask": mask, "polys": polys})
+        return RegionColors(font_color="#000000", bg_color="#ffffff")
+
+    monkeypatch.setattr(svc_mod.ocr_colors, "estimate", estimate)
+    return calls
+
+
+def _vl_service(monkeypatch, detector=None):
+    _stub_classic(monkeypatch, detector=detector)
+    _stub_vl(monkeypatch)
+    from fox_reader.services.ocr_service import OCRService
+
+    return OCRService(engine="paddleocr-vl")
+
+
+def test_vl_borrows_the_classic_detector_for_colour_quads(monkeypatch):
+    from PIL import Image
+
+    detector = FakeDetector()
+    calls = _spy_colors(monkeypatch)
+    svc = _vl_service(monkeypatch, detector)
+
+    reading = svc.read(lang="japanese", image=Image.new("RGB", (24, 16)),
+                       grayscale=False)
+
+    assert reading.text == "vl-text"
+    assert svc.active_engine == "paddleocr-vl"
+    # One pass over the crop, at the crop's own size, so the quads are in the
+    # coordinates the colour read works in. Handed over as the PIL crop itself:
+    # that is what the detector's preprocessing wants, and converting to an
+    # array on the way would only have it rebuilt on the other side.
+    assert len(detector.seen) == 1
+    assert detector.seen[0].size == (24, 16)
+    assert detector.seen[0].mode == "RGB"
+    assert len(calls) == 1
+    quads = calls[0]["polys"]
+    # A tuple of per-quad arrays, not the (N, 4, 2) array: the service tests it
+    # for emptiness, and an ndarray has no truth value.
+    assert isinstance(quads, tuple) and len(quads) == 1
+    assert quads[0].tolist() == [[0, 0], [10, 0], [10, 8], [0, 8]]
+
+
+def test_a_text_only_read_never_touches_the_detector(monkeypatch):
+    """The borrowed pass is only worth paying for when someone wants colours.
+    `predict` is the text-only path, and it is what the old callers use."""
+    from PIL import Image
+
+    detector = FakeDetector()
+    calls = _spy_colors(monkeypatch)
+    svc = _vl_service(monkeypatch, detector)
+
+    assert svc.predict(lang="japanese", image=Image.new("RGB", (24, 16)),
+                       grayscale=False) == "vl-text"
+
+    assert detector.seen == []
+    assert calls == []
+
+
+def test_a_vl_read_without_a_detector_still_measures_colours(monkeypatch):
+    """Nothing to borrow -- the weights are not there, or classic failed to
+    build. The read falls back to the whole crop, which is what it did before
+    the detector was borrowed at all."""
+    from PIL import Image
+
+    calls = _spy_colors(monkeypatch)
+    svc = _vl_service(monkeypatch)
+    monkeypatch.setattr(type(svc), "detector", property(lambda self: None))
+
+    reading = svc.read(lang="japanese", image=Image.new("RGB", (24, 16)),
+                       grayscale=False)
+
+    assert reading.text == "vl-text"
+    assert reading.colors.bg_color == "#ffffff"
+    assert calls[0]["polys"] is None
+
+
+def test_a_detector_that_fails_does_not_fail_the_read(monkeypatch):
+    """A hint is never worth losing a transcription for."""
+    from PIL import Image
+
+    detector = FakeDetector(fail=True)
+    calls = _spy_colors(monkeypatch)
+    svc = _vl_service(monkeypatch, detector)
+
+    reading = svc.read(lang="japanese", image=Image.new("RGB", (24, 16)),
+                       grayscale=False)
+
+    assert reading.text == "vl-text"
+    assert len(detector.seen) == 1, "the detector was not even tried"
+    assert calls[0]["polys"] is None
+
+
+def test_the_borrowed_detector_sees_the_unprocessed_crop(monkeypatch):
+    """Grayscale mode binarises the crop for *recognition*; the detector must
+    not get that. A fixed threshold erases light-on-dark lettering completely,
+    and all that is wanted here is where the text is."""
+    from PIL import Image
+
+    detector = FakeDetector()
+    _spy_colors(monkeypatch)
+    svc = _vl_service(monkeypatch, detector)
+    # Mid-grey: a 160 threshold would flatten every pixel of this to black.
+    crop = Image.new("RGB", (24, 16), (120, 120, 120))
+
+    svc.read(lang="japanese", image=crop, grayscale=True)
+
+    assert set(detector.seen[0].convert("RGB").tobytes()) == {120}
+
+
+def test_classic_mode_does_not_run_a_second_detector_pass(monkeypatch):
+    """Its own recognition pass already produced the quads, so borrowing would
+    be paying twice for the same answer."""
+    from PIL import Image
+
+    detector = FakeDetector()
+    calls = _spy_colors(monkeypatch)
+    _stub_classic(monkeypatch, detector=detector)
+    from fox_reader.services.ocr_service import OCRService
+
+    svc = OCRService(engine="paddleocr")
+    reading = svc.read(lang="japanese", image=Image.new("RGB", (24, 16)),
+                       grayscale=False)
+
+    assert reading.text == "classic"
+    assert detector.seen == []
+    # The stub classic reports no quads of its own, so the colour read works
+    # from the crop -- the same fallback a real detection-free region gets.
+    assert calls[0]["polys"] is None

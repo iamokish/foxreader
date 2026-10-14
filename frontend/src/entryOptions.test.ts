@@ -27,6 +27,7 @@ import {
     MAX_FONT_SCALE,
     MAX_TEXT_ANGLE,
     PLAIN_GEOMETRY,
+    UNMEASURED,
 } from "./state";
 import type { Entry } from "./state";
 import type { CharacterInfo } from "./types";
@@ -68,6 +69,7 @@ function makeEntry(over: Partial<Entry> = {}): Entry {
         bg_color: null,
         clean: defaultCleanOptions(),
         ...PLAIN_GEOMETRY,
+        ...UNMEASURED,
         ...over,
     };
 }

@@ -20,7 +20,7 @@
 
 import { state, WORKBENCH_PALETTE } from "./state";
 import type { Entry } from "./state";
-import type { DataItem, Point, ProcessImageRequest, RectangleCoords, Region } from "./types";
+import type { DataItem, OCRResponse, Point, ProcessImageRequest, RectangleCoords, Region } from "./types";
 import { showNotify, setTextAlignmentValue, getTextAlignmentValue, setTextAreaLoading, updateActionRow } from "./ui";
 import { getCurrentFontFilename, getCurrentFontName, setSelectedFontByFilename } from "./fonts";
 import * as api from "./api";
@@ -29,6 +29,7 @@ import { renderTranslationUI, handleAutoTranslation, translationPanelState, tran
 import { showConfirm } from "./components/common";
 import {
     buildEntryOptions,
+    applyDetectedColors,
     defaultCleanOptions,
     ensureEntryDefaults,
     getOpenEntry,
@@ -91,6 +92,13 @@ export function applySelectedEntryCard(entry: Entry): void {
     ensureEntryDefaults(entry);
     state.currentlySelectedEntryId = entry.id;
     state.lastCapturedRegion = entry.region;
+    // Keeps the pair consistent: `lastCapturedColors` always describes
+    // `lastCapturedRegion`, whichever of the two set it.
+    state.lastCapturedColors = {
+        font_color: entry.detected_font_color,
+        stroke_color: entry.detected_stroke_color,
+        bg_color: entry.detected_bg,
+    };
     setTextAlignmentValue(entry.text_align);
     setSelectedFontByFilename(entry.fontfile);
 
@@ -113,31 +121,42 @@ export function applySelectedEntryCard(entry: Entry): void {
  *
  * The entry is selected first so the region in the editor is the one being read,
  * and so a result landing in the text area belongs to the card that was clicked.
+ *
+ * The read also brings back the region's colours, which land on the entry and
+ * repaint its overlay shape -- re-reading a bubble is how a user fixes a
+ * measurement that came out wrong.
  */
 function ocrEntry(entry: Entry, scroll = false): void {
     selectEntry(entry, scroll);
+    const absorb = (data: OCRResponse) => {
+        if (applyDetectedColors(entry, data.colors)) renderCurrentPageEntries();
+    };
 
     if (entry.region.type === "polygon") {
-        void ocrIntoTextArea(() =>
-            api.ocrFreeform({
-                filename: state.currentImageFile,
-                points: (entry.region.coords as Point[]).map((p) => ({ x: p.x, y: p.y })),
-                lang: currentLang(),
-                isGrayScale: state.isGrayScaleEnabled,
-            }),
+        void ocrIntoTextArea(
+            () =>
+                api.ocrFreeform({
+                    filename: state.currentImageFile,
+                    points: (entry.region.coords as Point[]).map((p) => ({ x: p.x, y: p.y })),
+                    lang: currentLang(),
+                    isGrayScale: state.isGrayScaleEnabled,
+                }),
+            absorb,
         );
     } else {
         const r = entry.region.coords as RectangleCoords;
-        void ocrIntoTextArea(() =>
-            api.ocrCrop({
-                filename: state.currentImageFile,
-                x: r.x,
-                y: r.y,
-                width: r.w,
-                height: r.h,
-                lang: currentLang(),
-                isGrayScale: state.isGrayScaleEnabled,
-            }),
+        void ocrIntoTextArea(
+            () =>
+                api.ocrCrop({
+                    filename: state.currentImageFile,
+                    x: r.x,
+                    y: r.y,
+                    width: r.w,
+                    height: r.h,
+                    lang: currentLang(),
+                    isGrayScale: state.isGrayScaleEnabled,
+                }),
+            absorb,
         );
     }
 }
@@ -157,6 +176,7 @@ const currentLang = (): string => (document.getElementById("languageSelect") as 
  */
 export function clearPageWorkspace(): void {
     state.lastCapturedRegion = null;
+    state.lastCapturedColors = null;
     state.currentlySelectedEntryId = null;
     const textArea = document.getElementById("textArea") as HTMLTextAreaElement | null;
     if (textArea) textArea.value = "";
@@ -173,8 +193,15 @@ export function clearPageWorkspace(): void {
  * The previous version cleared the loader on the line *after* starting the
  * promise for rectangles and set it *before* the "no page open" guard for
  * polygons, so one flashed and the other stuck on forever.
+ *
+ * `absorb` sees the whole response, and only for a result that is still current:
+ * it runs after the page check, so a reply that arrives for a page the reader
+ * has left cannot write colours onto an entry that is no longer on screen.
  */
-async function ocrIntoTextArea(request: () => Promise<{ text: string }>): Promise<void> {
+async function ocrIntoTextArea(
+    request: () => Promise<OCRResponse>,
+    absorb?: (data: OCRResponse) => void,
+): Promise<void> {
     if (!state.currentImageFile) return;
     const page = state.currentImageFile;
     setTextAreaLoading(true);
@@ -185,6 +212,7 @@ async function ocrIntoTextArea(request: () => Promise<{ text: string }>): Promis
         if (state.currentImageFile !== page) return;
         const textArea = document.getElementById("textArea") as HTMLTextAreaElement | null;
         if (textArea) textArea.value = data.text ?? "";
+        absorb?.(data);
         handleAutoTranslation();
     } catch {
         showNotify("❌ OCR failed for that region.");
@@ -217,6 +245,10 @@ export function addNewEntries(data: Region[], force_confirm = false, inheritFrom
         // not a translation. See `translationPanelText`.
         tlText = translationPanelText();
     }
+    // Only a Confirm is folding in the capture that is on screen, so only a
+    // Confirm may take that capture's colour measurements with it. A bubble
+    // sweep (`force_confirm` false) adds regions nobody has read.
+    const captured = force_confirm ? state.lastCapturedColors : null;
 
     const added: Entry[] = [];
     for (const region of data) {
@@ -233,6 +265,10 @@ export function addNewEntries(data: Region[], force_confirm = false, inheritFrom
                 existing.fontname = getCurrentFontName();
                 existing.text_align = getTextAlignmentValue();
                 existing.visible = true;
+                // Measurements are not a styling choice: the capture that is
+                // being confirmed read this same region, so its colours are
+                // fresher than whatever was there.
+                applyDetectedColors(existing, captured);
             }
             continue;
         }
@@ -262,6 +298,15 @@ export function addNewEntries(data: Region[], force_confirm = false, inheritFrom
                 bg_mode: inheritFrom?.bg_mode ?? "auto",
                 bg_color: inheritFrom?.bg_color ?? null,
                 clean: inheritFrom?.clean ? { ...inheritFrom.clean } : defaultCleanOptions(),
+                // Colour measurements follow the region they were taken from: a
+                // split piece is part of the bubble that was read, so it keeps
+                // that reading, and a confirmed capture takes the colours of the
+                // OCR that produced the text being confirmed. Anything else --
+                // a bubble sweep, a capture nobody read -- starts unmeasured and
+                // renders with the stand-ins until it is OCR'd.
+                detected_font_color: inheritFrom?.detected_font_color ?? captured?.font_color ?? null,
+                detected_stroke_color: inheritFrom?.detected_stroke_color ?? captured?.stroke_color ?? null,
+                detected_bg: inheritFrom?.detected_bg ?? captured?.bg_color ?? null,
                 // Geometry follows the same rule as the rest: a split piece
                 // inherits it, because the halves of one bubble are still set
                 // the same way, and a fresh capture starts neutral.
@@ -404,6 +449,13 @@ function buildDataItems(): DataItem[] {
             bg_mode: entry.bg_mode,
             bg_color: entry.bg_color,
             clean: entry.bg_mode === "clean" ? (entry.clean ?? null) : null,
+            // What the OCR step measured off this region. The backend uses each
+            // of these only where the matching pick above is null, so the render
+            // comes out in the colours the overlay has been previewing instead
+            // of the ones it can work out from the finished page.
+            detected_font_color: entry.detected_font_color,
+            detected_stroke_color: entry.detected_stroke_color,
+            detected_bg: entry.detected_bg,
             // Typesetting geometry. `ensureEntryDefaults` above has already
             // filled and clamped these, so they are always the nine numbers the
             // backend expects -- neutral on an entry nobody adjusted.

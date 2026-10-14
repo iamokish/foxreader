@@ -38,6 +38,8 @@ export interface FreeformRequest {
     points: Point[];
     lang: string;
     isGrayScale: boolean;
+    /** Measure the region's colours as well. Omitted means yes. */
+    colors?: boolean;
 }
 
 export interface CropRequest {
@@ -48,6 +50,8 @@ export interface CropRequest {
     height: number;
     lang: string;
     isGrayScale: boolean;
+    /** Measure the region's colours as well. Omitted means yes. */
+    colors?: boolean;
 }
 
 export interface BubbleRequest {
@@ -133,7 +137,37 @@ export interface TextGeometry {
     angle_z: number;
 }
 
-export interface DataItem extends TextGeometry {
+/**
+ * What the OCR step measured off the artwork, as `#rrggbb`.
+ *
+ * Hints, not choices. Named after the `DataItem` fields they stand in for, so
+ * the mapping onto an entry's `detected_*` fields is one assignment per key.
+ * `null` on any of them means "could not be measured" -- and `stroke_color` is
+ * only ever set when the lettering really has an outline of its own, since
+ * without one the renderers' existing rule (outline in the plate's colour) is
+ * already right. See `fox_reader.ocr_colors`.
+ */
+export interface DetectedColors {
+    font_color: string | null;
+    stroke_color: string | null;
+    bg_color: string | null;
+}
+
+/**
+ * The same three colours as they are stored on an entry and sent to the
+ * backend, where `font_color` and friends are already taken by the user's own
+ * picks. Shared by `Entry` and `DataItem`: both renderers use each of these only
+ * where the matching pick is `null`, which is what makes the live preview show
+ * the colours the render will use instead of a generic white plate with black
+ * text.
+ */
+export interface ColorMeasurements {
+    detected_font_color: string | null;
+    detected_stroke_color: string | null;
+    detected_bg: string | null;
+}
+
+export interface DataItem extends TextGeometry, ColorMeasurements {
     og_text: string;
     text: string;
     fontfile: string;
@@ -196,6 +230,12 @@ export interface TranslationResponse {
 
 export interface OCRResponse {
     text: string;
+    /**
+     * Absent when the region's colours could not be measured, or when the
+     * request asked not to measure them -- which the page reads the same way:
+     * keep whatever hints the entry already had.
+     */
+    colors?: DetectedColors;
 }
 
 export interface BubbleResponse {

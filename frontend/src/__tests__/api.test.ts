@@ -15,7 +15,7 @@ import {
     getHealth,
 } from "../core/api";
 import type { ProcessImageRequest } from "../core/types";
-import { PLAIN_GEOMETRY } from "../core/state";
+import { PLAIN_GEOMETRY, UNMEASURED } from "../core/state";
 
 describe("API Client", () => {
     beforeEach(() => {
@@ -216,6 +216,7 @@ describe("API Client", () => {
                         bg_color: null,
                         clean: null,
                         ...PLAIN_GEOMETRY,
+                        ...UNMEASURED,
                     },
                 ],
             };

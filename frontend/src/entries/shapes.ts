@@ -6,14 +6,19 @@
  * Groups themselves are inserted in layer order, so an entry on layer 3 draws
  * over one on layer 1 exactly as `typeset._ordered` will.
  *
- * ## Colours here are deliberately not sampled from the page
+ * ## Where `auto` colours come from
  *
- * `auto` shows white plate / black text / white outline. The backend reads the
- * region's real dominant colour, but doing that in the browser means pulling the
- * page into a canvas and running `getImageData` per entry on every repaint --
- * seconds of main-thread work for a hint the user is about to override anyway.
- * The preview's job is to show the *layout*; the plate colour is settled at
- * render time.
+ * Not from the page in the browser: pulling it into a canvas and running
+ * `getImageData` per entry on every repaint is seconds of main-thread work.
+ * They come from the OCR step, which has the crop decoded already and measures
+ * them there (`fox_reader.ocr_colors`); the entry carries them as
+ * `detected_font_color` / `detected_stroke_color` / `detected_bg`, and the same
+ * values travel to the backend, so what is drawn here is what will be rendered.
+ *
+ * An entry with no measurement -- a bubble detection nobody has read yet, or a
+ * region whose colours could not be made out -- falls back to the old stand-ins:
+ * a white plate, and text in whichever of black or white contrasts with it. That
+ * is also what the backend does for such an entry, so the two still agree.
  */
 
 import { state, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH } from "../state";
@@ -59,18 +64,45 @@ function parseHex(value: string | null): [number, number, number] | null {
     return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 
-/** Black or white, whichever reads on `background`. Same weights as the backend. */
-export function contrastColor(background: string): string {
-    const rgb = parseHex(background) ?? [255, 255, 255];
-    const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
-    return brightness > 127 ? "#000000" : "#ffffff";
+/** Perceived brightness, 0-255. Same weights as `typeset._brightness`. */
+function brightnessOf(rgb: [number, number, number]): number {
+    return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
 }
 
-/** The plate an entry's text will sit on, or `null` when nothing is painted. */
+/** Black or white, whichever reads on `background`. Same weights as the backend. */
+export function contrastColor(background: string): string {
+    return brightnessOf(parseHex(background) ?? [255, 255, 255]) > 127 ? "#000000" : "#ffffff";
+}
+
+/**
+ * How far apart a measured font colour and the plate must be, on the 0-255
+ * brightness scale, before the measurement is worth using. Mirrors
+ * `typeset._MIN_PLATE_CONTRAST`: the colour was measured off the original
+ * artwork, so painting an explicit plate under it can make the two collide --
+ * white lettering measured on a dark panel, set on a white plate, would vanish.
+ */
+const MIN_PLATE_CONTRAST = 40;
+
+/** `hint`, unless it would disappear into `plate`. Mirrors `typeset._legible_on`. */
+function legibleOn(hint: string | null | undefined, plate: string): string | null {
+    if (!hint) return null;
+    const rgb = parseHex(hint);
+    if (!rgb) return null;
+    const plateRgb = parseHex(plate) ?? [255, 255, 255];
+    return Math.abs(brightnessOf(rgb) - brightnessOf(plateRgb)) < MIN_PLATE_CONTRAST ? null : hint;
+}
+
+/**
+ * The plate an entry's text will sit on, or `null` when nothing is painted.
+ *
+ * `auto` is the measured background where there is one, which is also what
+ * `typeset._draw_entry` paints for it; `AUTO_PLATE` is only the stand-in for a
+ * region nobody has read yet.
+ */
 function plateColor(entry: Entry): string | null {
     if (entry.bg_mode === "color") return entry.bg_color || AUTO_PLATE;
     if (entry.bg_mode === "transparent" || entry.bg_mode === "clean") return null;
-    return AUTO_PLATE;
+    return entry.detected_bg || AUTO_PLATE;
 }
 
 /** Auto outline width, matching `_draw_entry`'s `round(size * 0.09)`. */
@@ -451,7 +483,12 @@ export function buildEntryShape(
         const geom = readGeometry(entry);
         const layout = fitText(svg, entry.text, entry.fontname, entry.text_align, area, entry.font_size, geom);
         if (layout) {
-            const reference = plate ?? AUTO_PLATE;
+            // What the lettering sits on, exactly as `typeset._draw_entry`
+            // resolves it: the painted plate if there is one, otherwise the
+            // artwork's own colour -- which `transparent` and `clean` leave
+            // showing, so for them the measured background is the reference even
+            // though no plate is drawn.
+            const reference = plate ?? entry.detected_bg ?? AUTO_PLATE;
             const strokeWidth =
                 entry.stroke_width === null
                     ? autoStrokeWidth(layout.size)
@@ -459,8 +496,9 @@ export function buildEntryShape(
             const text = document.createElementNS(SVG_NS, "text") as SVGTextElement;
             text.setAttribute("class", "entry-text");
             const drawStyle = {
-                fill: entry.font_color || contrastColor(reference),
-                stroke: entry.stroke_color || reference,
+                fill: entry.font_color || legibleOn(entry.detected_font_color, reference) ||
+                    contrastColor(reference),
+                stroke: entry.stroke_color || entry.detected_stroke_color || reference,
                 strokeWidth,
                 family: entry.fontname,
             };
