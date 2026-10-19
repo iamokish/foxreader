@@ -57,3 +57,4 @@ packaging/.build-venv/
 packaging/.build/
 /dist/
 /nc/
+/FoxReader/

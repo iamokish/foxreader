@@ -54,6 +54,11 @@ dev = [
 ]
 bin-build = [
     "nuitka==4.2.1",
+    "customtkinter>=6.0.0",
+]
+downloader = [
+    "customtkinter>=6.0.0",
+    "darkdetect>=0.8.0",
 ]
 # For GGUF Models
 gguf = [

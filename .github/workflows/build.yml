@@ -300,3 +300,55 @@ jobs:
           name: parts-${{ matrix.name }}
           path: dist/fox-reader-*.[0-9][0-9][0-9]
           if-no-files-found: error
+
+  build-downloader:
+    name: Build Downloader (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows, os: windows-latest, binary: fox-downloader.exe }
+          - { name: linux,   os: ubuntu-24.04,   binary: fox-downloader }
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install build tools and UI dependencies
+        run: |
+          uv pip install --system nuitka==4.2.1 customtkinter darkdetect
+
+      - name: Compile standalone downloader
+        run: |
+          python packaging/downloader/build_downloader.py --out-dir dist --name ${{ matrix.binary }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        continue-on-error: true
+        with:
+          subject-path: dist/${{ matrix.binary }}
+
+      - name: Upload downloader binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: downloader-${{ matrix.name }}
+          path: dist/${{ matrix.binary }}
+          archive: false
+          if-no-files-found: error
+
