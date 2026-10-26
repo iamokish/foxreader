@@ -107,6 +107,18 @@ jobs:
           run-id: ${{ steps.target.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Download standalone downloader binaries
+      - name: Download downloader binaries
+        if: steps.target.outputs.is_tag == 'true'
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: downloader-*
+          path: artifacts/
+          merge-multiple: true
+          run-id: ${{ steps.target.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: List downloaded artifacts
         if: steps.target.outputs.is_tag == 'true'
         run: ls -lh artifacts/
@@ -120,6 +132,9 @@ jobs:
             echo "# $whole (rejoined)  $(cat "$whole".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)"
           done > SHA256SUMS.txt
           sha256sum fox-reader-* >> SHA256SUMS.txt
+          if compgen -G "fox-downloader*" > /dev/null; then
+            sha256sum fox-downloader* >> SHA256SUMS.txt
+          fi
           cat SHA256SUMS.txt
 
       - name: Prepare release notes
@@ -127,12 +142,17 @@ jobs:
         run: |
           TAG="${{ steps.target.outputs.tag }}"
           cat << 'EOF' > release_body.md
-          ## What's new
+          ## Quick Start (Recommended)
 
-          - See release commit notes.
+          The easiest way to install Fox Reader is using the standalone **Downloader**:
+          - **Windows**: Download `fox-downloader.exe`, double click to run.
+          - **Linux**: Download `fox-downloader`, make executable (`chmod +x fox-downloader`), and run.
 
-          ## What to download
+          The downloader auto-detects your graphics card, downloads the right build, joins any split files, and extracts everything into a portable folder ready to start!
 
+          ## Manual Downloads
+
+          If you prefer to download and extract manually:
           Pick the archive matching your OS and GPU, extract it anywhere,
           and start `launcher` (`launcher.exe` on Windows).
 
@@ -163,7 +183,7 @@ jobs:
           cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002+… fox-reader-….zip"
           ```
 
-          **Linux / macOS**:
+          **Linux**:
 
           ```
           cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
@@ -174,7 +194,7 @@ jobs:
           ### Checking your download
 
           `SHA256SUMS.txt` lists every file attached here. Verify with
-          `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
+          `sha256sum -c SHA256SUMS.txt` (Linux) or
           `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
           split download, the `#` line naming the archive gives the digest of
           the **joined** file, so you can check the result of the step above.
@@ -215,7 +235,7 @@ jobs:
           TAG="${{ steps.target.outputs.tag }}"
 
           shopt -s nullglob
-          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
+          files=(artifacts/fox-downloader.exe artifacts/fox-downloader artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
 
           if [ ${#files[@]} -eq 0 ]; then
             echo "Error: No release assets found to upload." >&2

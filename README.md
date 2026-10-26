@@ -96,7 +96,7 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 
 ### Install & run (source)
 
-Pick the PyTorch backend matching your system. `<backend>` is one of: `cpu`, `macos`, `cu118`, `cu126`, `cu129`, `cu129_win`, `cu130`, `rocm71`, `rocm72` (ROCm wheels are Linux-only).
+Pick the PyTorch backend matching your system. `<backend>` is one of: `cpu`, `cu118`, `cu126`, `cu129`, `cu129_win`, `cu130`, `rocm71`, `rocm72` (ROCm wheels are Linux-only).
 
 ```bash
 uv sync --extra dev --extra cpu
@@ -123,7 +123,7 @@ Then open `http://127.0.0.1:7954`. First launch redirects to `/setup`, which dow
 uv run --extra <backend> python packaging/llamacpp.py --device <backend> --install
 ```
 
-`<backend>` mirrors the torch extras (`cpu`, `cu129`, `rocm72`, `macos`). On CPU it looks for OpenBLAS (offers a download into `nc/`); on CUDA/ROCm it needs the matching toolkit (`nvcc` / ROCm 6.1+). Preview without installing, or install by hand (note `--no-cache-dir` is mandatory — uv's cache key ignores `CMAKE_ARGS`):
+`<backend>` mirrors the torch extras (`cpu`, `cu129`, `rocm72`). On CPU it looks for OpenBLAS (offers a download into `nc/`); on CUDA/ROCm it needs the matching toolkit (`nvcc` / ROCm 6.1+). Preview without installing, or install by hand (note `--no-cache-dir` is mandatory — uv's cache key ignores `CMAKE_ARGS`):
 
 ```bash
 python packaging/llamacpp.py --device cu129 --print-args
@@ -401,7 +401,6 @@ Pages:
 | Backend extra | Torch index | Platform |
 |---|---|---|
 | `cpu` | CPU | Win/Linux/macOS |
-| `macos` | PyPI | Apple Silicon |
 | `cu118` / `cu126` / `cu129` / `cu130` | matching CUDA index | Linux (CUDA toolkit needed for GGUF builds) |
 | `cu129_win` | CUDA index (Windows split) | Windows |
 | `rocm71` / `rocm72` | ROCm index | Linux only (no ROCm wheels on Windows/macOS) |
@@ -459,7 +458,7 @@ python packaging/build.py --clean            # wipe previous artifacts first
 python packaging/build.py --skip-frontend    # reuse prebuilt static/app.js
 python packaging/build.py --keep-venv        # reuse build venv next time
 python packaging/build.py --deep-compile     # compile deps too (hours)
-python packaging/build.py --device cpu       # cpu|macos|cu118|cu126|cu129|cu129_win|cu130|rocm71|rocm72
+python packaging/build.py --device cpu       # cpu|cu118|cu126|cu129|cu129_win|cu130|rocm71|rocm72
 python packaging/build.py --nuitka-arg ARG   # repeatable, forwarded to Nuitka
 python packaging/build.py --no-blas          # alias for --openblas off
 ```

@@ -328,11 +328,11 @@ def _file_version(version: str) -> str:
 #: What a device extra is called. `cpu`, `macos`, anything CUDA, anything ROCm --
 #: as opposed to `dev`, `gguf`, `bin-build` and `segmentation`, which are also
 #: extras and are not a choice of torch build.
-_DEVICE_EXTRA = re.compile(r"^(?:cpu|macos|cu\d+.*|rocm.*)$")
+_DEVICE_EXTRA = re.compile(r"^(?:cpu|cu\d+.*|rocm.*)$")
 
 #: The devices as they stood when this was written, used only if pyproject cannot
 #: be read for them. `--help` staying useful is worth more than being strict here.
-_DEVICE_FALLBACK = ("cpu", "macos", "cu118", "cu126", "cu129", "cu129_win", "cu130", "rocm71", "rocm72")
+_DEVICE_FALLBACK = ("cpu", "cu118", "cu126", "cu129", "cu129_win", "cu130", "rocm71", "rocm72")
 
 
 def _device_choices() -> list[str]:
