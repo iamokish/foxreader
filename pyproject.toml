@@ -69,10 +69,6 @@ cpu = [
     "torch==2.13.0",
     "torchvision==0.28.0",
 ]
-macos = [
-    "torch==2.13.0",
-    "torchvision==0.28.0",
-]
 # CUDA 11.8
 cu118 = [
     "torch>=2.7.1",
@@ -169,13 +165,11 @@ override-dependencies = [
 ]
 environments = [
     "sys_platform == 'linux'",
-    "sys_platform == 'darwin' and platform_machine == 'arm64'",
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 conflicts = [
     [
         { extra = "cpu" },
-        { extra = "macos" },
         { extra = "cu118" },
         { extra = "cu126" },
         { extra = "cu129" },
@@ -189,11 +183,6 @@ conflicts = [
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-mac"
-url = "https://pypi.org/simple"
 explicit = true
 
 [[tool.uv.index]]
@@ -235,8 +224,7 @@ torch = [
     { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
-    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" },
-    { index = "pytorch-mac", extra = "macos", marker = "platform_system == 'Darwin'"}
+    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" }
 ]
 torchvision = [
     { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
@@ -246,8 +234,7 @@ torchvision = [
     { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
-    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" },
-    { index = "pytorch-mac", extra = "macos", marker = "platform_system == 'Darwin'"}
+    { index = "pytorch-rocm72", extra = "rocm72", marker = "platform_system == 'Linux'" }
 ]
 triton-rocm = [
     { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },

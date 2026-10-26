@@ -32,14 +32,17 @@ class FoxDownloaderApp(ctk.CTk):
         super().__init__()
 
         self.title("Fox Reader — Downloader & Installer")
-        self.geometry("740x660")
-        self.minsize(680, 600)
+        self.geometry("740x680")
+        self.minsize(680, 620)
 
         # Set icon if available
         self._setup_icon()
 
         # State
-        self.hw_info = hardware.detect_system_hardware()
+        self.target_os = hardware.detect_os()
+        self.selected_hw_choice = hardware.HW_RTX_MODERN
+        self.hw_descriptions = {code: desc for code, desc in hardware.HARDWARE_CHOICES}
+        self.hw_code_by_desc = {desc: code for code, desc in hardware.HARDWARE_CHOICES}
         self.releases: list[dict[str, Any]] = []
         self.selected_release_data: dict[str, Any] | None = None
         self.selected_variant: dict[str, Any] | None = None
@@ -101,32 +104,54 @@ class FoxDownloaderApp(ctk.CTk):
 
         subtitle = ctk.CTkLabel(
             header_frame,
-            text="Automatic hardware detection & split-file joiner",
+            text="Fast multi-stream downloads, split-file joiner & setup",
             font=ctk.CTkFont(size=12),
             text_color="#9E9E9E",
         )
         subtitle.pack(side="left", padx=(12, 0), pady=(4, 0))
 
-        # ── Hardware Detection Card ─────────────────────────
+        # ── System & Graphics Setup Card ────────────────────
         hw_card = ctk.CTkFrame(self.container, fg_color=CARD_BG, corner_radius=8)
-        hw_card.pack(fill="x", pady=6, ipadx=10, ipady=8)
+        hw_card.pack(fill="x", pady=6, ipadx=10, ipady=10)
 
         hw_title = ctk.CTkLabel(
             hw_card,
-            text="Detected System Hardware",
+            text="Operating System & Graphics Hardware",
             font=ctk.CTkFont(size=13, weight="bold"),
         )
-        hw_title.pack(anchor="w", padx=12, pady=(4, 2))
+        hw_title.pack(anchor="w", padx=12, pady=(4, 6))
 
-        self.hw_label = ctk.CTkLabel(
-            hw_card,
-            text=f"OS: {self.hw_info['os'].capitalize()} ({self.hw_info['arch']})  •  {self.hw_info['details']}",
-            font=ctk.CTkFont(size=12),
-            text_color="#B0BEC5",
-            anchor="w",
-            justify="left",
+        # OS and Hardware rows inside hw_card
+        os_hw_row = ctk.CTkFrame(hw_card, fg_color="transparent")
+        os_hw_row.pack(fill="x", padx=12, pady=2)
+
+        os_label = ctk.CTkLabel(os_hw_row, text="Platform:", font=ctk.CTkFont(size=13), width=110, anchor="w")
+        os_label.pack(side="left")
+
+        os_options = ["Windows (x64)", "Linux (x64)"]
+        current_os_display = "Windows (x64)" if self.target_os == "windows" else "Linux (x64)"
+        self.os_seg = ctk.CTkSegmentedButton(
+            os_hw_row,
+            values=os_options,
+            command=self._on_os_changed,
         )
-        self.hw_label.pack(anchor="w", padx=12, pady=(0, 4))
+        self.os_seg.set(current_os_display)
+        self.os_seg.pack(side="left")
+
+        hw_row = ctk.CTkFrame(hw_card, fg_color="transparent")
+        hw_row.pack(fill="x", padx=12, pady=(8, 4))
+
+        hw_label = ctk.CTkLabel(hw_row, text="Graphics / GPU:", font=ctk.CTkFont(size=13), width=110, anchor="w")
+        hw_label.pack(side="left")
+
+        self.hw_combo = ctk.CTkComboBox(
+            hw_row,
+            values=[desc for _, desc in hardware.HARDWARE_CHOICES],
+            command=self._on_hw_choice_changed,
+            width=380,
+        )
+        self.hw_combo.set(self.hw_descriptions[self.selected_hw_choice])
+        self.hw_combo.pack(side="left")
 
         # ── Release & Variant Configuration Card ────────────
         config_card = ctk.CTkFrame(self.container, fg_color=CARD_BG, corner_radius=8)
@@ -334,6 +359,14 @@ class FoxDownloaderApp(ctk.CTk):
         # Update variants combo
         self._populate_variants()
 
+    def _on_os_changed(self, value: str):
+        self.target_os = "windows" if "Windows" in value else "linux"
+        self._populate_variants()
+
+    def _on_hw_choice_changed(self, chosen_desc: str):
+        self.selected_hw_choice = self.hw_code_by_desc.get(chosen_desc, hardware.HW_RTX_MODERN)
+        self._populate_variants()
+
     def _on_gguf_toggled(self):
         self._populate_variants()
 
@@ -342,18 +375,22 @@ class FoxDownloaderApp(ctk.CTk):
             return
 
         variants = self.selected_release_data.get("variants", [])
-        os_name = self.hw_info.get("os", "windows")
-        # Filter for user's OS
-        matching_os = [v for v in variants if v["os"] == os_name]
+        # Filter for chosen target OS
+        matching_os = [v for v in variants if v["os"] == self.target_os]
 
         if not matching_os:
             self.variant_combo.configure(values=["No builds for this OS in release"])
-            self.rec_badge.configure(text="No builds matching your OS found in this release.", text_color="#E57373")
+            self.variant_combo.set("No builds for this OS in release")
+            self.rec_badge.configure(text="No builds matching your chosen OS found in this release.", text_color="#E57373")
+            self.selected_variant = None
             return
 
         # Find best recommendation
         rec = github_client.match_recommended_variant(
-            matching_os, self.hw_info, prefer_gguf=self.gguf_var.get()
+            matching_os,
+            target_os=self.target_os,
+            hardware_choice=self.selected_hw_choice,
+            prefer_gguf=self.gguf_var.get(),
         )
         self.selected_variant = rec
 
@@ -369,20 +406,25 @@ class FoxDownloaderApp(ctk.CTk):
         self.variant_combo.configure(values=names)
 
         # Set selection to recommended
-        if rec:
+        if rec and rec in matching_os:
             rec_idx = matching_os.index(rec)
             self.variant_combo.set(names[rec_idx])
-            device_desc = f"{rec['device'].upper()} {'(AI Translation GGUF)' if rec['has_gguf'] else '(No GGUF)'}"
+            device_desc = f"{rec['device'].upper()} {'(with AI Translation GGUF)' if rec['has_gguf'] else '(Standard / No GGUF)'}"
             self.rec_badge.configure(
-                text=f"★ Recommended for your machine: {device_desc}",
+                text=f"★ Recommended for your selection: {device_desc}",
                 text_color="#81C784",
             )
+        elif names:
+            self.variant_combo.set(names[0])
+            self.selected_variant = matching_os[0]
+            self.rec_badge.configure(text="No exact match for your selection; chose first available variant.", text_color="#FFA726")
+        else:
+            self.rec_badge.configure(text="No matching build found for this selection.", text_color="#E57373")
 
     def _on_variant_selected(self, chosen_label: str):
         if not self.selected_release_data:
             return
-        os_name = self.hw_info.get("os", "windows")
-        matching_os = [v for v in self.selected_release_data.get("variants", []) if v["os"] == os_name]
+        matching_os = [v for v in self.selected_release_data.get("variants", []) if v["os"] == self.target_os]
 
         for idx, v in enumerate(matching_os):
             gguf_tag = " + GGUF" if v["has_gguf"] else ""
@@ -417,6 +459,10 @@ class FoxDownloaderApp(ctk.CTk):
         self.install_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.release_combo.configure(state="disabled")
+        self.prerelease_chk.configure(state="disabled")
+        self.os_seg.configure(state="disabled")
+        self.hw_combo.configure(state="disabled")
+        self.gguf_chk.configure(state="disabled")
         self.variant_combo.configure(state="disabled")
         self.browse_btn.configure(state="disabled")
 
@@ -595,6 +641,10 @@ class FoxDownloaderApp(ctk.CTk):
         self.install_btn.configure(state="normal")
         self.cancel_btn.configure(state="disabled")
         self.release_combo.configure(state="normal")
+        self.prerelease_chk.configure(state="normal")
+        self.os_seg.configure(state="normal")
+        self.hw_combo.configure(state="normal")
+        self.gguf_chk.configure(state="normal")
         self.variant_combo.configure(state="normal")
         self.browse_btn.configure(state="normal")
 

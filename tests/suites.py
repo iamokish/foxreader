@@ -291,6 +291,9 @@ BACKEND = Domain(
 # running it; the rest is these scripts, which need something already built.
 BUILD = Domain(
     name="build",
+    modules=(
+        "test_downloader",
+    ),
     scripts=(
         Script(
             path="dist/cvcheck.py",

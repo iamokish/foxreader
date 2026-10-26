@@ -183,7 +183,7 @@ jobs:
           cmd /c "copy /b fox-reader-….zip.001+fox-reader-….zip.002+… fox-reader-….zip"
           ```
 
-          **Linux / macOS**:
+          **Linux**:
 
           ```
           cat fox-reader-….tar.gz.* > fox-reader-….tar.gz
@@ -194,7 +194,7 @@ jobs:
           ### Checking your download
 
           `SHA256SUMS.txt` lists every file attached here. Verify with
-          `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
+          `sha256sum -c SHA256SUMS.txt` (Linux) or
           `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
           split download, the `#` line naming the archive gives the digest of
           the **joined** file, so you can check the result of the step above.

@@ -13,7 +13,14 @@ _DOWNLOADER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 
 if _DOWNLOADER_DIR not in sys.path:
     sys.path.insert(0, _DOWNLOADER_DIR)
 
-from hardware import detect_os, detect_arch, detect_system_hardware
+from hardware import (
+    detect_os,
+    detect_arch,
+    HW_RTX_MODERN,
+    HW_GTX_LEGACY,
+    HW_CPU,
+    HARDWARE_CHOICES,
+)
 from github_client import (
     parse_release_assets,
     parse_sha256sums_text,
@@ -30,11 +37,14 @@ from downloader import (
 
 
 def test_hardware_detection():
-    hw = detect_system_hardware()
-    assert hw["os"] in ("windows", "linux", "macos")
-    assert hw["arch"] in ("x64", "arm64")
-    assert isinstance(hw["has_nvidia"], bool)
-    assert hw["recommended_device"] in ("cpu", "cu118", "cu126", "cu129", "cu130")
+    os_name = detect_os()
+    assert os_name in ("windows", "linux")
+    arch = detect_arch()
+    assert arch in ("x64", "arm64")
+    assert len(HARDWARE_CHOICES) == 3
+    assert any(code == HW_RTX_MODERN for code, _ in HARDWARE_CHOICES)
+    assert any(code == HW_GTX_LEGACY for code, _ in HARDWARE_CHOICES)
+    assert any(code == HW_CPU for code, _ in HARDWARE_CHOICES)
 
 
 def test_parse_release_assets():
@@ -101,16 +111,40 @@ def test_match_recommended_variant():
         {"os": "windows", "device": "cpu", "has_gguf": True, "base_name": "cpu-gguf"},
         {"os": "windows", "device": "cpu", "has_gguf": False, "base_name": "cpu-no-gguf"},
         {"os": "windows", "device": "cu126", "has_gguf": False, "base_name": "cu126-no-gguf"},
+        {"os": "windows", "device": "cu118", "has_gguf": False, "base_name": "cu118-no-gguf"},
         {"os": "linux", "device": "cpu", "has_gguf": True, "base_name": "linux-cpu"},
+        {"os": "linux", "device": "cu126", "has_gguf": True, "base_name": "linux-cu126-gguf"},
     ]
 
-    hw_cpu = {"os": "windows", "recommended_device": "cpu"}
-    rec = match_recommended_variant(mock_variants, hw_cpu, prefer_gguf=True)
-    assert rec["base_name"] == "cpu-gguf"
+    # Modern RTX on Windows
+    rec_rtx = match_recommended_variant(
+        mock_variants, target_os="windows", hardware_choice=HW_RTX_MODERN, prefer_gguf=True
+    )
+    assert rec_rtx["base_name"] == "cu126-no-gguf"
 
-    hw_cu126 = {"os": "windows", "recommended_device": "cu126"}
-    rec_cuda = match_recommended_variant(mock_variants, hw_cu126, prefer_gguf=True)
-    assert rec_cuda["base_name"] == "cu126-no-gguf"
+    # Legacy GTX on Windows
+    rec_gtx = match_recommended_variant(
+        mock_variants, target_os="windows", hardware_choice=HW_GTX_LEGACY, prefer_gguf=True
+    )
+    assert rec_gtx["base_name"] == "cu118-no-gguf"
+
+    # CPU on Windows with GGUF
+    rec_cpu_gguf = match_recommended_variant(
+        mock_variants, target_os="windows", hardware_choice=HW_CPU, prefer_gguf=True
+    )
+    assert rec_cpu_gguf["base_name"] == "cpu-gguf"
+
+    # CPU on Windows without GGUF
+    rec_cpu_no_gguf = match_recommended_variant(
+        mock_variants, target_os="windows", hardware_choice=HW_CPU, prefer_gguf=False
+    )
+    assert rec_cpu_no_gguf["base_name"] == "cpu-no-gguf"
+
+    # Linux OS filtering
+    rec_linux = match_recommended_variant(
+        mock_variants, target_os="linux", hardware_choice=HW_RTX_MODERN, prefer_gguf=True
+    )
+    assert rec_linux["base_name"] == "linux-cu126-gguf"
 
 
 def test_rejoin_split_parts_and_verify():

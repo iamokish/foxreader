@@ -26,7 +26,6 @@ paste into the build command later.
 | NVIDIA RTX 30xx / 40xx | `cu126` or `cu129` | 12.6 / 12.9 |
 | NVIDIA RTX 50xx / newest cards | `cu129` or `cu130` | 12.9 / 13.0 |
 | AMD GPU | — | coming soon (build `cpu` for now) |
-| Apple Silicon Mac | `macos` | none needed |
 
 Notes:
 
@@ -150,12 +149,6 @@ sudo apt install -y git
 ```bash
 sudo apt install -y build-essential
 gcc --version
-```
-
-**macOS (only for `--device macos` builds):**
-
-```bash
-xcode-select --install
 ```
 
 ---
@@ -417,7 +410,7 @@ gh attestation verify <file> --repo iamokish/foxreader
 
 | Flag | Effect |
 |---|---|
-| `--device {cpu,macos,cu118,cu126,cu129,cu129_win,cu130,rocm71,rocm72}` | Which PyTorch to bundle (default `cpu`) |
+| `--device {cpu,cu118,cu126,cu129,cu129_win,cu130,rocm71,rocm72}` | Which PyTorch to bundle (default `cpu`) |
 | `--no-gguf` | Skip the llama.cpp translator backend entirely |
 | `--gguf-device DEVICE` | Build llama.cpp for another device than `--device` |
 | `--openblas {auto,download,off}` | OpenBLAS for the CPU backend (`auto` = system, else download) |

@@ -8,6 +8,11 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+try:
+    from .hardware import HW_CPU, HW_GTX_LEGACY, HW_RTX_MODERN
+except ImportError:
+    from hardware import HW_CPU, HW_GTX_LEGACY, HW_RTX_MODERN
+
 DEFAULT_REPO = "iamokish/foxreader"
 API_URL = f"https://api.github.com/repos/{DEFAULT_REPO}/releases"
 USER_AGENT = "FoxReader-Downloader/1.0"
@@ -193,32 +198,30 @@ def fetch_sha256sums(url: str, timeout: int = 15) -> dict[str, str]:
 
 def match_recommended_variant(
     variants: list[dict[str, Any]],
-    hw_info: dict[str, Any],
+    target_os: str = "windows",
+    hardware_choice: str = HW_RTX_MODERN,
     prefer_gguf: bool = True,
 ) -> dict[str, Any] | None:
-    """Find the best matching variant for the detected hardware."""
-    os_name = hw_info.get("os", "windows")
-    target_device = hw_info.get("recommended_device", "cpu")
-
-    # Filter to variants matching user's OS
-    os_variants = [v for v in variants if v["os"] == os_name]
+    """Find the best matching variant for user-selected OS and hardware category."""
+    # Filter to variants matching chosen OS
+    os_variants = [v for v in variants if v["os"] == target_os]
     if not os_variants:
         return None
 
-    # Handle Windows cu129 special name cu129_win
-    target_devices = [target_device]
-    if os_name == "windows" and target_device == "cu129":
-        target_devices = ["cu129_win", "cu129"]
-
-    # Fallback ladder if specific CUDA variant is not in the release
-    cuda_ladder = ["cu130", "cu129_win", "cu129", "cu126", "cu118", "cpu"]
-    if target_device in cuda_ladder:
-        idx = cuda_ladder.index(target_device if target_device != "cu129" or os_name != "windows" else "cu129_win")
-        candidates = cuda_ladder[idx:]
-    else:
+    # Determine device priority candidates based on hardware category
+    if hardware_choice == HW_RTX_MODERN:
+        # Modern NVIDIA RTX: prefer CUDA 12.6 / 12.9 / 13.0
+        if target_os == "windows":
+            candidates = ["cu126", "cu129_win", "cu129", "cu130", "cu118", "cpu"]
+        else:
+            candidates = ["cu126", "cu129", "cu130", "cu118", "cpu"]
+    elif hardware_choice == HW_GTX_LEGACY:
+        # Older NVIDIA GPUs (GTX 10xx, 16xx, RTX 20xx): prefer CUDA 11.8
+        candidates = ["cu118", "cu126", "cpu"]
+    else:  # HW_CPU
         candidates = ["cpu"]
 
-    # Try searching down the ladder
+    # Try searching down the priority candidates
     for dev in candidates:
         matching_dev = [v for v in os_variants if v["device"] == dev]
         if not matching_dev:
