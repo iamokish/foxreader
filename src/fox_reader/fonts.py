@@ -1,10 +1,16 @@
 import base64
+import hashlib
 import io
 import json
 import logging
+import math
+import os
+import tempfile
 from pathlib import Path
 
 from fontTools.ttLib import TTFont
+
+from fox_reader.font_calibration import PROFILE_SCHEMA, profile_for
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,28 @@ def _extract_font_metadata(source, stem: str):
         bold = False
         italic = False
 
+        units_per_em = 0
+        ascent = 0
+        descent = 0
+
+        if "head" in font:
+            units_per_em = int(font["head"].unitsPerEm)
+
+        # freetype/Pillow read the horizontal header metrics first, falling back
+        # to OS/2 when hhea is missing or zero -- mirror that here so the
+        # numbers the backend sends match what Pillow's ``getmetrics()`` uses.
+        if "hhea" in font:
+            ascent = int(font["hhea"].ascent)
+            descent = int(font["hhea"].descent)
+        if (not ascent and not descent) and "OS/2" in font:
+            ascent = int(font["OS/2"].sTypoAscender)
+            descent = int(font["OS/2"].sTypoDescender)
+
+        # Pillow's ``getmetrics()`` reports descent as a positive depth so that
+        # ``ascent + descent`` is the full line height; store it that way.
+        if descent < 0:
+            descent = -descent
+
         if "OS/2" in font:
             fs = font["OS/2"].fsSelection
             bold = bool(fs & 0x20)
@@ -76,6 +104,9 @@ def _extract_font_metadata(source, stem: str):
             "subfamily": subfamily,
             "bold": bold,
             "italic": italic,
+            "units_per_em": units_per_em,
+            "ascent": ascent,
+            "descent": descent,
         }
     except Exception as e:
         logger.debug("Failed to extract font metadata from %s: %s", stem, e)
@@ -179,7 +210,135 @@ def _payload(font_bytes: bytes, filename: str, metadata: dict) -> dict:
         "subfamily": metadata["subfamily"],
         "bold": metadata["bold"],
         "italic": metadata["italic"],
+        "unitsPerEm": metadata.get("units_per_em") or 0,
+        "ascent": metadata.get("ascent") or 0,
+        "descent": metadata.get("descent") or 0,
     }
+
+
+def _cmap_ranges(font_bytes: bytes) -> list[int]:
+    """``font_bytes``' unicode cmap as a flat ``[start, end, ...]`` list.
+
+    The preview splits mixed text into per-face runs exactly like the
+    typesetter's `_needs_symbol` rule, which needs to know what each face
+    covers. Codepoints compress to ranges by construction -- a comic face's
+    few hundred glyphs become a few dozen pairs and NotoSansSymbols2's
+    thousands a few hundred.
+
+    ``[]`` when the face cannot be read: the frontend treats coverage as
+    unknown and keeps the single-face (system-default glyph) behaviour rather
+    than guessing, so a broken read is a parity gap, never a break.
+    """
+    try:
+        cps = sorted(profile_for(font_bytes).coverage)
+    except Exception:  # noqa: BLE001 - coverage is best-effort metadata
+        return []
+    pairs: list[tuple[int, int]] = []
+    for cp in cps:
+        if pairs and cp == pairs[-1][1] + 1:
+            pairs[-1] = (pairs[-1][0], cp)
+        else:
+            pairs.append((cp, cp))
+    out: list[int] = []
+    for start, end in pairs:
+        out.append(start)
+        out.append(end)
+    return out
+
+
+def _primary_payload(font_bytes: bytes, filename: str, metadata: dict) -> dict:
+    """A frontend face's payload plus the per-glyph fallback wiring.
+
+    ``symbol_scale`` is the calibration factor :func:`fox_reader.typeset.symbol_scale_for`
+    measured for this face: the render resizes the symbol fallback to
+    ``round(size * scale)`` so its glyphs read this face's cap height, and the
+    preview needs the identical number and rule, so the factor ships with the
+    face instead of both engines re-measuring it. ``coverage`` is the face's
+    own unicode ranges — the character set the preview must compare against.
+
+    ``fox_reader.typeset`` imports lazily here: it is a heavier module, and
+    this module must stay importable wherever the (Nuitka-optimised) module
+    graph lands it without pulling the typesetter in behind its back.
+    """
+    payload = _payload(font_bytes, filename, metadata)
+    try:
+        from fox_reader.typeset import line_metrics_for, symbol_scale_for
+
+        scale = symbol_scale_for(filename)
+    except Exception:  # noqa: BLE001 - wiring is an upgrade, never a duty
+        scale = 1.0
+    payload["symbol_scale"] = scale
+    try:
+        # The per-size getmetrics() table behind ``/api/fonts``: the preview
+        # advances lines by exactly these ints instead of estimating them from
+        # font units -- which cannot reproduce FreeType's per-size rounding
+        # (49 of 67 fit sizes disagree by a pixel for ComicMono alone).
+        payload["line_metrics"] = line_metrics_for(filename)
+    except Exception:  # noqa: BLE001 - wiring is an upgrade, never a duty
+        payload["line_metrics"] = []
+    payload["coverage"] = _cmap_ranges(font_bytes)
+    profile = profile_for(font_bytes)
+    payload["calibration"] = {
+        "cap_height": profile.cap_height,
+        "symbol_height": profile.symbol_height,
+        "symbol_samples": profile.symbol_samples,
+    }
+    return payload
+
+
+def symbol_fallback_payload() -> dict | None:
+    """The frontend-facing contract for the typesetting-only symbol face.
+
+    The face stays hidden from the selectable list, but the browser needs the
+    same file the typesetter renders with: a character the primary face lacks
+    would otherwise glyph-fall back to an engine-specific system font, whose
+    shape, unhinted advance and outline the render cannot reproduce -- exactly
+    the preview/render class of mismatch the typesetting parity work exists to
+    close. So the payload marks itself ``hidden`` and carries the face's own
+    unicode ranges (as ``coverage``, same field a primary face gets), while
+    ``symbol_scale`` stays 1.0 -- the calibration lives on the *primary*
+    faces, not on the fallback they reference.
+
+    None when the face cannot be found or sanitised: the frontend then falls
+    back to per-glyph system replacement, the historical behaviour, and the
+    selectable list is untouched.
+
+    Cached against the raw bytes' content hash, mirroring how the typesetter
+    caches its own byte cache -- the sanitised output of one input is stable,
+    so a hit skips re-parsing entirely.
+    """
+    global _SYMBOL_FALLBACK, _SYMBOL_FALLBACK_SIG
+    from fox_reader import assets
+
+    raw = assets.symbol_font_bytes()
+    if not raw:
+        return None
+    sig = hashlib.md5(raw).hexdigest()
+    # Signature gate first, *not* "_SYMBOL_FALLBACK is not None": a face that
+    # failed to build must not be rebuilt (and re-warned) on every call -- the
+    # cached-None pair ``(fallback, sig)`` is also a hit, until the bytes
+    # themselves change.
+    if _SYMBOL_FALLBACK_SIG == sig:
+        return _SYMBOL_FALLBACK
+    try:
+        font_bytes = _sanitize_and_get_bytes(io.BytesIO(raw), SYMBOL_FONT_FILENAME)
+        metadata = _extract_font_metadata(io.BytesIO(raw), Path(SYMBOL_FONT_FILENAME).stem)
+    except Exception as e:  # noqa: BLE001 - a bad fallback is not fatal
+        logger.warning("Symbol fallback face is unusable: %s", e)
+        _SYMBOL_FALLBACK = None
+        _SYMBOL_FALLBACK_SIG = sig
+        return None
+    payload = _payload(font_bytes, SYMBOL_FONT_FILENAME, metadata)
+    payload["hidden"] = True
+    payload["symbol_scale"] = 1.0
+    payload["coverage"] = _cmap_ranges(font_bytes)
+    _SYMBOL_FALLBACK = payload
+    _SYMBOL_FALLBACK_SIG = sig
+    return payload
+
+
+_SYMBOL_FALLBACK: dict | None = None
+_SYMBOL_FALLBACK_SIG: str | None = None
 
 
 def _font_files(font_dir: Path) -> list[Path]:
@@ -208,9 +367,34 @@ def _font_files(font_dir: Path) -> list[Path]:
 #: because nothing reads it.
 _PAYLOAD_STR_KEYS = ("data_uri", "format", "font_name", "font_filename", "family_name")
 
+#: Payload metrics the frontend needs (line-height parity with
+#: ``font.getmetrics()``). A cache entry predating them must be re-parsed once
+#: instead of serving zeros forever; missing fields fall back to canvas
+#: estimates only at the route edge, never here.
+_PAYLOAD_INT_KEYS = ("unitsPerEm", "ascent", "descent")
+
+#: Per-glyph fallback wiring the preview shares with the render. Old cache
+#: entries without them read as invalid and re-parse once -- a deliberate
+#: one-time cost that also upgrades their metrics in the same pass. The
+#: comment block above ``_PAYLOAD_INT_KEYS`` explains why re-parsing wins.
+_PAYLOAD_FALLBACK_KEYS = ("symbol_scale", "coverage")
+
+
+def _valid_line_metrics(value: object) -> bool:
+    """Whether ``value`` is a per-size ``[ascent, descent, ...]`` table.
+
+    Any even-length int list is acceptable, including the empty one a face
+    that cannot be measured produces: the preview falls back to its own
+    estimate for an empty table. Bools are kept out (`type() is int`), and an
+    odd length is a truncated/mangled table rather than a real one.
+    """
+    if not isinstance(value, list) or len(value) % 2:
+        return False
+    return all(type(item) is int for item in value)
+
 
 def _valid_payload(payload: object) -> bool:
-    """Whether a cached payload is shaped like one :func:`_payload` produced.
+    """Whether a cached payload is shaped like one :func:`_primary_payload` produced.
 
     ``.fonts_cache.json`` sits in the folder users are invited to drop fonts
     into, so it is untrusted input that merely happens to usually be ours.
@@ -221,10 +405,67 @@ def _valid_payload(payload: object) -> bool:
         return False
     if not all(isinstance(payload.get(key), str) for key in _PAYLOAD_STR_KEYS):
         return False
-    return isinstance(payload.get("bold"), bool) and isinstance(payload.get("italic"), bool)
+    if payload["format"] not in ("truetype", "opentype"):
+        return False
+    try:
+        prefix, encoded = payload["data_uri"].split(",", 1)
+        if prefix not in ("data:font/ttf;base64", "data:font/otf;base64"):
+            return False
+        raw = base64.b64decode(encoded, validate=True)
+        if len(raw) < 12 or raw[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+            return False
+        tables = int.from_bytes(raw[4:6], "big")
+        if not tables or len(raw) < 12 + tables * 16:
+            return False
+    except (ValueError, TypeError):
+        return False
+    if not all(isinstance(payload.get(key), bool) for key in ("bold", "italic")):
+        return False
+    # `type() is int` keeps bools out: a boolean metric would mean a malformed
+    # cache entry sneaking past the shape check.
+    if not all(type(payload.get(key)) is int for key in _PAYLOAD_INT_KEYS):
+        return False
+    # `symbol_scale` may be any float (the calibration is a ratio, not a
+    # currency: 0.971 and 1.26 are both legitimate), `bool` is an int subclass
+    # and is excluded here as above.
+    scale = payload.get("symbol_scale")
+    if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale):
+        return False
+    coverage = payload.get("coverage")
+    if not isinstance(coverage, list):
+        return False
+    if not all(type(cp) is int for cp in coverage):
+        return False
+    if len(coverage) % 2:
+        return False
+    previous = -1
+    total = 0
+    for i in range(0, len(coverage), 2):
+        start, end = coverage[i:i + 2]
+        if start <= previous or start < 0 or end < start or end > 0x10ffff:
+            return False
+        previous = end
+        total += end - start + 1
+    # A single SFNT face cannot have more than 65535 glyphs; aliases can add
+    # coverage, but a million-codepoint forged cache is not a useful font index.
+    if total > 200_000:
+        return False
+    calibration = payload.get("calibration")
+    if not isinstance(calibration, dict):
+        return False
+    for key in ("cap_height", "symbol_height"):
+        value = calibration.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 8:
+            return False
+    samples = calibration.get("symbol_samples")
+    if type(samples) is not int or not 0 <= samples <= 48:
+        return False
+    return _valid_line_metrics(payload.get("line_metrics"))
 
 
 def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
+    from fox_reader import __version__
+
     FONTS = []
 
     font_cache = {}
@@ -246,8 +487,13 @@ def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
             )
             font_cache = {}
 
-    cache_updated = False
-    current_cache_signature = {}
+    metadata = {"__version__": __version__, "__schema__": PROFILE_SCHEMA}
+    version_matches = all(font_cache.get(k) == v for k, v in metadata.items())
+    if not version_matches:
+        logger.debug("Font cache version changed; rescanning every font.")
+        font_cache = {}
+    cache_updated = not version_matches
+    current_cache_signature = dict(metadata)
 
     for font_path in font_files:
         filename = font_path.name
@@ -255,7 +501,7 @@ def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
         # Calculate distinct file state properties (Name + Modification Time + Size)
         try:
             stat = font_path.stat()
-            file_signature = f"{filename}_{stat.st_mtime}_{stat.st_size}"
+            file_signature = f"{filename}_{stat.st_mtime_ns}_{stat.st_size}"
         except Exception as e:
             # Deliberately not a string. A sentinel *is* a signature, so a cache
             # file containing that same sentinel would "match" a font this
@@ -269,6 +515,7 @@ def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
             and isinstance(entry, dict)
             and entry.get("signature") == file_signature
             and _valid_payload(entry.get("payload"))
+            and entry["payload"]["font_filename"] == filename
         ):
             FONTS.append(entry["payload"])
             current_cache_signature[filename] = entry
@@ -282,7 +529,7 @@ def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
             continue
 
         metadata = _extract_font_metadata(font_path, font_path.stem)
-        font_payload = _payload(font_bytes, filename, metadata)
+        font_payload = _primary_payload(font_bytes, filename, metadata)
 
         FONTS.append(font_payload)
 
@@ -292,28 +539,22 @@ def _load_fonts_to_ram(font_files: list[Path], cache_file_path: Path):
         }
         cache_updated = True
 
-    if cache_updated:
+    if cache_updated or current_cache_signature.keys() != font_cache.keys():
+        temporary = None
         try:
-            with open(cache_file_path, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=cache_file_path.parent,
+                                             prefix=".fonts-cache-", suffix=".tmp", delete=False) as f:
+                temporary = Path(f.name)
                 json.dump(current_cache_signature, f, indent=2, ensure_ascii=False)
+            os.replace(temporary, cache_file_path)
         except Exception as cache_ex:
             logger.warning("Failed writing font cache index: %s", cache_ex)
-    else:
-        # A cache written before the symbol fallback was hidden still holds its
-        # entry. It is ignored above (the file is filtered before this is
-        # called), but without a rewrite it lingers forever. Dropping it is a
-        # pure cleanup: failure stays a debug, never a warning.
-        try:
-            stale = [k for k in font_cache if _is_symbol_font(k)]
-            if stale and isinstance(font_cache, dict):
-                pruned = {k: v for k, v in font_cache.items() if k not in stale}
-                # Only rewrite when pruning actually changes the file; the
-                # common case (no symbol entry) skips I/O entirely.
-                if len(pruned) != len(font_cache):
-                    with open(cache_file_path, "w", encoding="utf-8") as f:
-                        json.dump(pruned, f, indent=2, ensure_ascii=False)
-        except Exception as e:  # noqa: BLE001 - cache cleanup never fails a request
-            logger.debug("Could not prune symbol entries from font cache: %s", e)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary font cache %s", temporary)
 
     return FONTS
 
@@ -326,7 +567,8 @@ def _bundled_font_payloads() -> list[dict]:
     whatsoever and the typesetter drops to Pillow's bitmap default.
 
     The symbol fallback is deliberately excluded even if the bundle lists it:
-    it is a per-glyph typesetting aid, never a frontend face.
+    it is a per-glyph typesetting aid, never a *selectable* frontend face (the
+    browser reaches it through :func:`symbol_fallback_payload`, hidden).
 
     Not written to ``.fonts_cache.json``: that index is keyed by the size and
     mtime of a file in the folder, and these have no file.
@@ -347,7 +589,7 @@ def _bundled_font_payloads() -> list[dict]:
         except Exception as e:  # noqa: BLE001 - a bad fallback is not fatal
             logger.warning("Bundled font %s is unusable: %s", filename, e)
             continue
-        payloads.append(_payload(font_bytes, filename, metadata))
+        payloads.append(_primary_payload(font_bytes, filename, metadata))
 
     return payloads
 
@@ -411,8 +653,10 @@ def getFonts(font_dir: Path | None = None) -> list[dict]:
     # bundled fallbacks are used -- not the cache index, which is only ever an
     # optimisation for files that are already there. The symbol fallback is
     # filtered here, not in _font_files: it lives in the same folder on disk
-    # (and in the bundle) but is never a frontend font and must not count as
-    # "a font in the folder" -- a folder holding only it is an empty folder.
+    # (and in the bundle) but is never a *selectable* frontend font and must
+    # not count as "a font in the folder" -- a folder holding only it is an
+    # empty folder. The browser still receives the bytes, hidden, through
+    # :func:`symbol_fallback_payload`.
     font_files = [p for p in _font_files(font_dir) if not _is_symbol_font(p.name)]
 
     fonts = _load_fonts_to_ram(font_files, CACHE_FILE) if font_files else []

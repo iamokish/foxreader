@@ -95,9 +95,94 @@ async def get_fonts_list(request: Request):
             "font_filename": f["font_filename"],
             "font_format": f["format"],
             "font_data_uri": f["data_uri"],
+            # Font-table metrics (font units), so the frontend computes line
+            # height exactly like Pillow's `font.getmetrics()` instead of
+            # estimating it from canvas text metrics. Zeros on a stale payload
+            # degrade gracefully to the frontend's own estimate.
+            "unitsPerEm": f.get("unitsPerEm", 0),
+            "ascent": f.get("ascent", 0),
+            "descent": f.get("descent", 0),
+            # Per-glyph symbol-fallback wiring, shared by both engines: the
+            # calibration the render typeset with (`1.0` keeps the historical
+            # unscaled fallback when a cached payload predates it) and the
+            # face's own unicode ranges, which the preview's run-splitting
+            # mirrors `typeset._needs_symbol` with.
+            "symbol_scale": f.get("symbol_scale", 1.0),
+            "symbol_scales": f.get("symbol_scales", {}),
+            "symbol_glyph_adjustments": f.get("symbol_glyph_adjustments", {}),
+            "coverage": f.get("coverage", []),
+            # Per-size `[ascent, descent, ...]` from the render's own
+            # `font.getmetrics()` (`typeset.line_metrics_for`): FreeType's
+            # per-size rounding cannot be reproduced from font units, so the
+            # preview looks sizes up here and only estimates for an empty
+            # table (a payload predating this field).
+            "line_metrics": f.get("line_metrics", []),
         }
         for f in fonts
     ]
+
+
+@router.get("/api/fonts/available")
+async def get_available_fonts(request: Request):
+    """Settings inventory, including fonts currently reserved as fallbacks."""
+    return [_symbol_response(payload) for payload in request.app.state.fonts.get_available()]
+
+
+@router.get("/api/fonts/glyphs")
+async def get_font_glyphs(request: Request, filename: str, query: str = "", offset: int = 0, limit: int = 96):
+    if offset < 0 or not 1 <= limit <= 128 or len(query) > 80:
+        return JSONResponse({"error": "Invalid glyph search or page size"}, status_code=400)
+    try:
+        return request.app.state.fonts.get_glyphs(filename, query, offset, limit)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@router.get("/api/fonts/symbol-fallbacks")
+async def get_symbol_fallback_fonts(request: Request):
+    """Ordered user faces followed by Noto; excluded from the text picker."""
+    return [_symbol_response(payload) for payload in request.app.state.fonts.get_symbol_fallbacks()]
+
+
+def _symbol_response(payload: dict) -> dict:
+    return {
+        "font_name": payload["font_name"],
+        "font_filename": payload["font_filename"],
+        "font_format": payload["format"],
+        "font_data_uri": payload["data_uri"],
+        "unitsPerEm": payload.get("unitsPerEm", 0),
+        "ascent": payload.get("ascent", 0),
+        "descent": payload.get("descent", 0),
+        "coverage": payload.get("coverage", []),
+        "forced_codepoints": payload.get("forced_codepoints", []),
+        "hidden": payload.get("hidden", True),
+    }
+
+
+@router.get("/api/fonts/symbol-fallback")
+async def get_symbol_fallback_font(request: Request):
+    """The hidden fallback face, for the browser's per-glyph symbol runs.
+
+    A character the primary face lacks used to reach an engine-specific
+    system font in the preview while the render typeset it with
+    NotoSansSymbols2 -- different shape, advance and outline, the same
+    preview/render mismatch class the rest of the typesetting parity covered.
+    This serves the fallback's bytes, hidden, so the preview resolves a
+    missing glyph the same way the typesetter's `_needs_symbol` does.
+
+    ``null`` when the face is unavailable: the preview then keeps the
+    historical system replacement for those characters.
+    """
+    payload = None
+    try:
+        from fox_reader.fonts import symbol_fallback_payload
+
+        payload = symbol_fallback_payload()
+    except Exception:  # noqa: BLE001 - an absent fallback is not a broken page
+        payload = None
+    if not payload:
+        return None
+    return _symbol_response(payload)
 
 
 @router.post("/api/folder/inspect", response_class=JSONResponse)

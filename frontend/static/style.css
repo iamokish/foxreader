@@ -2215,12 +2215,14 @@ body.eyedropper-active #mainImage {
 
 .entry-plate,
 .entry-text,
+.entry-text-outline,
 .clean-plate,
 .clean-marks {
     pointer-events: none;
 }
 
-.entry-text {
+.entry-text,
+.entry-text-outline {
     user-select: none;
 }
 

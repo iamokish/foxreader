@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
 
 from .constants import mtl_model_downloaded, mtl_models_for_language
 from .device import AUTO as AUTO_DEVICE
@@ -127,11 +130,96 @@ class DeviceSettings(BaseModel):
             return AUTO_THREADS
 
 
+def normalize_symbol_fallbacks(value: object, *, strict: bool = False) -> tuple[str, ...]:
+    """Persist basenames only; bad optional preferences never reset other settings."""
+    from fox_reader.fonts import FONT_EXTENSIONS, SYMBOL_FONT_FILENAME
+
+    if not isinstance(value, (list, tuple)):
+        if strict:
+            raise ValueError("symbol_fallbacks must be a list of font filenames")
+        return ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        name = item.strip() if isinstance(item, str) else ""
+        invalid = (not name or "/" in name or "\\" in name or ":" in name
+                   or Path(name).suffix.lower() not in FONT_EXTENSIONS
+                   or name.lower() == SYMBOL_FONT_FILENAME.lower() or name.lower() in seen)
+        if invalid:
+            if strict:
+                raise ValueError("Choose distinct loaded fonts; NotoSansSymbols2 is always last")
+            continue
+        result.append(name)
+        seen.add(name.lower())
+    if len(result) > 3 and strict:
+        raise ValueError("Choose at most three symbol fallback fonts")
+    return tuple(result[:3])
+
+
+def normalize_symbol_characters(value: object, names: tuple[str, ...], *, strict: bool = False) -> dict[str, str]:
+    """One owner per Unicode scalar. Invalid optional saved rules are skipped."""
+    from fox_reader.fonts import SYMBOL_FONT_FILENAME
+
+    if not isinstance(value, dict):
+        if strict:
+            raise ValueError("symbol_characters must be an object of font filenames and character strings")
+        return {}
+    allowed = (*names, SYMBOL_FONT_FILENAME)
+    unknown = set(value) - set(allowed)
+    if unknown and strict:
+        raise ValueError("Character assignments must belong to selected fallback fonts or NotoSansSymbols2")
+    result: dict[str, str] = {}
+    owners: dict[str, str] = {}
+    for name in allowed:
+        raw = value.get(name, "")
+        if not isinstance(raw, str) or len(raw) > 256:
+            if strict:
+                raise ValueError("Use a character string with at most 25 distinct characters per font")
+            continue
+        characters: list[str] = []
+        for ch in dict.fromkeys(raw):
+            category = unicodedata.category(ch)
+            if ch.isspace() or (category.startswith("C") and category != "Co"):
+                if strict:
+                    raise ValueError(f"U+{ord(ch):04X} is a space, control or unsupported Unicode character")
+                continue
+            if ch in owners:
+                if strict:
+                    raise ValueError(f"U+{ord(ch):04X} is already assigned to {owners[ch]}")
+                continue
+            if len(characters) >= 25:
+                if strict:
+                    raise ValueError("Assign at most 25 distinct characters to each font")
+                break
+            characters.append(ch)
+            owners[ch] = name
+        if characters:
+            result[name] = "".join(characters)
+    return result
+
+
+class FontSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    symbol_fallbacks: tuple[str, ...] = ()
+    symbol_characters: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("symbol_fallbacks", mode="before")
+    @classmethod
+    def normalize_fallbacks(cls, value: object) -> tuple[str, ...]:
+        return normalize_symbol_fallbacks(value)
+
+    @field_validator("symbol_characters", mode="before")
+    @classmethod
+    def normalize_characters(cls, value: object, info: ValidationInfo) -> dict[str, str]:
+        return normalize_symbol_characters(value, info.data.get("symbol_fallbacks", ()))
+
+
 class FoxSettings(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     mtl_defaults: MTLDefaults = Field(default_factory=MTLDefaults)
     devices: DeviceSettings = Field(default_factory=DeviceSettings)
+    fonts: FontSettings = Field(default_factory=FontSettings)
     deepl_api_token: str = ""
     jpdb_api_token: str = ""
     #: Which text-recognition engine OCR uses. ``paddleocr`` is the classic
@@ -140,6 +228,11 @@ class FoxSettings(BaseModel):
     #: are present (see OCRService fallback), so an old or hand-edited file
     #: can never break startup.
     ocr_engine: str = Field(default="paddleocr")
+
+    @field_validator("fonts", mode="before")
+    @classmethod
+    def normalize_fonts_block(cls, value: object) -> object:
+        return value if isinstance(value, (dict, FontSettings)) else {}
 
     @field_validator("ocr_engine", mode="before")
     @classmethod
@@ -249,12 +342,19 @@ class SettingsManager:
         if self.settings is None:
             raise RuntimeError("Settings have not been loaded.")
 
-        with self.settings_path.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                self.settings.model_dump(mode="json"),
-                f,
-                sort_keys=False,
-            )
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.config_root,
+                                             prefix=".settings-", suffix=".tmp", delete=False) as f:
+                temporary = Path(f.name)
+                yaml.safe_dump(self.settings.model_dump(mode="json"), f, sort_keys=False)
+            os.replace(temporary, self.settings_path)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary settings file %s", temporary)
 
     def _ensure_loaded(self) -> FoxSettings:
         if self.settings is None:
@@ -272,7 +372,11 @@ class SettingsManager:
         settings = self._ensure_loaded()
 
         self.settings = FoxSettings.model_validate({**settings.model_dump(), **changes})
-        self.save()
+        try:
+            self.save()
+        except OSError:
+            self.settings = settings
+            raise
 
         return self.settings
 
@@ -294,6 +398,22 @@ class SettingsManager:
             "deepl_api_token": settings.deepl_api_token,
             "jpdb_api_token": settings.jpdb_api_token,
         }
+
+    def get_symbol_fallbacks(self) -> tuple[str, ...]:
+        return self._ensure_loaded().fonts.symbol_fallbacks
+
+    def get_symbol_characters(self) -> dict[str, str]:
+        return dict(self._ensure_loaded().fonts.symbol_characters)
+
+    def update_symbol_fallbacks(self, value: object, characters: object = None) -> FoxSettings:
+        from fox_reader.fonts import SYMBOL_FONT_FILENAME
+
+        names = normalize_symbol_fallbacks(value, strict=True)
+        if characters is None:
+            characters = {name: chars for name, chars in self.get_symbol_characters().items()
+                          if name in (*names, SYMBOL_FONT_FILENAME)}
+        rules = normalize_symbol_characters(characters, names, strict=True)
+        return self._replace(fonts={"symbol_fallbacks": names, "symbol_characters": rules})
 
     def get_translate_status(self) -> dict[str, bool]:
         """Which token-gated translators may be offered, without leaking keys.

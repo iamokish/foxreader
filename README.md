@@ -371,7 +371,7 @@ On-disk state (repo root, gitignored except `fox_config.yaml`):
 - `config/user_endpoints.yaml` — custom translation endpoints.
 - `config/workspaces.yaml` — panel layout sizes.
 - `models/` — weights (bubble `model.safetensors`, PaddleOCR det/rec + VL GGUF, manga seg safetensors, MTL Gemma/VNTL). Downloaded once via `/setup`; each completed download touches a `_completed` marker.
-- `fonts/` — your `.ttf`/`.otf` faces (scanned + cached in `.fonts_cache.json`); two fallbacks are compiled into the binary. `NotoSansSymbols2` is a render-time per-glyph fallback, never listed. Guide (adding faces, licensing, suggestions): [`/FONT.md`](/FONT.md).
+- `fonts/` — your `.ttf`/`.otf` faces (scanned + cached in `.fonts_cache.json`); ComicMono and NotoSansSymbols2 are bundled. `NotoSansSymbols2` is a render-time per-glyph fallback, never listed. Guide (adding faces, symbol fallbacks, licensing): [`/FONT.md`](/FONT.md).
 - `cache/` — scratch previews/masks; cleared at startup and shutdown.
 
 Pages:

@@ -197,6 +197,10 @@ FRONTEND = Domain(
 # ── the backend: what answers a request ───────────────────────────────────────
 BACKEND = Domain(
     name="backend",
+    helpers=(Helper(
+        path="manual/symbol_typeset_contract.mjs",
+        why="runs the production TypeScript fit/draw code against captured backend symbol placements",
+    ),),
     modules=(
         "test_bubble",
         "test_clean_caps",
@@ -217,6 +221,8 @@ BACKEND = Domain(
         "test_session_service",
         "test_system_routes",
         "test_typeset_layout",
+        "test_symbol_fallbacks",
+        "test_frontend_vs_backend_typeset",
     ),
     scripts=(
         Script(

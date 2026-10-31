@@ -24,8 +24,9 @@
 import { state, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH } from "../state";
 import type { Entry } from "../state";
 import type { Point } from "../types";
+import { getTextFontName } from "../fonts";
 import { regionPoints, regionBBox, cssEscape } from "./geometry";
-import { drawFitLayout, fitText, readGeometry, textTransform, tiltStyle, typeArea } from "./textFit";
+import { drawFitLayout, fitText, fontMetricsFromFontData, readGeometry, textTransform, tiltStyle, typeArea } from "./textFit";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -481,7 +482,11 @@ export function buildEntryShape(
     if (body && state.isLiveInpaintedEnabled) {
         const area = typeArea(box);
         const geom = readGeometry(entry);
-        const layout = fitText(svg, entry.text, entry.fontname, entry.text_align, area, entry.font_size, geom);
+        const family = getTextFontName(entry.fontfile, entry.fontname);
+        const fontData = state.currentFontsData.find((f) => f.font_filename === entry.fontfile)
+            ?? (family !== entry.fontname ? state.currentFontsData[0] : undefined);
+        const metrics = fontMetricsFromFontData(fontData);
+        const layout = fitText(svg, entry.text, family, entry.text_align, area, entry.font_size, geom, metrics);
         if (layout) {
             // What the lettering sits on, exactly as `typeset._draw_entry`
             // resolves it: the painted plate if there is one, otherwise the
@@ -500,7 +505,7 @@ export function buildEntryShape(
                     contrastColor(reference),
                 stroke: entry.stroke_color || entry.detected_stroke_color || reference,
                 strokeWidth,
-                family: entry.fontname,
+                family,
             };
             // The transform lives on the text node alone, so the plate polygon
             // above is untouched -- "move the text, not the background".
@@ -515,8 +520,9 @@ export function buildEntryShape(
             // `textTransform`, which is also what jsdom-based tests exercise.
             const tiltCss = tiltStyle(layout, entry.text_align, area, geom, svg);
             if (tiltCss) {
-                drawFitLayout(text, layout, entry.text_align, area, drawStyle, "");
+                const textOutline = drawFitLayout(text, layout, entry.text_align, area, drawStyle, "", svg);
                 text.setAttribute("style", tiltCss);
+                textOutline?.setAttribute("style", tiltCss);
                 const outer = textTransform(layout, entry.text_align, area, geom, strokeWidth, imageBounds(), {
                     includeTilt: false,
                 });
@@ -524,20 +530,24 @@ export function buildEntryShape(
                     const wrap = document.createElementNS(SVG_NS, "g");
                     wrap.setAttribute("transform", outer);
                     wrap.setAttribute("pointer-events", "none");
+                    if (textOutline) wrap.appendChild(textOutline);
                     wrap.appendChild(text);
                     group.appendChild(wrap);
                 } else {
+                    if (textOutline) group.appendChild(textOutline);
                     group.appendChild(text);
                 }
             } else {
-                drawFitLayout(
+                const textOutline = drawFitLayout(
                     text,
                     layout,
                     entry.text_align,
                     area,
                     drawStyle,
                     textTransform(layout, entry.text_align, area, geom, strokeWidth, imageBounds()),
+                    svg,
                 );
+                if (textOutline) group.appendChild(textOutline);
                 group.appendChild(text);
             }
             hasText = true;

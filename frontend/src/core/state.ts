@@ -14,11 +14,58 @@ export type ReaderFitMode = "width" | "height";
 /** Which copy of a page is on screen. See `State.viewVariant`. */
 export type PageVariant = "original" | "saved";
 
+/** Outline measurements for assigned glyph size and visible-bottom alignment.
+ * Bottom bounds are in em units, relative to each font's alphabetic baseline. */
+export interface SymbolGlyphAdjustment {
+    scale: number;
+    primary_bottom: number;
+    fallback_bottom: number;
+}
+
 export interface FontData {
     font_filename: string;
     font_name: string;
     font_data_uri: string;
     font_format: string;
+    /** Font table metrics (font units), so the frontend can compute line height
+     * exactly like the backend's Pillow/freetype ``font.getmetrics()`` instead
+     * of estimating it from canvas text metrics. */
+    unitsPerEm: number;
+    ascent: number;
+    descent: number;
+    /**
+     * The backend's per-face symbol-fallback calibration: the render resizes
+     * the shared symbol face to `round(size * symbol_scale)` so its glyphs
+     * read this face's cap height, and the preview is handed the identical
+     * number rather than re-measuring raster ink. `undefined` (payloads from
+     * an older build) means the historical unscaled fallback.
+     */
+    symbol_scale?: number;
+    /** Optical scale per ordered fallback filename, measured by the backend. */
+    symbol_scales?: Record<string, number>;
+    /** Per fallback and codepoint, match forced glyphs to their text-font glyph. */
+    symbol_glyph_adjustments?: Record<string, Record<string, SymbolGlyphAdjustment>>;
+    /** Characters explicitly owned by this fallback, before primary coverage. */
+    forced_codepoints?: number[];
+    /**
+     * The face's own unicode coverage as flat `[start, end, ...]` ranges. This
+     * is what the run-splitting rule reads: a character outside these ranges
+     * and inside the symbol face's is exactly `typeset._needs_symbol`.
+     * `undefined` or an empty list means coverage is unknown and the preview
+     * keeps the historical single-face behaviour.
+     */
+    coverage?: number[];
+    /**
+     * The backend's own per-size `[ascent, descent, ...]` pairs, one pair per
+     * size ascending from `MIN_FONT_SIZE`, straight from its
+     * `font.getmetrics()` (`typeset.line_metrics_for`). FreeType's per-size
+     * rounding cannot be reproduced from `unitsPerEm`/`ascent`/`descent`
+     * alone -- 49 of the 67 sizes in the fit range disagree by a pixel for
+     * ComicMono -- so the exact ints ride along instead. An empty list (or
+     * `undefined`, from an older build) means the preview keeps its rounded
+     * font-unit estimate.
+     */
+    line_metrics?: number[];
 }
 
 /** Layers run 1 (bottom) to 10 (top), with no gaps -- see `layerCeiling`. */
@@ -130,6 +177,16 @@ export const BUBBLE_PADDING_DEFAULT = 5;
 
 export interface State {
     currentFontsData: FontData[];
+    /**
+     * The typesetting-only symbol fallback, served hidden by
+     * `/api/fonts/symbol-fallback`. The picker never offers it; the overlay's
+     * run-splitting resolves a character the primary face lacks into this
+     * face, at the primary's `symbol_scale`, the same rule
+     * `typeset._needs_symbol` plays on the render. `null` (no face served, or
+     * the fetch still running) keeps the historical system-default fallback.
+     */
+    currentSymbolFont: FontData | null;
+    currentSymbolFonts: FontData[];
     currentlySelectedEntryId: string | null;
     lastCapturedRegion: Region | null;
     /**
@@ -194,6 +251,8 @@ export interface State {
 
 export const state: State = {
     currentFontsData: [],
+    currentSymbolFont: null,
+    currentSymbolFonts: [],
     currentlySelectedEntryId: null,
     lastCapturedRegion: null,
     lastCapturedColors: null,

@@ -7,9 +7,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from fox_reader import assets
 from fox_reader.constants import MTL_MODELS, mtl_model_downloaded
-from fox_reader.device import AUTO_THREADS, CPU
+from fox_reader.device import AUTO_THREADS, CPU, physical_cores, thread_count, thread_override
 from fox_reader.device import SLOTS as DEVICE_SLOTS
-from fox_reader.device import physical_cores, thread_count, thread_override
 from fox_reader.device import snapshot as device_snapshot
 from fox_reader.settings import SUPPORTED_MTL_LANGUAGES
 
@@ -93,6 +92,7 @@ def _build_settings_payload(request: Request) -> dict:
         "translate_status": settings_mgr.get_translate_status(),
         "devices": _build_devices_payload(request),
         "ocr": _build_ocr_payload(request),
+        "fonts": request.app.state.fonts.settings_payload() if hasattr(request.app.state, "fonts") else {},
     }
 
 
@@ -257,6 +257,27 @@ async def update_devices(request: Request):
     # launch. The thread count is the exception -- LocalMTLManager reads it again
     # before every load, so it applies as soon as a model is next loaded.
     return JSONResponse(_build_settings_payload(request))
+
+
+@router.put("/api/settings/fonts")
+async def update_fonts(request: Request):
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Expected a JSON object"}, status_code=400)
+    if not isinstance(body, dict) or "symbol_fallbacks" not in body:
+        return JSONResponse({"error": "symbol_fallbacks is required"}, status_code=400)
+    try:
+        if "symbol_characters" in body and not isinstance(body["symbol_characters"], dict):
+            raise ValueError("symbol_characters must be an object")
+        payload = request.app.state.fonts.update_symbol_fallbacks(
+            body["symbol_fallbacks"], body.get("symbol_characters")
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except OSError:
+        return JSONResponse({"error": "Could not save font settings"}, status_code=500)
+    return JSONResponse({"fonts": payload})
 
 
 @router.put("/api/settings/mtl-default")

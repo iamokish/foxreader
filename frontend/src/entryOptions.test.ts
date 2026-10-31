@@ -95,8 +95,24 @@ beforeEach(() => {
     document.body.innerHTML = "";
     mockRoster = [];
     state.currentFontsData = [
-        { font_filename: "a.ttf", font_name: "Alpha", font_data_uri: "", font_format: "truetype" },
-        { font_filename: "b.ttf", font_name: "Beta", font_data_uri: "", font_format: "truetype" },
+        {
+            font_filename: "a.ttf",
+            font_name: "Alpha",
+            font_data_uri: "",
+            font_format: "truetype",
+            unitsPerEm: 1000,
+            ascent: 900,
+            descent: 200,
+        },
+        {
+            font_filename: "b.ttf",
+            font_name: "Beta",
+            font_data_uri: "",
+            font_format: "truetype",
+            unitsPerEm: 1000,
+            ascent: 900,
+            descent: 200,
+        },
     ];
 });
 

@@ -37,9 +37,12 @@
         "Blob": "readonly",
         "process": "readonly",
         "Event": "readonly",
+        "CustomEvent": "readonly",
         "MouseEvent": "readonly",
         "PointerEvent": "readonly",
-        "KeyboardEvent": "readonly"
+        "KeyboardEvent": "readonly",
+        "Node": "readonly",
+        "Element": "readonly"
     },
     "rules": {
         "no-unused-vars": "warn",

@@ -25,17 +25,21 @@ gets its lettering removed without anything put back.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
 from dataclasses import dataclass
+from functools import lru_cache, partial
 from io import BytesIO
 from typing import Any
 
+import cv2
 import numpy as np
 from fontTools.ttLib import TTFont
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
+from fox_reader.font_calibration import FontProfile, profile_for, scale_for
 from fox_reader.models.requests import DataItem
 from fox_reader.utils import FONT_DIR, is_frozen
 
@@ -67,6 +71,17 @@ MAX_TEXT_SHIFT = 100_000
 
 TEXT_ALIGNMENTS = ("left", "center", "right")
 
+#: Two pixels off every wrap budget, shared with the frontend's `textFit`
+#: (`WRAP_SAFETY_PX`). Both engines now lay out with the faces' unhinted hmtx
+#: advances (see :func:`_raw_length`), so their measurements of one string are
+#: equal to well under a pixel; the margin's remaining jobs are to absorb the
+#: rendered line's paste rounding (each glyph lands on an integer pixel on the
+#: render, at a fractional position in the preview) and the kern pair the
+#: browsers apply on the few strapped faces that carry `kern`/`GPOS`. The traced
+#: "just once," measured 69.0 hinted / 71.2 unhinted against a 70px limit: a
+#: shared margin makes every boundary call land the same way on both sides.
+_WRAP_EPS_PX = 2.0
+
 WHITE = (255, 255, 255, 255)
 BLACK = (0, 0, 0, 255)
 
@@ -77,6 +92,45 @@ _FALLBACK_FONT = "ComicMono.ttf"
 #: in FreeType. Bounded because a page can legitimately use many faces.
 _FONT_CACHE: dict[tuple[str, int], Any] = {}
 _FONT_CACHE_MAX = 512
+
+# Settings snapshot. User fallbacks use the sanitised bytes served to SVG;
+# primary disk faces keep their original FreeType rendering.
+_REGISTERED_FONT_BYTES: dict[str, bytes] = {}
+_USER_SYMBOL_FONTS: tuple[str, ...] = ()
+_FORCED_SYMBOL_OWNERS: dict[str, str] = {}
+_FORCED_SYMBOL_ADJUSTMENTS: dict = {}
+_DEFAULT_TEXT_FONT = _FALLBACK_FONT
+_USER_SYMBOL_CACHE: dict[tuple[str, int], Any] = {}
+_PRIMARY_PROFILE_CACHE: dict[str, tuple[Any, FontProfile]] = {}
+
+
+def configure_fonts(raw_fonts: dict[str, bytes], symbols: tuple[str, ...], default: str,
+                    profiles: dict[str, FontProfile] | None = None,
+                    characters: dict[str, str] | None = None,
+                    glyph_adjustments: dict | None = None) -> None:
+    global _REGISTERED_FONT_BYTES, _USER_SYMBOL_FONTS, _DEFAULT_TEXT_FONT, _FORCED_SYMBOL_OWNERS
+    global _FORCED_SYMBOL_ADJUSTMENTS
+    same_bytes = (raw_fonts.keys() == _REGISTERED_FONT_BYTES.keys()
+                  and all(raw is _REGISTERED_FONT_BYTES[name] for name, raw in raw_fonts.items()))
+    _REGISTERED_FONT_BYTES, _USER_SYMBOL_FONTS, _DEFAULT_TEXT_FONT = dict(raw_fonts), symbols, default
+    _FORCED_SYMBOL_OWNERS = {ch: name for name, chars in (characters or {}).items() for ch in chars}
+    _FORCED_SYMBOL_ADJUSTMENTS = glyph_adjustments or {}
+    if same_bytes:
+        return  # Changing priority does not invalidate font faces or profiles.
+    _FONT_CACHE.clear()
+    _USER_SYMBOL_CACHE.clear()
+    _PRIMARY_PROFILE_CACHE.clear()
+    _PRIMARY_CMAP_CACHE.clear()
+    _SYMBOL_SCALE_CACHE.clear()
+    _LINE_METRICS_CACHE.clear()
+    if profiles:
+        _PRIMARY_PROFILE_CACHE.update({name: (id(raw_fonts[name]), profile) for name, profile in profiles.items()})
+
+
+def _text_font_name(name: str) -> str:
+    hidden = (name.lower() == _SYMBOL_FONT.lower()
+              or any(name.casefold() == font.casefold() for font in _USER_SYMBOL_FONTS))
+    return _DEFAULT_TEXT_FONT if hidden else name
 
 
 # --------------------------------------------------------------------- colours
@@ -191,8 +245,8 @@ def _load_font(fontfile: str, size: int) -> Any:
     ``size`` entirely, which does not read as a fallback so much as as a bug.
     """
     size = int(max(1, size))
-    name = (fontfile or "").strip()
-    for candidate in (name, _FALLBACK_FONT):
+    name = _text_font_name((fontfile or "").strip())
+    for candidate in (name, _text_font_name(_FALLBACK_FONT)):
         if not candidate:
             continue
         path = str(FONT_DIR / candidate)
@@ -201,15 +255,24 @@ def _load_font(fontfile: str, size: int) -> Any:
         if cached is not None:
             return cached
         font = None
+        raw = _REGISTERED_FONT_BYTES.get(candidate)
         if os.path.isfile(path):
             try:
                 font = ImageFont.truetype(path, size)
             except OSError as exc:
                 logger.warning("Could not load font %s: %s", candidate, exc)
+        if font is None and raw is not None:
+            try:
+                font = ImageFont.truetype(BytesIO(raw), size)
+                _attach_raw_advances(font, raw)
+            except OSError:
+                pass
         if font is None:
             font = _embedded_font(candidate, size)
         if font is None:
             continue
+        if font.path == path:
+            _attach_raw_advances(font, path)
         if len(_FONT_CACHE) >= _FONT_CACHE_MAX:
             _FONT_CACHE.clear()
         _FONT_CACHE[key] = font
@@ -228,9 +291,181 @@ def _embedded_font(candidate: str, size: int) -> Any | None:
     if not raw:
         return None
     try:
-        return ImageFont.truetype(BytesIO(raw), size)
+        font = ImageFont.truetype(BytesIO(raw), size)
     except OSError as exc:
         logger.warning("Could not load bundled font %s: %s", candidate, exc)
+        return None
+    _attach_raw_advances(font, raw)
+    return font
+
+
+# ---------------------------------------------------------------- line metrics
+# The preview must advance lines by the *same integer* Pillow's
+# ``font.getmetrics()`` yields, but FreeType's per-pixel-size rounding cannot be
+# reproduced from the font-table units: for ComicMono, 49 of the 67 sizes the
+# UI searches (6..72) disagree by a pixel between ``round(size*a/upem) +
+# round(size*d/upem)`` and the real ``getmetrics()``, and the ascent alone is
+# off for ~70 sizes of 1..144. So the backend measures its own engine once per
+# face and ships the table with ``/api/fonts``; the preview looks sizes up in
+# it and keeps its rounded-font-unit formula only for a payload that predates
+# the field (an empty table).
+
+_LINE_METRICS_CACHE: dict[str, list[int]] = {}
+
+
+def line_metrics_for(fontfile: str) -> list[int]:
+    """``[ascent, descent, ascent, descent, ...]`` for every size in the fit
+    range (:data:`MIN_FONT_SIZE` .. :data:`MAX_FONT_SIZE`, ascending), via the
+    same :func:`_load_font` call the real drawing uses.
+
+    A missing face resolves through the fallback (``ComicMono``), exactly as
+    drawing would, so the table always describes the face the backend would
+    actually paint with. All-or-nothing: an empty list when *any* size fails to
+    give a usable ascent+descent, because a preview that mixes table entries
+    with its own estimate could wrap or centre unlike either engine. Never
+    raises; a whole unusable face is simply "no table" and the preview keeps
+    its estimate.
+    """
+    key = (fontfile or "").strip() or _FALLBACK_FONT
+    cached = _LINE_METRICS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    table: list[int] = []
+    for size in range(MIN_FONT_SIZE, MAX_FONT_SIZE + 1):
+        try:
+            ascent, descent = _load_font(key, size).getmetrics()
+        except Exception:  # noqa: BLE001 - metrics are best-effort
+            table = []
+            break
+        if int(ascent) + int(descent) <= 0:
+            table = []
+            break
+        table.extend((int(ascent), int(descent)))
+    if len(_LINE_METRICS_CACHE) >= _FONT_CACHE_MAX:
+        # FreeType face objects are already RAM-cached by size in `_FONT_CACHE`
+        # (these tables share that loading), so the cap here is about not
+        # holding an unbounded number of distinct face names, not memory
+        # pressure -- each table is a few hundred bytes.
+        _LINE_METRICS_CACHE.clear()
+    _LINE_METRICS_CACHE[key] = table
+    return table
+
+
+# ---------------------------------------------------------------- raw advances
+# Pillow's BASIC layout (this build has no raqm) advances each glyph by a
+# hinted, per-size-rounded step, and every line it measures comes out as a
+# whole number of pixels. The preview lays the same string out in the browser,
+# which walks the face's unhinted hmtx advances scaled only by size/upem -- the
+# same string can differ by 2px per line, which is what made the same font size
+# render and preview differently. The fix is to measure (and place) with the
+# face's own advance table: the two engines then lay out identically, and the
+# residual differences are the per-glyph paste rounding plus the kern pairs of
+# the few faces that carry `kern`/`GPOS`.
+
+#: The parsed ``{upem, adv, notdef}`` tables, keyed by file signature (disk) or
+#: by size-of-content hash (bundle). Parsed once per face, never re-read per
+#: load, which would re-parse the file for every cached Pillow size.
+_RAW_ADV_CACHE: dict[tuple[str, ...], dict[str, Any] | None] = {}
+_RAW_ADV_CACHE_MAX = 64
+
+
+def _parse_raw_advances(source: Any) -> dict[str, Any] | None:
+    """``{upem, adv, notdef}`` from a font file, or None when unreadable.
+
+    ``adv`` maps codepoint -> advance units along the best unicode cmap, and
+    ``notdef`` is glyph 0's advance -- what a browser falls back to for any
+    character the face does not cover. An unreadable face returning None only
+    keeps the hinted measurement: never worth failing a render over.
+    """
+    try:
+        tt = TTFont(source, lazy=True)
+        try:
+            upem = int(tt["head"].unitsPerEm or 1000)
+            if upem <= 0:
+                return None
+            cmap = tt.getBestCmap()
+            hmtx = tt["hmtx"]
+            glyph_order = tt.getGlyphOrder()
+            notdef = int(hmtx[glyph_order[0]][0])
+            adv: dict[int, int] = {}
+            if cmap:
+                for cp, glyph in cmap.items():
+                    try:
+                        adv[int(cp)] = int(hmtx[glyph][0])
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        continue
+            return {"upem": upem, "adv": adv, "notdef": notdef}
+        finally:
+            try:
+                tt.close()
+            except Exception:  # noqa: BLE001 - close must never be fatal
+                pass
+    except Exception:  # noqa: BLE001 - coverage is best-effort
+        return None
+
+
+def _attach_raw_advances(font: Any, source: Any) -> None:
+    """Give ``font`` its unhinted advance table, or a False sentinel.
+
+    ``source`` is the face's path (a table is parsed straight off the file,
+    never out of the Pillow font, whose buffer must stay untouched) or the
+    bundle's bytes for an embedded face. The sentinel distinguishes
+    "tried and failed" from "not tried yet" so a bad face is not re-read on
+    every measure.
+    """
+    try:
+        if getattr(font, "_fox_raw_adv", None) is not None:
+            return
+        if isinstance(source, bytes):
+            key = ("embed", hashlib.md5(source).hexdigest())
+        else:
+            try:
+                st = os.stat(source)
+            except OSError:
+                font._fox_raw_adv = False
+                return
+            key = ("file", str(source), st.st_mtime_ns, st.st_size)
+        if key not in _RAW_ADV_CACHE:
+            if len(_RAW_ADV_CACHE) >= _RAW_ADV_CACHE_MAX:
+                _RAW_ADV_CACHE.clear()
+            # A bytes source must reach fontTools as a stream: TTFont wants a
+            # path or a file object, and a bare bytes object is neither, which
+            # silently downgraded every bytes-loaded face (the bundled faces
+            # and the symbol fallback) to the hinted measurement.
+            if isinstance(source, bytes):
+                parsed = _parse_raw_advances(BytesIO(source))
+            else:
+                parsed = _parse_raw_advances(str(source))
+            _RAW_ADV_CACHE[key] = parsed
+        table = _RAW_ADV_CACHE[key]
+        font._fox_raw_adv = table if table else False
+    except Exception:  # noqa: BLE001 - a table is an improvement, never a duty
+        try:
+            font._fox_raw_adv = False
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _raw_length(font: Any, text: str) -> float | None:
+    """Sum of ``text``'s unhinted advance widths, or None without a table.
+
+    This is what the browser lays: each glyph's hmtx advance times
+    ``size/upem``, glyphs the face lacks falling to .notdef. The hinted walk
+    (:func:`_length`'s fallback) differs from it by up to a couple of pixels
+    per line, which is why the tables exist.
+    """
+    table = getattr(font, "_fox_raw_adv", None)
+    if table is None or table is False:
+        return None
+    try:
+        adv = table["adv"]
+        notdef = table["notdef"]
+        total = 0
+        for ch in text:
+            total += adv.get(ord(ch), notdef)
+        scale = float(font.size) / float(table["upem"])
+        return total * scale
+    except Exception:  # noqa: BLE001 - keep hinted measuring on any surprise
         return None
 
 
@@ -416,7 +651,13 @@ def _symbol_font_bytes() -> bytes | None:
 
 
 def _load_symbol_font(size: int) -> Any | None:
-    """The symbol face at ``size`` (same size as the primary), or None."""
+    """The symbol face at ``size``, or None.
+
+    Callers pass the calibrated size from :func:`_symbol_px_size` -- the
+    fallback is drawn per-primary-face so its symbols read the primary's cap
+    height rather than the raw em size, which is what made them look right
+    next to ComicMono and undersized next to the other faces.
+    """
     size = int(max(1, size))
     raw = _symbol_font_bytes()
     if not raw:
@@ -434,10 +675,78 @@ def _load_symbol_font(size: int) -> Any | None:
     except Exception as exc:  # noqa: BLE001 - a bad fallback is not fatal
         _warn_symbol_once("Could not load symbol font %s: %s", _SYMBOL_FONT, exc)
         return None
+    _attach_raw_advances(font, raw)
     if len(_SYMBOL_FONT_CACHE) >= _FONT_CACHE_MAX:
         _SYMBOL_FONT_CACHE.clear()
     _SYMBOL_FONT_CACHE[size] = font
     return font
+
+
+#: Used only to verify the face is loadable. Optical calibration uses outlines
+#: in font units (font_calibration), so there is no size-specific raster probe.
+_SYMBOL_SCALE_PROBE = 64
+
+#: Effective primary face, refreshed Noto signature and immutable profile.
+_SYMBOL_SCALE_CACHE: dict[tuple[str, str | None, FontProfile], float] = {}
+_SYMBOL_SCALE_CACHE_MAX = 64
+
+
+def symbol_scale_for(fontfile: str) -> float:
+    """Outline-based Noto scale; refresh byte signatures before cache lookup."""
+    try:
+        raw = _symbol_font_bytes()
+        if not raw:
+            return 1.0
+        effective = _effective_fontfile(fontfile)
+        primary = _profile_for_font(effective)
+        if _load_symbol_font(_SYMBOL_SCALE_PROBE) is None:
+            return 1.0
+        _load_font(effective, _SYMBOL_SCALE_PROBE)
+        key = (effective, _SYMBOL_BYTES_SIG, primary)
+        cached = _SYMBOL_SCALE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        scale = scale_for(primary, profile_for(raw))
+        if len(_SYMBOL_SCALE_CACHE) >= _SYMBOL_SCALE_CACHE_MAX:
+            _SYMBOL_SCALE_CACHE.clear()
+        _SYMBOL_SCALE_CACHE[key] = scale
+        return scale
+    except Exception:
+        logger.debug("Symbol scale lookup failed for %r", fontfile, exc_info=True)
+        return 1.0
+
+
+def _profile_for_font(effective: str) -> FontProfile:
+    registered = _REGISTERED_FONT_BYTES.get(effective)
+    signature = id(registered) if registered is not None else _disk_sig(FONT_DIR / effective)
+    cached = _PRIMARY_PROFILE_CACHE.get(effective)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+    raw = _primary_font_bytes(effective)
+    profile = profile_for(raw) if raw else FontProfile(frozenset())
+    if len(_PRIMARY_PROFILE_CACHE) >= _FONT_CACHE_MAX:
+        _PRIMARY_PROFILE_CACHE.clear()
+    _PRIMARY_PROFILE_CACHE[effective] = (signature, profile)
+    return profile
+
+
+def _symbol_px_size(fontfile: str, size: int) -> int:
+    """The pixel size the symbol face renders at next to ``size`` primary px.
+
+    Every path that materialises the fallback face -- measuring
+    (:func:`_mixed_length` via the layout), laying out (``_line_pieces``),
+    drawing (:func:`_draw_block` through ``_symbol_faces``) and the stretch
+    tile (``_text_layer``'s ``ksize``) -- goes through the two
+    :func:`_symbol_faces`/:func:`_max_size` callers of this, so both engines
+    agree integer-for-integer on what `round(size * scale)` produced. It is
+    never below one: the rounding can only make small sizes *equal*, never
+    sub-pixel.
+    """
+    size = max(1, int(size))
+    try:
+        return max(1, _round_half_up(size * symbol_scale_for(fontfile)))
+    except Exception:  # noqa: BLE001 - an odd factor never breaks the size
+        return size
 
 
 def _cmap_from_bytes(raw: bytes) -> set[int] | None:
@@ -453,8 +762,7 @@ def _cmap_from_bytes(raw: bytes) -> set[int] | None:
     try:
         tt = TTFont(BytesIO(raw), lazy=True)
         try:
-            cmap = tt.getBestCmap()
-            return set(cmap.keys()) if cmap else set()
+            return set(profile_for(raw).coverage)
         finally:
             try:
                 tt.close()
@@ -467,10 +775,12 @@ def _cmap_from_bytes(raw: bytes) -> set[int] | None:
 
 def _effective_fontfile(fontfile: str) -> str:
     """Which face :func:`_load_font` will actually use for ``fontfile``."""
-    name = (fontfile or "").strip()
-    for candidate in (name, _FALLBACK_FONT):
+    name = _text_font_name((fontfile or "").strip())
+    for candidate in (name, _text_font_name(_FALLBACK_FONT)):
         if not candidate:
             continue
+        if candidate in _REGISTERED_FONT_BYTES:
+            return candidate
         try:
             if (FONT_DIR / candidate).is_file():
                 return candidate
@@ -489,6 +799,8 @@ def _effective_fontfile(fontfile: str) -> str:
 
 
 def _primary_font_bytes(effective: str) -> bytes | None:
+    if effective in _REGISTERED_FONT_BYTES:
+        return _REGISTERED_FONT_BYTES[effective]
     try:
         path = FONT_DIR / effective
         if path.is_file():
@@ -518,7 +830,9 @@ def _primary_cmap(fontfile: str) -> set[int] | None:
     sig: str | None = None
     try:
         p = FONT_DIR / effective
-        if p.is_file():
+        if effective in _REGISTERED_FONT_BYTES:
+            sig = str(id(_REGISTERED_FONT_BYTES[effective]))
+        elif p.is_file():
             sig = _disk_sig(p)
         else:
             sig = "bundled"
@@ -531,7 +845,7 @@ def _primary_cmap(fontfile: str) -> set[int] | None:
     except Exception:  # noqa: BLE001
         pass
     raw = _primary_font_bytes(effective)
-    cmap = _cmap_from_bytes(raw) if raw else None
+    cmap = set(_profile_for_font(effective).coverage) if raw else None
     try:
         if len(_PRIMARY_CMAP_CACHE) >= _PRIMARY_CMAP_MAX:
             _PRIMARY_CMAP_CACHE.clear()
@@ -633,6 +947,8 @@ def _mixed_length(font: Any, symbol_font: Any | None, text: str,
         return 0.0
     if symbol_font is None or primary_cmap is None or symbol_cmap is None:
         return _length(font, text)
+    if isinstance(symbol_font, _SymbolCascade):
+        return sum(_length(symbol_font.faces.get(ch, font), ch) for ch in text)
     try:
         total = 0.0
         for seg, use_sym in _split_runs(text, primary_cmap, symbol_cmap):
@@ -643,8 +959,18 @@ def _mixed_length(font: Any, symbol_font: Any | None, text: str,
 
 
 def _length(font: Any, text: str) -> float:
+    """Advance width of ``text``, unhinted when the face's table is attached.
+
+    The unhinted sum (:func:`_raw_length`) is what the preview lays out, so
+    with a table this is the browser-scale width; faces that never got a
+    table (unreadable file, tests' fakes) keep the hinted ``getlength``
+    fall path they have always had.
+    """
     if not text:
         return 0.0
+    raw = _raw_length(font, text)
+    if raw is not None:
+        return raw
     try:
         return float(font.getlength(text))
     except (AttributeError, OSError):
@@ -699,10 +1025,9 @@ def _hyphen_pieces(word: str) -> list[str]:
     """``word`` cut after each of its own single hyphens, hyphen kept.
 
     ``"tot-al"`` -> ``["tot-", "al"]``. Only breaks the author already wrote are
-    offered, which is the whole rule: a run of two or more hyphens is punctuation
-    (``--`` is how an em dash is written here, see :func:`_draw_entry`) and never
-    a break, and a hyphen at either end of the word is not one either, since the
-    piece it would leave behind is nothing but punctuation.
+    offered, which is the whole rule: a run of two or more hyphens is punctuation,
+    never a break, and a hyphen at either end of the word is not one either, since
+    the piece it would leave behind is nothing but punctuation.
     """
     pieces: list[str] = []
     start = i = 0
@@ -811,6 +1136,13 @@ def _layout(font: Any, text: str, max_w: float, align: str,
     widths the drawing will produce.
     """
     del align
+    # The wrap budget backs off by `_WRAP_EPS_PX`: the frontend's preview wraps
+    # with the same reduction (see `textFit.WRAP_SAFETY_PX`), so a line-break
+    # decision cannot be flipped by the engines' independent advance rounding.
+    # The un-reduced width is still honoured afterwards (`_block_size` and the
+    # fit checks compare against the full budget), which keeps an exactly-fitting
+    # single word from shrinking further.
+    max_w = max(1.0, max_w - _WRAP_EPS_PX)
     lines: list[str] = []
     paragraphs = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     for para in paragraphs:
@@ -836,9 +1168,35 @@ def _block_size(font: Any, lines: list[str], size: int, spacing: int,
     return width, float(height)
 
 
+def _round_half_up(value: Any) -> int:
+    """Round to the nearest integer with halves going *up*, like JS `Math.round`.
+
+    Python's ``round`` is banker's rounding (``round(22.5) == 22``) while the
+    preview's JavaScript rounds halves up (`Math.round(22.5) == 23`). Every
+    quantity that both engines compute from the same float -- a symbol em
+    (``round(size * scale)`), a scaled line advance, a clamped user size --
+    would otherwise land on different sides of a `.5` and shift everything
+    after it by a pixel. This mirrors the browser half exactly for the
+    positive *and* negative quantities in use, and never raises: an
+    unreadable value is zero, the same answer ``float(value) or 0`` would
+    give.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if math.isnan(number):
+        return 0
+    if math.isinf(number):
+        # JS Math.round(inf) is inf; callers clamp right afterwards, so a
+        # huge finite sign-safe value keeps that behaviour without raising.
+        return MAX_TEXT_SHIFT if number > 0 else -MAX_TEXT_SHIFT
+    return int(math.floor(number + 0.5))
+
+
 def _spacing_for(size: int) -> int:
     """Leading between lines, proportional to the type size."""
-    return int(max(1, round(size * 0.14)))
+    return max(1, _round_half_up(size * 0.14))
 
 
 def _advance_for(line_h: int, spacing: int, factor: float | None) -> int:
@@ -849,10 +1207,13 @@ def _advance_for(line_h: int, spacing: int, factor: float | None) -> int:
     leading, which is what "line spacing 1.5" means anywhere else -- scaling the
     0.14-of-a-size leading alone would give a range too narrow to be worth a
     control.
+
+    Halves round up: the preview computes the same product in JavaScript, where
+    `Math.round` goes the same way (see :func:`_round_half_up`).
     """
     if factor is None:
         return line_h + spacing
-    return int(max(1, round((line_h + spacing) * factor)))
+    return max(1, _round_half_up((line_h + spacing) * factor))
 
 
 def _word_extra(font: Any, factor: float | None) -> float:
@@ -922,34 +1283,9 @@ def _fit_font_size(fontfile: str, text: str, align: str, max_w: float,
     fit_w = max_w / geom.scale_x if geom is not None else max_w
     fit_h = max_h / geom.scale_y if geom is not None else max_h
 
-    # Size-independent: computed once, not per trial.
-    try:
-        _pc = _primary_cmap(fontfile)
-    except Exception:  # noqa: BLE001
-        _pc = None
-    try:
-        _sc = _symbol_cmap()
-    except Exception:  # noqa: BLE001
-        _sc = None
-    try:
-        _need_fallback = _text_needs_symbol(text, _pc, _sc)
-    except Exception:  # noqa: BLE001
-        _need_fallback = False
-    if not _need_fallback:
-        _pc = _sc = None
-
     def fits(size: int) -> bool:
         font = _load_font(fontfile, size)
-        sym = None
-        pc: set[int] | None = _pc
-        sc: set[int] | None = _sc
-        if _need_fallback:
-            try:
-                sym = _load_symbol_font(size)
-            except Exception:  # noqa: BLE001
-                sym = None
-            if sym is None:
-                pc = sc = None
+        sym, pc, sc = _symbol_faces(fontfile, text, size)
         extra = _word_extra(font, word_factor)
         lines = _layout(font, text, fit_w, align, sym, pc, sc, extra)
         w, h = _block_size(font, lines, size, _spacing_for(size), sym, pc, sc,
@@ -976,32 +1312,92 @@ def _line_pieces(line: str, font: Any, symbol_font: Any | None,
                  primary_cmap: set[int] | None, symbol_cmap: set[int] | None,
                  word_extra: float, space_w: float
                  ) -> list[tuple[str, Any, float]]:
-    """``line`` as ``(segment, face, advance)`` pieces, left to right.
+    """``line`` as ``(char, face, advance)`` pieces, left to right.
 
-    One piece per face run, and -- when ``word_extra`` is non-zero -- one empty
-    piece per inter-word gap carrying the widened space as its advance. Pillow
-    has no word-spacing knob, so tracking words apart means placing them one at
-    a time; with ``word_extra`` at 0 the line stays a single string and its own
-    spaces do the work, which is what lets :func:`_draw_block` keep its original
-    anchored path for untouched entries.
+    One piece per character, with each inter-word gap an empty piece advancing
+    by the space (plus its ``word_extra``). Pillow's own string run would
+    advance each glyph by a hinted, per-size-rounded step, while the preview
+    walks the unhinted hmtx table -- the granularity here is what lets
+    :func:`_draw_block` place every glyph at the cumulative unhinted position
+    instead, which is what makes one font size read the same on both sides
+    (each glyph's *paste* still snaps to a pixel, but our walk tracks the
+    fractional pen exactly like the browser's does). Face selection per
+    character is the same run split the measurer uses, so wide symbols/emoji
+    still switch to the symbol face mid-line.
     """
     mixed = (symbol_font is not None and primary_cmap is not None
              and symbol_cmap is not None)
-    tokens = line.split(" ") if word_extra else [line]
     gap = space_w + word_extra
     pieces: list[tuple[str, Any, float]] = []
-    for idx, token in enumerate(tokens):
-        if idx:
+    for ch in line:
+        if ch == " ":
             pieces.append(("", font, gap))
-        if not token:
             continue
-        runs = _split_runs(token, primary_cmap, symbol_cmap) if mixed else [(token, False)]
-        for seg, use_sym in runs:
-            if not seg:
-                continue
-            face = symbol_font if use_sym else font
-            pieces.append((seg, face, _length(face, seg)))
+        face = font
+        if mixed:
+            try:
+                if isinstance(symbol_font, _SymbolCascade):
+                    face = symbol_font.faces.get(ch, font)
+                elif _needs_symbol(ch, primary_cmap, symbol_cmap):
+                    face = symbol_font
+            except Exception:  # noqa: BLE001
+                face = font
+        pieces.append((ch, face, _length(face, ch)))
     return pieces
+
+
+def _expand_outline_mask(size: tuple[int, int], pixels: bytes, radius: int) -> Image.Image:
+    """Circular dilation of clean glyph coverage, including hollow contours."""
+    width, height = size
+    padded_width, padded_height = width + 2 * radius, height + 2 * radius
+    if padded_width * padded_height > _MAX_LAYER_PIXELS:
+        raise ValueError("Glyph outline mask is too large")
+    source = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width)
+    source = np.pad(source, radius)
+    ink = source > 0
+    if not ink.any():
+        return Image.new("L", (padded_width, padded_height))
+    outside = (~ink).astype(np.uint8)
+    # Euclidean distance gives round joins without radius-sized convolutions.
+    # Keep the nearest ink's coverage to antialias the expanded boundary, while
+    # allowing a faint, subpixel glyph to acquire an opaque thick outline.
+    _, labels = cv2.distanceTransformWithLabels(outside, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    distance = cv2.distanceTransform(outside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    coverage_by_label = np.zeros(int(labels.max()) + 1, dtype=np.float32)
+    coverage_by_label[labels[ink]] = source[ink].astype(np.float32) / 255
+    coverage = np.clip(radius + coverage_by_label[labels] - distance, 0, 1)
+    return Image.fromarray(np.rint(coverage * 255).astype(np.uint8))
+
+
+@lru_cache(maxsize=64)
+def _cached_outline_mask(size: tuple[int, int], pixels: bytes, radius: int) -> Image.Image:
+    """Read-only masks; keys contain pixels, never retained font objects.
+
+    Only masks up to 64 KiB enter this cache, bounding keys and images to 8 MiB.
+    """
+    return _expand_outline_mask(size, pixels, radius)
+
+
+def _draw_outline_text(draw: Any, xy: tuple[float, float], text: str, *, anchor: str, **kwargs: Any) -> None:
+    """Draw the outline from unstroked ink; thick FreeType strokes can invert holes."""
+    font = kwargs["font"]
+    if not isinstance(draw, ImageDraw.ImageDraw) or not isinstance(font, ImageFont.FreeTypeFont):
+        # Preserve the draw protocol for custom surfaces and bitmap fonts.
+        draw.text(xy, text, anchor=anchor, **kwargs)
+        return
+    x, y = xy
+    # Match ImageDraw.text's fractional raster origin and integer paste exactly.
+    core, offset = font.getmask2(text, draw.fontmode, anchor=anchor,
+                                 start=(math.modf(x)[0], math.modf(y)[0]))
+    if not core.size[0] or not core.size[1]:
+        return
+    radius = int(kwargs["stroke_width"])
+    size = core.size
+    pixels = bytes(core)
+    expanded_pixels = (size[0] + 2 * radius) * (size[1] + 2 * radius)
+    expand = _cached_outline_mask if expanded_pixels <= 65_536 else _expand_outline_mask
+    mask = expand(size, pixels, radius)
+    draw.bitmap((int(x) + offset[0] - radius, int(y) + offset[1] - radius), mask, fill=kwargs["stroke_fill"])
 
 
 def _draw_block(draw: ImageDraw.ImageDraw, font: Any, size: int,
@@ -1022,23 +1418,38 @@ def _draw_block(draw: ImageDraw.ImageDraw, font: Any, size: int,
     here rather than inferred from each line's ink, which would make the leading
     jump wherever a line happens to have no descender.
 
-    When ``symbol_font`` and both cmaps are given, a line containing characters
-    the primary face lacks is drawn as consecutive runs -- primary runs in
-    ``font``, missing glyphs in ``symbol_font`` at the same ``size`` -- rather
-    than as tofu. Runs share one baseline: each line's ``y`` is its ascender
-    top (the ``la`` convention), converted once to the baseline via the primary
-    face's ascent, and every run is drawn ``ls``-anchored there. Drawing the
-    runs at the same ascender-top ``y`` instead would align ascender tops, and
-    faces with different ascents (ComicMono 32 vs NotoSansSymbols2 43 at size
-    40) would sit their baselines ~11 px apart -- hearts floating/sinking next
-    to the letters. Lines needing no fallback take the exact single-face path
-    as before, so existing rendering is pixel-identical when the fallback is
-    idle.
+    Every line is painted through the piece machinery, one character at a time
+    at the pen positions the unhinted advance walk produces (see
+    :func:`_line_pieces`). Pillow's in-string walk advances by hinted,
+    per-size-rounded steps, while the preview's browser walks the raw hmtx
+    table -- drawing the string as one call would put the *same font size*
+    visibly further along the line than the preview shows. Per-character
+    placement tracks the fractional pen exactly as the browser does; the only
+    residual is that each glyph's paste snaps to an integer pixel
+    (<= 0.5px, never cumulative, invisible next to the ink's own
+    antialiasing).
+
+    When ``symbol_font`` and both cmaps are given, a character the primary face
+    lacks is drawn from the symbol face at its calibrated size. The reference
+    baseline for all glyphs comes from each line's ``y``, which is its
+    ascender top (the ``la`` convention), converted once to the baseline via
+    the primary face's ascent, and every glyph is drawn ``ls``-anchored there.
+    Drawing at the same ascender-top ``y`` instead would align ascender tops,
+    and faces with different ascents (ComicMono 32 vs NotoSansSymbols2 43 at
+    size 40) would sit their baselines ~11 px apart -- hearts floating or
+    sinking next to the letters. When the ascent is unreadable the glyphs
+    degrade to the old same-y ``la`` placement rather than guessing. Forced
+    replacements match the original character's visible bottom by shifting
+    from this baseline using both outline bottoms and the rounded symbol size.
 
     ``word_extra`` widens (or tightens) every inter-word gap and ``line_factor``
-    scales the line advance. Both are inert at their defaults, and the widened
-    gaps reuse the run-placing machinery above rather than adding a second way
-    to position a line.
+    scales the line advance. Both are inert at their defaults.
+
+    Outlined blocks paint all outlines before any letter fills. Keeping the
+    passes separate prevents a thick stroke from covering another character
+    or line. Positions are computed once and reused by the fill pass.
+    Outlines grow clean raster coverage by Euclidean distance; FreeType's
+    native stroke expansion can invert small counters at large stroke widths.
     """
     x0, y0, x1, y1 = box
     max_w = x1 - x0
@@ -1048,88 +1459,82 @@ def _draw_block(draw: ImageDraw.ImageDraw, font: Any, size: int,
     block_h = ((len(lines) - 1) * advance + line_h) if lines else 0
 
     y = y0 + (y1 - y0 - block_h) / 2.0
-    kw: dict[str, Any] = {"font": font, "fill": fill}
-    if stroke_width > 0 and stroke_fill is not None:
-        kw["stroke_width"] = stroke_width
-        kw["stroke_fill"] = stroke_fill
-
     use_fallback = symbol_font is not None and primary_cmap is not None and symbol_cmap is not None
-    spaced = bool(word_extra)
-    space_w = _length(font, " ") if spaced else 0.0
+    baseline_offsets = symbol_font.baseline_offsets if use_fallback and isinstance(symbol_font, _SymbolCascade) else {}
+    outlined = stroke_width > 0 and stroke_fill is not None
+    paint_text = partial(_draw_outline_text, draw) if outlined else draw.text
+    fill_pieces: list[tuple[float, float, float | None, str, Any]] = []
+    space_w = _length(font, " ")
     # Ascender-top -> baseline conversion for mixed lines (see docstring).
-    # Read once: it depends on the face/size, not on the line. Never raises
-    # (``_ascent`` returns None when unreadable) and never affects the
-    # single-face path, which keeps using ``y`` directly.
+    # Read once: it depends on the face/size, not on the line.
     try:
         primary_ascent = _ascent(font)
     except Exception:  # noqa: BLE001
         primary_ascent = None
 
     for line in lines:
-        if line:
-            needs = False
-            if use_fallback:
+        try:
+            pieces = _line_pieces(
+                line, font,
+                symbol_font if use_fallback else None,
+                primary_cmap if use_fallback else None,
+                symbol_cmap if use_fallback else None,
+                word_extra, space_w)
+        except Exception:  # noqa: BLE001
+            pieces = [(line, font, _length(font, line))] if line else []
+        total = sum(adv for _, _, adv in pieces)
+        if align == "center":
+            cur_x = x0 + (max_w - total) / 2.0
+        elif align == "right":
+            cur_x = x1 - total
+        else:
+            cur_x = x0
+        base_y = y + primary_ascent if primary_ascent is not None else None
+        for seg, face, adv in pieces:
+            if seg:
+                glyph_baseline = base_y + baseline_offsets.get(seg, 0.0) if base_y is not None else None
+                seg_kw: dict[str, Any] = {"font": face, "fill": stroke_fill if outlined else fill}
+                if outlined:
+                    seg_kw["stroke_width"] = stroke_width
+                    seg_kw["stroke_fill"] = stroke_fill
+                    fill_pieces.append((cur_x, y, glyph_baseline, seg, face))
                 try:
-                    needs = any(use for _, use in
-                                _split_runs(line, primary_cmap, symbol_cmap))
-                except Exception:  # noqa: BLE001
-                    needs = False
-            if not needs and not spaced:
-                if align == "center":
-                    draw.text((x0 + max_w / 2.0, y), line, anchor="ma", **kw)
-                elif align == "right":
-                    draw.text((x1, y), line, anchor="ra", **kw)
-                else:  # left
-                    draw.text((x0, y), line, anchor="la", **kw)
+                    # Baseline-shared drawing (see docstring). When the
+                    # primary ascent is unreadable, degrade to the old
+                    # same-y ``la`` placement rather than guessing.
+                    if base_y is None:
+                        paint_text((cur_x, y), seg, anchor="la", **seg_kw)
+                    else:
+                        try:
+                            paint_text((cur_x, glyph_baseline), seg, anchor="ls", **seg_kw)
+                        except Exception:
+                            # Ancient Pillow without baseline anchors:
+                            # visible-but-unshifted beats a gap.
+                            paint_text((cur_x, y), seg, anchor="la", **seg_kw)
+                except Exception:  # noqa: BLE001 - one bad run, not the page
+                    logger.exception("Could not draw a text run")
+                    # Keep advancing so the rest of the line stays placed.
+            cur_x += adv
+        y += advance
+
+    for glyph_x, glyph_top, glyph_baseline, seg, face in fill_pieces:
+        try:
+            if glyph_baseline is None:
+                draw.text((glyph_x, glyph_top), seg, font=face, fill=fill, anchor="la")
             else:
                 try:
-                    pieces = _line_pieces(
-                        line, font,
-                        symbol_font if needs else None,
-                        primary_cmap if needs else None,
-                        symbol_cmap if needs else None,
-                        word_extra, space_w)
-                except Exception:  # noqa: BLE001
-                    pieces = [(line, font, _length(font, line))]
-                total = sum(adv for _, _, adv in pieces)
-                if align == "center":
-                    cur_x = x0 + (max_w - total) / 2.0
-                elif align == "right":
-                    cur_x = x1 - total
-                else:
-                    cur_x = x0
-                base_y = y + primary_ascent if primary_ascent is not None else None
-                for seg, face, adv in pieces:
-                    if seg:
-                        seg_kw: dict[str, Any] = {"font": face, "fill": fill}
-                        if stroke_width > 0 and stroke_fill is not None:
-                            seg_kw["stroke_width"] = stroke_width
-                            seg_kw["stroke_fill"] = stroke_fill
-                        try:
-                            # Baseline-shared drawing (see docstring). When the
-                            # primary ascent is unreadable, degrade to the old
-                            # same-y ``la`` placement rather than guessing.
-                            if base_y is None:
-                                draw.text((cur_x, y), seg, anchor="la", **seg_kw)
-                            else:
-                                try:
-                                    draw.text((cur_x, base_y), seg, anchor="ls", **seg_kw)
-                                except Exception:
-                                    # Ancient Pillow without baseline anchors:
-                                    # visible-but-unshifted beats a gap.
-                                    draw.text((cur_x, y), seg, anchor="la", **seg_kw)
-                        except Exception:  # noqa: BLE001 - one bad run, not the page
-                            logger.exception("Could not draw a text run")
-                            # Keep advancing so the rest of the line stays placed.
-                    cur_x += adv
-        y += advance
+                    draw.text((glyph_x, glyph_baseline), seg, font=face, fill=fill, anchor="ls")
+                except Exception:
+                    draw.text((glyph_x, glyph_top), seg, font=face, fill=fill, anchor="la")
+        except Exception:  # noqa: BLE001 - one bad glyph must not lose the block
+            logger.exception("Could not draw a text fill")
 
 
 # ------------------------------------------------------------------- per entry
 
 def _clamp(value: Any, lo: int, hi: int, default: int) -> int:
     try:
-        return int(max(lo, min(hi, int(round(float(value))))))
+        return int(max(lo, min(hi, _round_half_up(float(value)))))
     except (TypeError, ValueError):
         return default
 
@@ -1258,6 +1663,54 @@ _MAX_LAYER_PIXELS = 16_000_000
 _TILT_DEPTH = 2.0
 
 
+class _SymbolCascade:
+    """Resolved real Pillow faces; a proxy is never passed to ImageDraw."""
+
+    def __init__(self, faces: dict[str, Any], baseline_offsets: dict[str, float] | None = None):
+        self.faces = faces
+        self.baseline_offsets = baseline_offsets or {}
+
+    def face_for(self, char: str) -> Any:
+        return self.faces[char]
+
+
+def _valid_glyph_adjustment(value: Any) -> bool:
+    """Mirror the preview's validation before using assigned-glyph metrics."""
+    if not isinstance(value, dict):
+        return False
+    scale, primary_bottom, fallback_bottom = (
+        value.get(key) for key in ("scale", "primary_bottom", "fallback_bottom")
+    )
+    return (
+        all(type(v) in (int, float) and math.isfinite(v) for v in (scale, primary_bottom, fallback_bottom))
+        and 0.5 <= scale <= 3
+        and abs(primary_bottom) <= 8
+        and abs(fallback_bottom) <= 8
+    )
+
+
+def _load_user_symbol_font(filename: str, size: int) -> Any | None:
+    key = (filename, size)
+    if key in _USER_SYMBOL_CACHE:
+        return _USER_SYMBOL_CACHE[key]
+    raw = _REGISTERED_FONT_BYTES.get(filename)
+    if not raw:
+        return None
+    try:
+        face = ImageFont.truetype(BytesIO(raw), size)
+        _attach_raw_advances(face, raw)
+    except Exception:
+        logger.debug("Could not load user symbol font %s", filename, exc_info=True)
+        if len(_USER_SYMBOL_CACHE) >= _FONT_CACHE_MAX:
+            _USER_SYMBOL_CACHE.clear()
+        _USER_SYMBOL_CACHE[key] = None
+        return None
+    if len(_USER_SYMBOL_CACHE) >= _FONT_CACHE_MAX:
+        _USER_SYMBOL_CACHE.clear()
+    _USER_SYMBOL_CACHE[key] = face
+    return face
+
+
 def _symbol_faces(fontfile: str, text: str, size: int
                   ) -> tuple[Any | None, set[int] | None, set[int] | None]:
     """The symbol fallback face and both cmaps for ``text`` at ``size``.
@@ -1267,10 +1720,80 @@ def _symbol_faces(fontfile: str, text: str, size: int
     """
     try:
         primary_cmap = _primary_cmap(fontfile)
+        if (_USER_SYMBOL_FONTS or _FORCED_SYMBOL_OWNERS) and primary_cmap is not None:
+            characters = {ch for ch in text if not ch.isspace()}
+            missing = {ch for ch in characters if ord(ch) not in primary_cmap}
+            forced = {ch for ch in characters if ch in _FORCED_SYMBOL_OWNERS}
+            if not missing and not forced:
+                return None, None, None
+            primary = _profile_for_font(_effective_fontfile(fontfile))
+            resolved: dict[str, Any] = {}
+            baseline_offsets: dict[str, float] = {}
+            adjustments = _FORCED_SYMBOL_ADJUSTMENTS.get(_effective_fontfile(fontfile), {})
+            loaded: dict[tuple[str, int], Any] = {}
+
+            def load_face(filename: str, glyph_scale: float | None = None) -> Any | None:
+                if glyph_scale is not None:
+                    px = max(1, _round_half_up(size * glyph_scale))
+                elif filename == _SYMBOL_FONT:
+                    px = _symbol_px_size(fontfile, size)
+                else:
+                    px = max(1, _round_half_up(size * scale_for(primary, _profile_for_font(filename))))
+                key = (filename, px)
+                if key not in loaded:
+                    if filename == _SYMBOL_FONT:
+                        loaded[key] = _load_symbol_font(px)
+                    else:
+                        loaded[key] = _load_user_symbol_font(filename, px)
+                return loaded[key]
+
+            # Explicit ownership precedes the primary face and the hierarchy.
+            # Only a successfully loaded, covering face can replace a character.
+            for filename in (*_USER_SYMBOL_FONTS, _SYMBOL_FONT):
+                assigned = {ch for ch in forced if _FORCED_SYMBOL_OWNERS[ch] == filename}
+                if not assigned:
+                    continue
+                coverage = ((_symbol_cmap() or set()) if filename == _SYMBOL_FONT
+                            else _profile_for_font(filename).coverage)
+                covered = {ch for ch in assigned if ord(ch) in coverage}
+                for char in covered:
+                    adjustment = adjustments.get(filename, {}).get(str(ord(char)))
+                    if ord(char) not in primary_cmap or not _valid_glyph_adjustment(adjustment):
+                        adjustment = None
+                    face = load_face(filename, adjustment["scale"] if adjustment else None)
+                    if face is not None:
+                        resolved[char] = face
+                        if adjustment:
+                            # Font coordinates grow up; screen coordinates grow
+                            # down. Use the actual rounded em, as the SVG does.
+                            baseline_offsets[char] = (
+                                adjustment["fallback_bottom"] * face.size - adjustment["primary_bottom"] * size
+                            )
+                        missing.discard(char)
+            for filename in _USER_SYMBOL_FONTS:
+                profile = _profile_for_font(filename)
+                covered = {ch for ch in missing if ord(ch) in profile.coverage}
+                if not covered:
+                    continue
+                face = load_face(filename)
+                if face is not None:
+                    resolved.update(dict.fromkeys(covered, face))
+                    missing -= covered
+            # The embedded Noto face is always last, regardless of user order.
+            if missing:
+                noto_cmap = _symbol_cmap() or set()
+                covered = {ch for ch in missing if ord(ch) in noto_cmap}
+                if covered:
+                    face = load_face(_SYMBOL_FONT)
+                    if face is not None:
+                        resolved.update(dict.fromkeys(covered, face))
+            if resolved:
+                return _SymbolCascade(resolved, baseline_offsets), primary_cmap, {ord(ch) for ch in resolved}
+            return None, None, None
         symbol_cmap = _symbol_cmap()
         symbol_font = None
         if _text_needs_symbol(text, primary_cmap, symbol_cmap):
-            symbol_font = _load_symbol_font(size)
+            symbol_font = _load_symbol_font(_symbol_px_size(fontfile, size))
         if symbol_font is None:
             return None, None, None
         return symbol_font, primary_cmap, symbol_cmap
@@ -1607,7 +2130,7 @@ def _draw_entry(img: Image.Image, draw: ImageDraw.ImageDraw,
     if bg_color is not None and bg_color[3] > 0:
         draw.polygon(points, fill=bg_color)
 
-    text = (item.text or "").replace("—", "--")
+    text = item.text or ""
     if not text.strip():
         # A clean-only or plate-only entry: the region work is done above and
         # there is deliberately nothing to set.

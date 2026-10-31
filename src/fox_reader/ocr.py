@@ -340,7 +340,11 @@ class PaddleOCRWrapper:
             ordered = _sort_horizontal(boxes)
 
         ocr_text = "".join(b["text"] for b in ordered)
-        ocr_text = ocr_text.replace("…", "...")
+        # The fullwidth exclamation mark is the one OCR-recycled character
+        # neither shipped face covers (checked: NotoSansSymbols2 and the
+        # ComicMonos both lack U+FF01 -- `…` and `—` are covered), so it would
+        # type as a tofu box in the preview *and* the render. Halfwidth `!`
+        # every face has, and nothing downstream reads the width difference.
         ocr_text = ocr_text.replace("！", "!")
         return ocr_text
 

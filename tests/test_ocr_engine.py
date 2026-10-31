@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from fox_reader import ocr as ocr_mod
 from fox_reader.constants import DEFAULT_OCR_ENGINE
-from fox_reader.ocr import Transcription
+from fox_reader.ocr import PaddleOCRWrapper, Transcription
 
 
 def test_normalize_ocr_engine_defaults_to_classic():
@@ -18,6 +18,22 @@ def test_normalize_ocr_engine_defaults_to_classic():
     assert ocr_mod.normalize_ocr_engine("paddleocr-vl") == "paddleocr-vl"
     # Unknown ids never raise here: settings validation rejects, runtime falls back.
     assert ocr_mod.normalize_ocr_engine("bogus") == DEFAULT_OCR_ENGINE
+
+
+def test_ocr_text_normalizes_the_fullwidth_mark_only():
+    """The `！` the recognizers recycle is tofu in every shipped face.
+
+    `…` (U+2026) is covered by NotoSansSymbols2 and `—` (U+2014) by every
+    face, so those are left verbatim for the symbol fallback to place; the
+    fullwidth `！` (U+FF01) is covered by *neither* face, so it collapses to
+    the halfwidth `!` rather than a notdef box in both engines.
+    """
+    wrapper = PaddleOCRWrapper.__new__(PaddleOCRWrapper)
+    text = "\uff21\uff01...\u2026\u2014!\uff01"
+    items = [
+        {"text": text, "box": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]},
+    ]
+    assert wrapper._postprocess(items) == "\uff21!...\u2026\u2014!!"
 
 
 def test_vl_unavailable_without_package_or_weights(monkeypatch):

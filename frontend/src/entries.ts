@@ -22,7 +22,7 @@ import { state, WORKBENCH_PALETTE } from "./state";
 import type { Entry } from "./state";
 import type { DataItem, OCRResponse, Point, ProcessImageRequest, RectangleCoords, Region } from "./types";
 import { showNotify, setTextAlignmentValue, getTextAlignmentValue, setTextAreaLoading, updateActionRow } from "./ui";
-import { getCurrentFontFilename, getCurrentFontName, setSelectedFontByFilename } from "./fonts";
+import { getCurrentFontFilename, getCurrentFontName, getTextFontName, setSelectedFontByFilename } from "./fonts";
 import * as api from "./api";
 import { fetchCharacters, subscribeCharacters } from "./characters";
 import { renderTranslationUI, handleAutoTranslation, translationPanelState, translationPanelText } from "./translate";
@@ -601,7 +601,7 @@ function openInlineEditor(entry: Entry, group: SVGGElement): void {
 
     const shapeBox = group.getBoundingClientRect();
     const containerBox = container.getBoundingClientRect();
-    const textEl = group.querySelector("text");
+    const textEl = group.querySelector(".entry-text");
     const rendered = textEl ? parseFloat(textEl.getAttribute("font-size") ?? "14") : 14;
     // The overlay is in image pixels; the editor is a DOM node in screen pixels.
     const scale = shapeBox.width / Math.max(1, regionBBox(entry.region).w);
@@ -737,7 +737,7 @@ function updateEntryHead(entry: Entry): void {
         preview.textContent = entry.text || entry.ocr_text || "";
         // The face dresses the entry's own text; the OCR fallback below it
         // always renders in the default face.
-        preview.style.fontFamily = entry.text ? entry.fontname : "";
+        preview.style.fontFamily = entry.text ? getTextFontName(entry.fontfile, entry.fontname) : "";
     }
     paintNumberBadge(head.querySelector<HTMLElement>(".entry-layer-badge"), entry, entryNumber(entry));
     const position = entryNumber(entry);
@@ -826,7 +826,7 @@ function buildEntryCard(entry: Entry, num: number): HTMLElement {
     preview.className = "entry-text-preview";
     preview.textContent = entry.text || entry.ocr_text || "";
     // As above: the face follows `text`, never the OCR fallback.
-    if (entry.text) preview.style.fontFamily = entry.fontname;
+    if (entry.text) preview.style.fontFamily = getTextFontName(entry.fontfile, entry.fontname);
     head.appendChild(preview);
 
     const glyph = bgChipIcon(entry);
@@ -1061,13 +1061,18 @@ export function initEntriesListeners(): void {
 
     // Token widths are cached per family. A token measured while the real face
     // was still loading would keep the fallback's width for the session, so the
-    // cache is dropped once the fonts settle and the page is re-fitted.
+    // caches are dropped and the page re-fitted whenever the font set settles:
+    // through `fonts.ready` (faces registered before boot), and through the
+    // `fonts.ts` batch event (data-URI faces finish downloading some time after
+    // it fires, because it fires before any of them has ever been referenced).
+    const onFontsSettled = (): void => {
+        resetTextMetrics();
+        if (state.currentImageFile && pageEntries().length) renderCurrentPageEntries("fonts");
+    };
     document.fonts?.ready
-        .then(() => {
-            resetTextMetrics();
-            if (state.currentImageFile && pageEntries().length) renderCurrentPageEntries("fonts");
-        })
+        .then(onFontsSettled)
         .catch(() => {
             /* the browser declined to report; measurements stay as they are */
         });
+    window.addEventListener("foxreader:fonts-loaded", onFontsSettled);
 }

@@ -9,12 +9,18 @@ Two rules are pinned here, both from the spec:
   ``right`` exist, and anything else (a value saved by an older build) has to
   degrade to left rather than raise.
 
-The font here is a stub rather than a real face: ``_length`` only ever asks for
-``getlength``, and a fixed 10px per character makes "too wide for the line"
-exact instead of dependent on whichever TTF happens to be installed.
+Line-breaker cases use a fixed-width stub to make wrap boundaries exact.
+Raster and calibration cases use shipped faces and generated font fixtures,
+so optional user fonts cannot change which regressions run.
 """
-import pytest
+import io
+import os
 
+import numpy as np
+import pytest
+from PIL import Image, ImageDraw, ImageFont
+
+from fox_reader import typeset
 from fox_reader.typeset import (
     TEXT_ALIGNMENTS,
     _ascent,
@@ -22,8 +28,10 @@ from fox_reader.typeset import (
     _draw_block,
     _hyphen_pieces,
     _layout,
+    _load_font,
     _wrap_paragraph,
 )
+from tests.font_fixtures import TEXT_FIXTURE_NAMES, make_font
 
 
 class FakeFont:
@@ -135,21 +143,30 @@ class TestAlignments:
         assert gone not in TEXT_ALIGNMENTS
 
     @pytest.mark.parametrize(
-        "align, anchor",
-        [("left", "la"), ("center", "ma"), ("right", "ra"), ("justify", "la"), ("", "la")],
+        "align",
+        ["left", "center", "right", "justify", ""],
     )
-    def test_draw_block_anchors_and_falls_back_to_left(self, align, anchor):
+    def test_draw_block_anchors_and_falls_back_to_left(self, align):
         draw = FakeDraw()
+        # "hi" is 2 x 10px glyphs; unknown alignments degrade to left.
         _draw_block(draw, FakeFont(), 20, ["hi"], align,
                     (0, 0, 100, 40), (0, 0, 0, 255), 0, None)
-        assert [call[2] for call in draw.calls] == [anchor]
+        assert [call[2] for call in draw.calls] == ["ls", "ls"]
+        x = [call[0][0] for call in draw.calls]
+        if align == "center":
+            assert x == [pytest.approx(40.0), pytest.approx(50.0)]
+        elif align == "right":
+            assert x == [pytest.approx(80.0), pytest.approx(90.0)]
+        else:  # left, and anything the block does not know
+            assert x == [pytest.approx(0.0), pytest.approx(10.0)]
 
     def test_block_is_centred_vertically(self):
         draw = FakeDraw()
-        # One line, 10px tall (ascent 8 + descent 2), in a 40px-tall box.
+        # One 10px-tall line box (ascent 8 + descent 2) centred in a 40px box:
+        # its top is 15.0, and glyphs sit baseline-anchored on its ascender.
         _draw_block(draw, FakeFont(), 20, ["hi"], "left",
                     (0, 0, 100, 40), (0, 0, 0, 255), 0, None)
-        assert draw.calls[0][0][1] == pytest.approx(15.0)
+        assert draw.calls[0][0][1] == pytest.approx(15.0 + 8)
 
     def test_blank_lines_advance_but_are_not_drawn(self):
         draw = FakeDraw()
@@ -218,16 +235,20 @@ class TestSymbolBaseline:
         assert all(c["anchor"] == "ls" for c in draw.calls)
 
     def test_primary_only_line_with_fallback_armed_stays_single_face(self):
-        """Idle fallback is pixel-identical: no splitting, old anchors."""
+        """Idle fallback draws every glyph from the primary, on one baseline."""
         primary = FakeFont(ascent=8)
         symbol = FakeFont(ascent=20)
         draw = RecordingDraw()
         _draw_block(draw, primary, 20, ["hi"], "center",
                     (0, 0, 100, 40), (0, 0, 0, 255), 0, None,
                     symbol, {ord("h"), ord("i")}, {ord(self.HEART)})
-        assert len(draw.calls) == 1
-        assert draw.calls[0]["line"] == "hi"
-        assert draw.calls[0]["anchor"] == "ma"
+        assert [call["font"] for call in draw.calls] == [primary, primary]
+        assert [call["line"] for call in draw.calls] == ["h", "i"]
+        assert all(call["anchor"] == "ls" for call in draw.calls)
+        # Same converted baseline as a mixed line would get.
+        assert all(call["xy"][1] == pytest.approx(15.0 + 8) for call in draw.calls)
+        # Glyphs placed at the per-character advance, not one string.
+        assert draw.calls[1]["xy"][0] == pytest.approx(draw.calls[0]["xy"][0] + 10.0)
 
     def test_unreadable_ascent_degrades_to_unshifted(self):
         class Broken:
@@ -338,7 +359,7 @@ class TestEntryColours:
 
         @property
         def fill(self):
-            return self.text_calls[0]["fill"]
+            return self.text_calls[-1]["fill"]
 
         @property
         def stroke(self):
@@ -441,3 +462,403 @@ class TestEntryColours:
         that arrives that way is a bad hint rather than an instruction."""
         drawn = self._render(self._item(detected_font_color="#00000000"))
         assert drawn.fill == (0, 0, 0, 255)
+
+
+class TestStrokeRing:
+    """Pillow's ``stroke_width`` sits wholly outside the glyph.
+
+    The frontend's SVG outline (`textFit.STROKE_ATTR_COEFF`) is built on this
+    contract: SVG centres a stroke on the outline, so `stroke-width: N` shows
+    only N/2 of it outside the fill, while the backend's `stroke_width: N` is a
+    solid N-pixel band of ring on every side. Measured at sizes 24/48 and
+    widths 1..3 on the shipped ComicMono face; a Pillow upgrade that moves these
+    numbers would silently double or halve every outline in the reader, so they
+    are pinned rather than assumed.
+    """
+
+    RED = (255, 0, 0, 255)
+    BLUE = (0, 0, 255, 255)
+
+    @pytest.fixture(autouse=True)
+    def _font(self):
+        from pathlib import Path
+
+        from PIL import ImageFont
+
+        from fox_reader.utils import FONT_DIR
+
+        source = FONT_DIR / "ComicMono.ttf"
+        if not source.is_file():
+            pytest.skip("no fonts/ComicMono.ttf in the checkout")
+        self._font_bytes = Path(source).read_bytes()
+        self._ImageFont = ImageFont
+
+    def _render(self, text: str, size: int, stroke: int):
+        import io
+
+        from PIL import Image, ImageDraw
+
+        font = self._ImageFont.truetype(io.BytesIO(self._font_bytes), size)
+        img = Image.new("RGBA", (size * 6, size * 6), (0, 0, 0, 0))
+        ImageDraw.Draw(img).text(
+            (size, size), text, font=font, fill=self.RED,
+            stroke_width=stroke, stroke_fill=self.BLUE, anchor="la",
+        )
+        return img
+
+    def _ring_and_widening(self, size: int, stroke: int) -> tuple[float, float]:
+        img = self._render("HI", size, stroke)
+        plain = self._render("HI", size, 0)
+        px, ppx = img.load(), plain.load()
+
+        def ink(canvas_px, imgs, x, y):
+            return canvas_px[x, y][3] > 96
+
+        def is_stroke(x, y):
+            p = px[x, y]
+            return p[3] > 96 and p[2] > 128 and p[0] < 128
+
+        def bbox(canvas_px, image):
+            xs = [
+                x for y in range(image.height) for x in range(image.width)
+                if ink(canvas_px, image, x, y)
+            ]
+            return min(xs), max(xs)
+
+        w0 = bbox(ppx, plain)[1] - bbox(ppx, plain)[0] + 1
+        w1 = bbox(px, img)[1] - bbox(px, img)[0] + 1
+        widening = (w1 - w0) / 2.0
+
+        # Ring thickness: contiguous stroke pixels walking in from the left edge
+        # of the H's left bar, on rows through its clean middle third (where the
+        # crossbar cannot interfere).
+        ys = [
+            y for y in range(img.height)
+            if any(ink(px, img, x, y) for x in range(img.width))
+        ]
+        lo, hi = min(ys), max(ys)
+        lo += (hi - lo) // 3
+        hi -= (hi - lo) // 3
+        runs = []
+        for y in range(lo, hi + 1):
+            row = [x for x in range(img.width) if ink(px, img, x, y)]
+            if not row:
+                continue
+            t = 0
+            for x in range(row[0], img.width):
+                if is_stroke(x, y):
+                    t += 1
+                else:
+                    break
+            if t:
+                runs.append(t)
+        ring = sum(runs) / len(runs)
+        return widening, ring
+
+    @pytest.mark.parametrize("size,stroke", [(24, 1), (24, 2), (24, 3), (48, 2), (48, 3)])
+    def test_the_ring_matches_the_stroke_width(self, size, stroke):
+        widening, ring = self._ring_and_widening(size, stroke)
+        assert ring == stroke, f"ring {ring} != stroke {stroke}"
+        assert widening == stroke, f"per-side widening {widening} != stroke {stroke}"
+
+
+class TestUnhintedInkPaint:
+    """Per-character painting must retain fractional hmtx advances.
+
+    The generated face advances 7.5px at size 12, while Pillow's BASIC string
+    walk rounds each advance to 8px. Eight letters expose cumulative drift.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _font(self, typeset_font_dir):
+        self.face = TEXT_FIXTURE_NAMES[1]
+        self.source = str(typeset_font_dir / self.face)
+
+    def _ink_from_origin(self, img, x_origin: int = 30) -> tuple[float, float]:
+        xs = np.nonzero(np.array(img))[1]
+        assert xs.size, "nothing was drawn"
+        return float(xs.min() - x_origin), float(xs.max() - x_origin)
+
+    def _paint_new(self):
+        img = Image.new("L", (240, 36), 0)
+        font = _load_font(self.face, 12)
+        _draw_block(ImageDraw.Draw(img), font, 12, ["HHHHHHHH"], "left", (30, 6, 230, 24), 255, 0, None)
+        return self._ink_from_origin(img)
+
+    def _paint_old_style(self):
+        img = Image.new("L", (240, 36), 0)
+        font = ImageFont.truetype(self.source, 12, layout_engine=ImageFont.Layout.BASIC)
+        ImageDraw.Draw(img).text((30, 12), "HHHHHHHH", font=font, fill=255, anchor="ls")
+        return self._ink_from_origin(img)
+
+    def test_fractional_paint_does_not_accumulate_hinted_advance_rounding(self):
+        new_left, new_right = self._paint_new()
+        old_left, old_right = self._paint_old_style()
+        assert (old_right - old_left) - (new_right - new_left) >= 2, (
+            f"painted widths: unhinted {new_right - new_left} vs hinted {old_right - old_left}"
+        )
+
+    def test_the_last_glyph_lands_at_the_fractional_pen_position(self):
+        _left, new_right = self._paint_new()
+        # Seven 7.5px advances plus the final glyph's 6px ink, with paste rounding.
+        assert new_right == pytest.approx(58.0, abs=1.0)
+
+
+class TestSymbolSizeCalibration:
+    """Known cap heights produce independent scales and calibrated run widths."""
+
+    @pytest.fixture(autouse=True)
+    def _fonts(self, typeset_font_dir, monkeypatch):
+        self.primary = TEXT_FIXTURE_NAMES[1]
+        raw = make_font(typeset_font_dir / "TestSymbols.ttf", dict.fromkeys("♡★✓■●", 400))
+        monkeypatch.setattr(typeset, "_symbol_font_bytes", lambda: raw)
+
+    def test_scale_matches_each_generated_cap_height(self):
+        for face, expected in zip(TEXT_FIXTURE_NAMES, (1.5, 2.0, 2.5), strict=True):
+            assert typeset.symbol_scale_for(face) == pytest.approx(expected), face
+
+    def test_symbol_px_size_follows_the_scale(self):
+        for face in (*TEXT_FIXTURE_NAMES, "ComicMono.ttf"):
+            scale = typeset.symbol_scale_for(face)
+            for size in (1, 12, 24):
+                assert typeset._symbol_px_size(face, size) == max(1, typeset._round_half_up(size * scale))
+
+    def test_the_missing_or_broken_face_stays_sane(self, monkeypatch):
+        assert typeset.symbol_scale_for("absent-face.ttf") == typeset.symbol_scale_for("ComicMono.ttf")
+
+        def broken(name, size):
+            raise OSError("no face")
+
+        monkeypatch.setattr(typeset, "_load_font", broken)
+        monkeypatch.setattr(typeset, "_load_symbol_font", lambda size: None)
+        assert typeset.symbol_scale_for("whatever.ttf") == 1.0
+        assert typeset._symbol_px_size("whatever.ttf", 12) == 12
+
+    def test_mixed_measure_runs_the_calibrated_symbol_face(self):
+        size = 24
+        primary = typeset._load_font(self.primary, size)
+        sf, pc, sc = typeset._symbol_faces(self.primary, "Hi♡!", size)
+        assert sf is not None and sf.size == typeset._symbol_px_size(self.primary, size)
+        expected = (
+            typeset._raw_length(primary, "Hi")
+            + typeset._raw_length(sf, "♡")
+            + typeset._raw_length(primary, "!")
+        )
+        assert typeset._mixed_length(primary, sf, "Hi♡!", pc, sc) == pytest.approx(expected, abs=0.02)
+
+
+class TestBytesSourceAdvances:
+    """Bytes-loaded faces must expose the same raw hmtx widths as disk faces."""
+
+    def test_attach_from_raw_bytes_walks_the_table(self, typeset_font_dir):
+        raw = (typeset_font_dir / TEXT_FIXTURE_NAMES[1]).read_bytes()
+        font = ImageFont.truetype(io.BytesIO(raw), 12)
+        typeset._attach_raw_advances(font, raw)
+        assert isinstance(getattr(font, "_fox_raw_adv", None), dict)
+        # Nine 625-unit advances at 12px in a 1000-unit em.
+        assert typeset._raw_length(font, "once, but") == pytest.approx(67.5, abs=0.01)
+
+    def test_attach_from_bad_bytes_sets_the_sentinel(self, typeset_font_dir):
+        raw = (typeset_font_dir / TEXT_FIXTURE_NAMES[1]).read_bytes()
+        font = ImageFont.truetype(io.BytesIO(raw), 12)
+        typeset._attach_raw_advances(font, b"still not a font")
+        assert getattr(font, "_fox_raw_adv", None) is False
+
+
+class TestHalfUpRounding:
+    """Both engines must round shared floats the same way.
+
+    The preview computes `round(size * scale)`, `round((lh + spacing) *
+    factor)` and clamps in JavaScript, where ``Math.round`` sends ``x.5`` up.
+    Python's ``round`` sends ``x.5`` to the *even* neighbour, so the two
+    engines would disagree exactly there -- a class of positionoff-by-one that
+    no amount of shared font data fixes. ``_round_half_up`` is floor(x + 0.5),
+    which is JS's rule for every sign.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (0.5, 1),
+            (1.5, 2),
+            (2.5, 3),  # banker's round() gives 2 here -- the whole point
+            (3.5, 4),
+            (-0.5, 0),
+            (-1.5, -1),  # banker's gives -2
+            (22.5, 23),
+            (0.0, 0),
+            (1.4999999, 1),
+        ],
+    )
+    def test_halves_go_up_like_javascript(self, value, expected):
+        assert typeset._round_half_up(value) == expected
+
+    @pytest.mark.parametrize(
+        "junk", [None, "abc", float("nan"), object()]
+    )
+    def test_junk_is_zero_never_an_exception(self, junk):
+        assert typeset._round_half_up(junk) == 0
+
+    def test_scaled_line_advance_agrees_with_javascript(self, monkeypatch):
+        # 15 * 1.5 = 22.5 -> Math.round says 23, banker's round() says 22.
+        assert typeset._advance_for(12, 3, 1.5) == 23
+
+    def test_clamp_rounds_halves_up(self):
+        # int(round(2.5)) would clamp to 2; the browser rounds to 3.
+        assert typeset._clamp(2.5, 0, 32, 2) == 3
+        assert typeset._clamp(0.5, 1, 72, 16) == 1, "clamping still wins"
+
+    def test_symbol_px_size_rounds_halves_up(self, monkeypatch):
+        monkeypatch.setattr(
+            typeset, "symbol_scale_for", lambda *_a, **_k: 0.5, raising=False
+        )
+        # 13 * 0.5 = 6.5 -> 7; banker's would produce 6.
+        assert typeset._symbol_px_size("half.ttf", 13) == 7
+
+    def test_real_faces_never_land_on_a_disagreement(self):
+        """No shipped-calibration size sits on a half, and rounding is half-up.
+
+        If some ``size * scale`` were exactly ``x.5``, banker's ``round`` would
+        have produced one fewer pixel than the browser does before this change
+        -- worth knowing about, not silently forgetting.
+        """
+        if not os.path.isfile("fonts/ComicMono.ttf"):
+            pytest.skip("ComicMono not present")
+        scale = typeset.symbol_scale_for("ComicMono.ttf")
+        for size in range(typeset.MIN_FONT_SIZE, typeset.MAX_FONT_SIZE + 1):
+            raw = size * scale
+            assert typeset._symbol_px_size("ComicMono.ttf", size) == max(
+                1, typeset._round_half_up(raw)
+            )
+            assert raw != int(raw) + 0.5, (
+                f"size {size} lands exactly on a half ({raw}): engines would split"
+            )
+
+
+class TestLineMetricsTable:
+    """`line_metrics_for` ships the exact ints `font.getmetrics()` returns.
+
+    The preview's rounded font-unit estimate disagrees with FreeType's
+    per-size rounding for most sizes in the fit range (measured: 49 of the 67
+    sizes 6..72 for ComicMono are off by a pixel in line height, and the
+    ascent alone is off for ~70 of sizes 1..144), so the backend measures its
+    own engine once per face and ships the table. These tests pin the table's
+    contract: full range, real ints, fallback-consistent, all-or-nothing.
+    """
+
+    FACE = "ComicMono.ttf"
+
+    @pytest.mark.skipif(
+        not os.path.isfile(f"fonts/{FACE}"), reason="ComicMono not present"
+    )
+    def test_table_covers_every_fit_size_with_real_metrics(self):
+        table = typeset.line_metrics_for(self.FACE)
+        assert len(table) == (typeset.MAX_FONT_SIZE - typeset.MIN_FONT_SIZE + 1) * 2
+        for i, size in enumerate(range(typeset.MIN_FONT_SIZE, typeset.MAX_FONT_SIZE + 1)):
+            ascent, descent = (int(v) for v in _load_font(self.FACE, size).getmetrics())
+            got_a, got_d = table[2 * i], table[2 * i + 1]
+            assert (got_a, got_d) == (ascent, descent), (
+                f"size {size}: table {got_a}/{got_d} vs getmetrics {ascent}/{descent}"
+            )
+            assert got_a + got_d > 0
+
+    @pytest.mark.skipif(
+        not os.path.isfile(f"fonts/{FACE}"), reason="ComicMono not present"
+    )
+    def test_a_missing_face_resolves_the_same_face_drawing_would(self):
+        # `_load_font` falls through to the fallback, and so must the table:
+        # an entry referencing a font the folder no longer has must still
+        # describe what the render actually paints with.
+        assert typeset.line_metrics_for("definitely-absent.ttf") == typeset.line_metrics_for(
+            self.FACE
+        )
+
+    def test_a_face_that_cannot_be_measured_ships_no_table(self, monkeypatch):
+        monkeypatch.setattr(typeset, "_LINE_METRICS_CACHE", {})
+
+        def broken(name, size):
+            raise OSError("no face")
+
+        monkeypatch.setattr(typeset, "_load_font", broken)
+        assert typeset.line_metrics_for("whatever.ttf") == []
+
+    def test_the_table_is_cached_per_face(self, monkeypatch):
+        monkeypatch.setattr(typeset, "_LINE_METRICS_CACHE", {})
+        calls = []
+
+        real_load = typeset._load_font
+
+        def counting(name, size):
+            calls.append((name, size))
+            return real_load(name, size)
+
+        monkeypatch.setattr(typeset, "_load_font", counting)
+        typeset.line_metrics_for(self.FACE)
+        first = len(calls)
+        typeset.line_metrics_for(self.FACE)
+        assert len(calls) == first, "second call must be a pure cache hit"
+
+
+class TestBlockOutlines:
+    def test_outline_expansion_is_circular_and_preserves_coverage(self):
+        mask = typeset._expand_outline_mask((1, 1), b"\xff", 14)
+        assert mask.size == (29, 29)
+        assert mask.getpixel((14, 14)) == 255
+        assert mask.getpixel((0, 14)) == mask.getpixel((14, 0)) == 255
+        assert mask.getpixel((0, 0)) == 0, "a round stroke must not grow square corners"
+        faint = typeset._expand_outline_mask((1, 1), b"\x40", 2)
+        assert faint.getpixel((2, 2)) == 255, "a subpixel glyph must still acquire an opaque thick stroke"
+        assert faint.getpixel((0, 2)) == 64, "the outline boundary must retain antialiasing"
+
+    def test_outline_cache_is_bounded_and_large_masks_are_rejected(self):
+        typeset._cached_outline_mask.cache_clear()
+        first = typeset._cached_outline_mask((1, 1), b"\xff", 14)
+        assert typeset._cached_outline_mask((1, 1), b"\xff", 14) is first
+        assert typeset._cached_outline_mask.cache_info().maxsize == 64
+        with pytest.raises(ValueError, match="too large"):
+            typeset._expand_outline_mask((1, 1), b"\xff", 5000)
+
+    @pytest.mark.parametrize("align", ["left", "center", "right"])
+    def test_all_outlines_precede_all_fills_with_identical_glyph_positions(self, align):
+        class Trace:
+            def __init__(self):
+                self.calls = []
+
+            def text(self, xy, text, **kwargs):
+                self.calls.append({"xy": xy, "text": text, **kwargs})
+
+        primary, symbol = FakeFont(), FakeFont(advance=15, ascent=20)
+        cascade = typeset._SymbolCascade({"?": symbol}, {"?": 3.5})
+        draw = Trace()
+        _draw_block(draw, primary, 20, ["H ?", "? H"], align, (0, 0, 200, 80),
+                    (0, 0, 0, 255), 23, (255, 255, 255, 255), cascade, {ord("H")}, {ord("?")}, 4, 0.5)
+        outlines, fills = draw.calls[:4], draw.calls[4:]
+        assert len(fills) == 4
+        assert [call["text"] for call in outlines] == ["H", "?", "?", "H"]
+        for outline, fill in zip(outlines, fills, strict=True):
+            assert outline["fill"] == outline["stroke_fill"] == (255, 255, 255, 255)
+            assert outline["stroke_width"] == 23
+            assert fill["fill"] == (0, 0, 0, 255)
+            assert "stroke_width" not in fill
+            assert "stroke_fill" not in fill
+            for key in ("text", "xy", "font", "anchor"):
+                assert outline[key] == fill[key]
+
+    @pytest.mark.parametrize("filename", ["ComicMono.ttf", *TEXT_FIXTURE_NAMES])
+    @pytest.mark.parametrize("stroke_width", [6, 23, 32])
+    @pytest.mark.parametrize("lines,line_factor", [(["HELLO"], None), (["HELLO", "HELLO"], 0.5)])
+    def test_thick_strokes_preserve_every_solid_letter_pixel(
+        self, typeset_font_dir, filename, stroke_width, lines, line_factor,
+    ):
+        font = _load_font(filename, 40)
+        mask = Image.new("L", (400, 220), 0)
+        canvas = Image.new("RGB", mask.size, (180, 0, 180))
+        box = (60, 40, 340, 180)
+        _draw_block(ImageDraw.Draw(mask), font, 40, lines, "center", box,
+                    255, 0, None, line_factor=line_factor)
+        _draw_block(ImageDraw.Draw(canvas), font, 40, lines, "center", box,
+                    (0, 0, 0), stroke_width, (255, 255, 255), line_factor=line_factor)
+        solid_ink = np.asarray(mask) == 255
+        assert solid_ink.any()
+        assert np.all(np.asarray(canvas)[solid_ink] == 0), "a neighboring outline covered solid letter ink"
+        assert np.any(np.all(np.asarray(canvas) == 255, axis=2)), "the outline must still be visible"

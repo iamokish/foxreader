@@ -555,6 +555,49 @@
         font-size: 1.25rem;
       }
     }
+    .font-card { margin: 12px 0; padding: 15px; border: 1px solid var(--border); border-radius: 10px; background: #141820; }
+    .font-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .font-rank { font-size: .76rem; font-weight: 700; color: var(--muted); }
+    .font-actions { display: flex; gap: 5px; }
+    .font-actions button, .font-character-actions button { min-height: 34px; padding: 6px 10px; }
+    .font-card button:disabled { opacity: .4; cursor: not-allowed; }
+    .font-picker { position: relative; }
+    .font-picker-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; }
+    .font-picker-trigger:hover, .font-picker-trigger[aria-expanded="true"] { border-color: var(--accent); background: var(--surface-selected); }
+    .font-picker-trigger:focus-visible, .font-option:focus-visible, .glyph-button:focus-visible, .character-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .font-picker-value { min-width: 0; }
+    .font-display { display: block; font-size: 1.06rem; line-height: 1.5; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .font-file { display: block; margin-top: 3px; color: var(--muted); font: .72rem/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+    .font-chevron { font: 1rem sans-serif; color: var(--muted); }
+    .font-picker-panel { position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 50; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: #1b202a; box-shadow: 0 12px 28px #0008; }
+    .font-search { margin-bottom: 7px; padding: 9px 11px; }
+    .font-options { max-height: min(320px, 42vh); overflow-y: auto; scrollbar-width: thin; }
+    .font-option { display: block; width: 100%; padding: 10px 12px; border: 0; border-radius: 6px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+    .font-option:hover, .font-option:focus-visible { background: var(--surface-selected); }
+    .font-option[aria-selected="true"] { background: #e9456022; box-shadow: inset 3px 0 var(--accent); }
+    .font-picker-empty, .font-fallback-note { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+    .font-character-editor { margin-top: 15px; }
+    .font-character-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; font-size: .8rem; font-weight: 600; }
+    .character-count { color: var(--muted); font-weight: 400; }
+    .font-character-actions { display: flex; align-items: stretch; gap: 7px; }
+    .font-character-actions input { min-width: 0; }
+    .character-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
+    .character-chip { display: flex; align-items: center; gap: 8px; min-width: 36px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-selected); cursor: pointer; }
+    .character-chip span { font-size: 1.2rem; }
+    .character-chip small { color: var(--muted); font: .8rem sans-serif; }
+    .font-character-error { margin: 7px 0; font-size: .79rem; color: #ff899b; }
+    .glyph-browser { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+    .glyph-browser-header { display: flex; align-items: center; gap: 8px; }
+    .glyph-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 6px; margin-top: 9px; max-height: 280px; overflow-y: auto; }
+    .glyph-button { min-height: 65px; padding: 7px 3px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
+    .glyph-button:hover { border-color: var(--accent); }
+    .glyph-button[aria-pressed="true"] { border-color: var(--accent); background: #e9456022; }
+    .glyph-button span { display: block; font-size: 1.5rem; line-height: 1.4; }
+    .glyph-button small { color: var(--muted); font: .63rem sans-serif; }
+    .glyph-navigation { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+    .glyph-status { color: var(--muted); font-size: .74rem; }
+    [hidden] { display: none !important; }
+    @media (max-width: 520px) { .font-card { padding: 11px; } .font-character-actions { flex-wrap: wrap; } .font-character-actions input { flex-basis: 100%; } }
   </style>
 </head>
 
@@ -595,6 +638,24 @@
       </div>
 
       <div id="ocrEngine"></div>
+    </section>
+
+    <section class="api-section" aria-labelledby="fontsTitle">
+      <div class="section-title" id="fontsTitle">Fonts</div>
+      <div class="section-description">
+        Optionally choose up to three symbol fallback fonts from your loaded fonts.
+        They fill characters missing from the text font, in the order shown.
+        You can also assign up to 25 characters to each fallback to always use that font,
+        even when the text font contains those characters. Each character can belong to only one font.
+        Selected fallbacks leave the text font picker. Their sizes are calibrated automatically
+        for each text font in both the preview and exported pages.
+        Leave all three empty to use only the built-in NotoSansSymbols2 fallback.
+      </div>
+      <div id="symbolFallbackFonts"></div>
+      <div id="fontFacesStatus" class="font-fallback-note" role="status"></div>
+      <p class="font-fallback-note">NotoSansSymbols2 always stays last. Keep at least one font for text.
+        Your additional fonts stay in your fonts folder and are not bundled with Fox Reader.</p>
+      <button class="save-tokens" id="saveFontsBtn" type="button" onclick="saveFonts()" disabled>Save Fonts</button>
     </section>
 
     <section class="api-section">
@@ -665,6 +726,462 @@
     };
 
     let saving = false;
+    let fontSettings = null;
+    let fontSelection = [];
+    let savingFonts = false;
+    let fontCharacters = {};
+    let settingsFontFaces = new Map();
+    let settingsFontFamilies = new Map();
+    let fontFacesPromise = null;
+    const fontErrors = new Map();
+    const fontDrafts = new Map();
+    const glyphBrowsers = new Map();
+    const glyphControllers = new Map();
+    const glyphTimers = new Map();
+    const glyphPageCache = new Map();
+
+    function renderFonts(data) {
+      fontSettings = data.fonts || null;
+      fontSelection = [...(fontSettings?.symbol_fallbacks || [])];
+      fontCharacters = { ...(fontSettings?.symbol_characters || {}) };
+      fontErrors.clear();
+      fontDrafts.clear();
+      renderFontControls();
+      if (fontSettings) void ensureSettingsFontFaces();
+    }
+
+    function fontLabel(filename, title) {
+      return `<span class="font-display" data-font-face="${esc(filename)}">${esc(title)}</span>
+              <span class="font-file">${esc(filename)}</span>`;
+    }
+
+    function characterEditor(filename, index) {
+      if (!filename) return "";
+      const chars = Array.from(fontCharacters[filename] || "");
+      const loaded = settingsFontFaces.has(filename);
+      const browser = glyphBrowsers.get(filename);
+      return `<div class="font-character-editor" data-font-editor="${esc(filename)}">
+        <label class="font-character-label" for="font-characters-${index}">Always use this font for
+          <span class="character-count" aria-live="polite">${chars.length} / 25 characters</span></label>
+        <div class="character-chips">${chars.map(ch => `<button class="character-chip" type="button"
+          data-font-action="remove-character" data-filename="${esc(filename)}" data-character="${esc(ch)}"
+          title="Remove U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}"
+          aria-label="Remove character U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}" ${savingFonts ? "disabled" : ""}>
+          <span data-font-face="${esc(filename)}">${esc(ch)}</span><small aria-hidden="true">×</small></button>`).join("")}</div>
+        <div class="font-character-actions">
+          <input class="token-input" id="font-characters-${index}" data-font-paste="${esc(filename)}"
+            data-font-face="${esc(filename)}" aria-label="Characters for fallback ${index + 1}" maxlength="256"
+            value="${esc(fontDrafts.get(filename) || '')}"
+            placeholder="Paste characters" autocomplete="off" spellcheck="false" ${savingFonts || !loaded ? "disabled" : ""}>
+          <button class="token-toggle" type="button" data-font-action="add-characters" data-filename="${esc(filename)}" ${savingFonts || !loaded ? "disabled" : ""}>Add</button>
+          <button class="token-toggle" type="button" data-font-action="browse-glyphs" data-filename="${esc(filename)}"
+            aria-expanded="${!!browser?.open}" ${savingFonts || !loaded ? "disabled" : ""}>Browse glyphs</button>
+        </div>
+        <div class="font-character-error" role="alert" ${fontErrors.has(filename) ? "" : "hidden"}>${esc(fontErrors.get(filename) || "")}</div>
+        <div class="glyph-browser" data-glyph-browser="${esc(filename)}" ${browser?.open ? "" : "hidden"}>
+          <div class="glyph-browser-header"><input class="token-input" type="search"
+            data-glyph-search="${esc(filename)}" aria-label="Search glyphs for fallback ${index + 1}"
+            placeholder="Character, Unicode code or name (e.g. heart)" value="${esc(browser?.query || "")}" maxlength="80" ${savingFonts ? "disabled" : ""}></div>
+          <div class="glyph-results" aria-label="Supported glyphs"></div>
+          <div class="glyph-navigation"><button class="token-toggle" type="button" data-font-action="previous-glyphs" data-filename="${esc(filename)}">Previous</button>
+            <span class="glyph-status" role="status"></span>
+            <button class="token-toggle" type="button" data-font-action="next-glyphs" data-filename="${esc(filename)}">Next</button></div>
+        </div>
+      </div>`;
+    }
+
+    function renderFontControls() {
+      const container = document.getElementById("symbolFallbackFonts");
+      const button = document.getElementById("saveFontsBtn");
+      if (!fontSettings) {
+        container.textContent = "Font settings are unavailable.";
+        button.disabled = true;
+        return;
+      }
+      const focus = captureFontFocus(container);
+      const available = fontSettings.available || [];
+      container.innerHTML = [0, 1, 2].map(index => {
+        const current = fontSelection[index] || "";
+        const chosen = available.find(font => font.font_filename === current);
+        const options = available.filter(font => font.font_filename === current || !fontSelection.includes(font.font_filename))
+          .map(font => `<button class="font-option" type="button" role="option"
+            data-font-action="choose-font" data-index="${index}" data-filename="${esc(font.font_filename)}"
+            aria-selected="${font.font_filename === current}" ${font.calibrated === false ? "disabled" : ""}>
+            ${fontLabel(font.font_filename, font.font_name)}</button>`).join("");
+        return `<div class="font-card">
+          <div class="font-card-heading"><span class="font-rank">${index + 1}. ${["First", "Second", "Third"][index]} fallback · optional</span>
+            <div class="font-actions">
+              <button class="token-toggle" type="button" aria-label="Move fallback ${index + 1} up" onclick="moveFont(${index}, -1)" ${savingFonts || !current || index === 0 ? "disabled" : ""}>↑</button>
+              <button class="token-toggle" type="button" aria-label="Move fallback ${index + 1} down" onclick="moveFont(${index}, 1)" ${savingFonts || !current || index >= fontSelection.length - 1 ? "disabled" : ""}>↓</button>
+              <button class="token-toggle" type="button" aria-label="Remove fallback ${index + 1}" onclick="chooseFont(${index}, '')" ${savingFonts || !current ? "disabled" : ""}>Remove</button>
+            </div>
+          </div>
+          <div class="font-picker" data-font-index="${index}">
+            <button class="font-picker-trigger" type="button" id="font-trigger-${index}" data-font-action="open-fonts" data-filename="${esc(current)}"
+              aria-label="Symbol fallback ${index + 1}" aria-haspopup="listbox" aria-expanded="false" aria-controls="font-options-${index}" ${savingFonts ? "disabled" : ""}>
+              <span class="font-picker-value">${current ? fontLabel(current, chosen?.font_name || `${current} (unavailable)`) : '<span class="font-display">Choose a font</span><span class="font-file">None selected</span>'}</span><span class="font-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="font-picker-panel" hidden>
+              <input class="token-input font-search" type="search" aria-label="Search fonts for fallback ${index + 1}" placeholder="Search fonts…" autocomplete="off">
+              <div class="font-options" id="font-options-${index}" role="listbox" aria-label="Fonts for fallback ${index + 1}">
+                <button class="font-option" type="button" role="option" data-font-action="choose-font" data-index="${index}" data-filename="" aria-selected="${!current}">None</button>${options}
+              </div><p class="font-picker-empty" hidden>No matching fonts.</p>
+            </div>
+          </div>${characterEditor(current, index)}
+        </div>`;
+      }).join("") + `<div class="font-card"><div class="font-rank">4. Final fallback · always last</div>
+        ${fontLabel(fontSettings.final_fallback || "NotoSansSymbols2-Regular.otf", "NotoSansSymbols2")}
+        ${characterEditor(fontSettings.final_fallback || "NotoSansSymbols2-Regular.otf", 3)}</div>`;
+      const limited = available.filter(font => fontSelection.includes(font.font_filename) && font.limited_symbol_mapping);
+      for (const font of limited) {
+        const note = document.createElement("p");
+        note.className = "font-fallback-note";
+        note.textContent = `${font.font_name} has limited Unicode symbol mappings. Assign its letter-mapped artwork above to use it for those letters.`;
+        container.appendChild(note);
+      }
+      const inactive = fontSelection.filter(name => (fontSettings.symbol_fallbacks || []).includes(name)
+        && !(fontSettings.active || []).includes(name));
+      if (inactive.length) {
+        const note = document.createElement("p");
+        note.className = "font-fallback-note";
+        note.textContent = `Inactive saved fonts: ${inactive.join(", ")}. Unavailable fonts are skipped; one font is kept for text.`;
+        container.appendChild(note);
+      }
+      button.disabled = savingFonts;
+      applySettingsFontFaces(container);
+      for (const name of glyphBrowsers.keys()) paintGlyphBrowser(name);
+      restoreFontFocus(container, focus);
+    }
+
+    function captureFontFocus(container) {
+      const active = document.activeElement;
+      if (!active || !container.contains(active)) return null;
+      const filename = active.dataset.fontPaste || active.dataset.glyphSearch || active.dataset.filename;
+      if (!filename) return null;
+      return {
+        filename,
+        kind: active.dataset.fontPaste ? "paste" : active.dataset.glyphSearch ? "search" : "button",
+        action: active.dataset.fontAction,
+        character: active.dataset.character,
+        start: active.selectionStart,
+        end: active.selectionEnd,
+        chipIndex: active.classList.contains("character-chip")
+          ? Array.from(active.parentElement.children).indexOf(active) : -1,
+      };
+    }
+
+    function restoreFontFocus(container, focus) {
+      if (!focus) return;
+      const candidates = Array.from(container.querySelectorAll("[data-font-paste], [data-glyph-search], [data-font-action]"));
+      let target = candidates.find(element => focus.kind === "paste" ? element.dataset.fontPaste === focus.filename
+        : focus.kind === "search" ? element.dataset.glyphSearch === focus.filename
+        : element.dataset.filename === focus.filename && element.dataset.fontAction === focus.action
+          && element.dataset.character === focus.character);
+      if (!target && focus.action === "remove-character") {
+        const chips = candidates.filter(element => element.dataset.filename === focus.filename
+          && element.dataset.fontAction === "remove-character");
+        target = chips[Math.min(focus.chipIndex, chips.length - 1)]
+          || candidates.find(element => element.dataset.fontPaste === focus.filename);
+      }
+      if (!target || target.disabled || target.closest("[hidden]")) return;
+      target.focus();
+      if ((focus.kind === "paste" || focus.kind === "search") && focus.start !== null) {
+        target.setSelectionRange(focus.start, focus.end);
+      }
+    }
+
+    function chooseFont(index, filename) {
+      if (savingFonts) return;
+      const previous = fontSelection[index];
+      fontSelection[index] = filename;
+      fontSelection = fontSelection.filter(Boolean);
+      if (previous && !fontSelection.includes(previous)) {
+        delete fontCharacters[previous];
+        fontErrors.delete(previous);
+        fontDrafts.delete(previous);
+        glyphControllers.get(previous)?.abort();
+        glyphBrowsers.delete(previous);
+      }
+      renderFontControls();
+      document.getElementById(`font-trigger-${Math.min(index, 2)}`)?.focus();
+    }
+
+    function moveFont(index, offset) {
+      if (savingFonts) return;
+      const target = index + offset;
+      if (target < 0 || target >= fontSelection.length) return;
+      [fontSelection[index], fontSelection[target]] = [fontSelection[target], fontSelection[index]];
+      renderFontControls();
+    }
+
+    async function saveFonts() {
+      if (savingFonts || !fontSettings) return;
+      for (const input of document.querySelectorAll("[data-font-paste]")) {
+        if (input.value && !addCharacters(input.dataset.fontPaste, input.value, false)) { renderFontControls(); return; }
+      }
+      savingFonts = true;
+      renderFontControls();
+      try {
+        const response = await fetch("/api/settings/fonts", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol_fallbacks: fontSelection, symbol_characters: fontCharacters })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Failed to save fonts.");
+        renderFonts(data);
+        try { localStorage.setItem("foxreader:font-settings", String(Date.now())); } catch {}
+        show("Fonts saved. Preview and export now use this fallback order.", false);
+      } catch (error) {
+        show(error.message, true);
+      } finally {
+        savingFonts = false;
+        renderFontControls();
+      }
+    }
+
+    function applySettingsFontFaces(root) {
+      for (const element of root.querySelectorAll("[data-font-face]")) {
+        const family = settingsFontFamilies.get(element.dataset.fontFace);
+        if (family) element.style.fontFamily = `'${family}', sans-serif`;
+      }
+    }
+
+    function ensureSettingsFontFaces() {
+      if (fontFacesPromise) return fontFacesPromise;
+      fontFacesPromise = (async () => {
+        const response = await fetch("/api/fonts/available", { cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load font previews.");
+        const fonts = await response.json();
+        if (!Array.isArray(fonts)) throw new Error("Invalid font preview response.");
+        let styles = "";
+        fonts.forEach((font, index) => {
+          if (typeof font.font_filename !== "string" || !Array.isArray(font.coverage)
+              || !/^data:font\/(ttf|otf);base64,[A-Za-z0-9+/=]+$/.test(font.font_data_uri || "")
+              || !["truetype", "opentype"].includes(font.font_format)) return;
+          const family = `fox-settings-font-${index}`;
+          settingsFontFaces.set(font.font_filename, font);
+          settingsFontFamilies.set(font.font_filename, family);
+          styles += `@font-face{font-family:'${family}';src:url('${font.font_data_uri}') format('${font.font_format}');font-display:swap;}`;
+        });
+        let sheet = document.getElementById("settingsFontFaces");
+        if (!sheet) { sheet = document.createElement("style"); sheet.id = "settingsFontFaces"; document.head.appendChild(sheet); }
+        sheet.textContent = styles;
+        document.getElementById("fontFacesStatus").textContent = "Choose glyphs or paste characters. Spaces are ignored; each Unicode character counts once.";
+        renderFontControls();
+        if (document.fonts?.load) {
+          await Promise.allSettled(Array.from(settingsFontFaces, ([filename, font]) => {
+            const cp = font.coverage.find(value => Number.isInteger(value) && value > 32 && value <= 0x10ffff);
+            return document.fonts.load(`24px '${settingsFontFamilies.get(filename)}'`, cp === undefined ? "A" : String.fromCodePoint(cp));
+          }));
+        }
+      })().catch(error => {
+        document.getElementById("fontFacesStatus").textContent = error.message;
+        fontFacesPromise = null;
+      });
+      return fontFacesPromise;
+    }
+
+    function fontContains(filename, ch) {
+      const ranges = settingsFontFaces.get(filename)?.coverage || [];
+      const cp = ch.codePointAt(0);
+      let low = 0, high = ranges.length / 2 - 1;
+      while (low <= high) {
+        const mid = (low + high) >>> 1;
+        if (cp < ranges[mid * 2]) high = mid - 1;
+        else if (cp > ranges[mid * 2 + 1]) low = mid + 1;
+        else return true;
+      }
+      return false;
+    }
+
+    function characterOwners() {
+      const owners = new Map();
+      for (const [filename, characters] of Object.entries(fontCharacters)) {
+        for (const ch of characters) owners.set(ch, filename);
+      }
+      return owners;
+    }
+
+    function characterError(filename, message) {
+      fontErrors.set(filename, message);
+      const editor = Array.from(document.querySelectorAll("[data-font-editor]")).find(element => element.dataset.fontEditor === filename);
+      if (editor) {
+        const alert = editor.querySelector(".font-character-error");
+        alert.textContent = message;
+        alert.hidden = !message;
+      }
+    }
+
+    function addCharacters(filename, text, repaint = true, clearDraft = true) {
+      if (savingFonts) return false;
+      const incoming = Array.from(text).filter(ch => !/\s/u.test(ch));
+      const characters = Array.from(new Set([...(fontCharacters[filename] || ""), ...incoming]));
+      const owners = characterOwners();
+      let error = "";
+      if (characters.length > 25) error = "Assign at most 25 characters to this font.";
+      else for (const ch of characters) {
+        const code = `U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+        if (/\p{Cc}|\p{Cf}|\p{Cs}|\p{Cn}/u.test(ch)) { error = `${code} is not an assignable character.`; break; }
+        if (!fontContains(filename, ch)) { error = `This font has no usable glyph for ${code}.`; break; }
+        if (owners.has(ch) && owners.get(ch) !== filename) { error = `${code} is already assigned to ${owners.get(ch)}.`; break; }
+      }
+      if (error) { characterError(filename, error); return false; }
+      fontErrors.delete(filename);
+      if (clearDraft) fontDrafts.delete(filename);
+      if (characters.length) fontCharacters[filename] = characters.join("");
+      else delete fontCharacters[filename];
+      if (repaint) renderFontControls();
+      return true;
+    }
+
+    function paintGlyphBrowser(filename) {
+      const state = glyphBrowsers.get(filename);
+      const panel = Array.from(document.querySelectorAll("[data-glyph-browser]")).find(element => element.dataset.glyphBrowser === filename);
+      if (!state || !panel) return;
+      const owners = characterOwners();
+      const selected = new Set(fontCharacters[filename] || "");
+      panel.querySelector(".glyph-results").innerHTML = (state.result?.glyphs || []).map(glyph => {
+        const otherOwner = owners.get(glyph.character);
+        const blocked = otherOwner && otherOwner !== filename;
+        const full = selected.size >= 25 && !selected.has(glyph.character);
+        return `<button class="glyph-button" type="button" data-font-action="choose-glyph" data-filename="${esc(filename)}"
+          data-character="${esc(glyph.character)}" aria-pressed="${selected.has(glyph.character)}"
+          title="${esc(glyph.unicode + ' · ' + glyph.name + (blocked ? ' · Assigned to ' + otherOwner : ''))}"
+          aria-label="${esc(glyph.unicode + ' ' + glyph.name)}" ${savingFonts || blocked || full ? "disabled" : ""}>
+          <span data-font-face="${esc(filename)}">${esc(glyph.character)}</span><small>${esc(glyph.unicode)}</small></button>`;
+      }).join("");
+      const total = state.result?.total || 0;
+      panel.querySelector(".glyph-status").textContent = state.loading ? "Loading glyphs…" : state.error ||
+        (total ? `${state.offset + 1}–${Math.min(state.offset + 96, total)} of ${total}` : "No matching glyphs.");
+      panel.querySelector('[data-font-action="previous-glyphs"]').disabled = savingFonts || state.loading || state.offset === 0;
+      panel.querySelector('[data-font-action="next-glyphs"]').disabled = savingFonts || state.loading || state.offset + 96 >= total;
+      applySettingsFontFaces(panel);
+    }
+
+    async function loadGlyphs(filename, query = "", offset = 0) {
+      glyphControllers.get(filename)?.abort();
+      const controller = new AbortController();
+      glyphControllers.set(filename, controller);
+      const state = { open: true, query, offset, loading: true, result: null, error: "" };
+      glyphBrowsers.set(filename, state);
+      paintGlyphBrowser(filename);
+      const key = JSON.stringify([filename, query, offset]);
+      try {
+        let result = glyphPageCache.get(key);
+        if (!result) {
+          const params = new URLSearchParams({ filename, query, offset: String(offset), limit: "96" });
+          const response = await fetch(`/api/fonts/glyphs?${params}`, { signal: controller.signal });
+          result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Could not load glyphs.");
+          if (glyphPageCache.size >= 32) glyphPageCache.delete(glyphPageCache.keys().next().value);
+          glyphPageCache.set(key, result);
+        }
+        if (glyphBrowsers.get(filename) !== state) return;
+        state.result = result;
+      } catch (error) {
+        if (error.name !== "AbortError") state.error = error.message;
+      } finally {
+        if (glyphBrowsers.get(filename) === state) { state.loading = false; paintGlyphBrowser(filename); }
+      }
+    }
+
+    function closeFontMenus(focus = false) {
+      for (const picker of document.querySelectorAll(".font-picker")) {
+        const trigger = picker.querySelector(".font-picker-trigger");
+        if (trigger.getAttribute("aria-expanded") === "true" && focus) trigger.focus();
+        trigger.setAttribute("aria-expanded", "false");
+        picker.querySelector(".font-picker-panel").hidden = true;
+      }
+    }
+
+    const fontControls = document.getElementById("symbolFallbackFonts");
+    fontControls.addEventListener("click", event => {
+      const button = event.target.closest("[data-font-action]");
+      if (!button || button.disabled || savingFonts) return;
+      const action = button.dataset.fontAction, filename = button.dataset.filename;
+      if (action === "open-fonts") {
+        const picker = button.closest(".font-picker");
+        const opening = button.getAttribute("aria-expanded") !== "true";
+        closeFontMenus();
+        button.setAttribute("aria-expanded", String(opening));
+        picker.querySelector(".font-picker-panel").hidden = !opening;
+        if (opening) picker.querySelector(".font-search").focus();
+      } else if (action === "choose-font") chooseFont(Number(button.dataset.index), filename);
+      else if (action === "add-characters") {
+        const input = button.closest(".font-character-editor").querySelector("[data-font-paste]");
+        addCharacters(filename, input.value);
+      } else if (action === "remove-character") {
+        fontCharacters[filename] = Array.from(fontCharacters[filename] || "").filter(ch => ch !== button.dataset.character).join("");
+        if (!fontCharacters[filename]) delete fontCharacters[filename];
+        fontErrors.delete(filename);
+        renderFontControls();
+      } else if (action === "browse-glyphs") {
+        const state = glyphBrowsers.get(filename);
+        if (state?.open) { state.open = false; glyphControllers.get(filename)?.abort(); renderFontControls(); }
+        else { glyphBrowsers.set(filename, { ...(state || {}), open: true }); renderFontControls(); void loadGlyphs(filename, state?.query || "", state?.offset || 0); }
+      } else if (action === "choose-glyph") {
+        const ch = button.dataset.character;
+        const chars = new Set(fontCharacters[filename] || "");
+        if (chars.has(ch)) {
+          chars.delete(ch);
+          if (chars.size) fontCharacters[filename] = Array.from(chars).join(""); else delete fontCharacters[filename];
+          fontErrors.delete(filename);
+          renderFontControls();
+        } else addCharacters(filename, ch, true, false);
+      } else if (action === "previous-glyphs" || action === "next-glyphs") {
+        const state = glyphBrowsers.get(filename);
+        void loadGlyphs(filename, state.query, Math.max(0, state.offset + (action === "next-glyphs" ? 96 : -96)));
+      }
+    });
+    fontControls.addEventListener("input", event => {
+      const input = event.target;
+      if (input.matches(".font-search")) {
+        const key = input.value.trim().toLowerCase();
+        const picker = input.closest(".font-picker");
+        let matches = 0;
+        for (const option of picker.querySelectorAll(".font-option")) {
+          option.hidden = !option.textContent.toLowerCase().includes(key);
+          if (!option.hidden) matches += 1;
+        }
+        picker.querySelector(".font-picker-empty").hidden = matches > 0;
+      } else if (input.dataset.fontPaste) {
+        fontDrafts.set(input.dataset.fontPaste, input.value);
+        fontErrors.delete(input.dataset.fontPaste);
+        const alert = input.closest(".font-character-editor").querySelector(".font-character-error");
+        alert.hidden = true;
+      } else if (input.dataset.glyphSearch) {
+        const filename = input.dataset.glyphSearch;
+        const query = input.value;
+        const state = glyphBrowsers.get(filename);
+        glyphBrowsers.set(filename, { ...state, query, offset: 0, result: null, loading: true });
+        paintGlyphBrowser(filename);
+        clearTimeout(glyphTimers.get(filename));
+        glyphControllers.get(filename)?.abort();
+        glyphTimers.set(filename, setTimeout(() => {
+          if (glyphBrowsers.get(filename)?.open && glyphBrowsers.get(filename).query === query) void loadGlyphs(filename, query, 0);
+        }, 180));
+      }
+    });
+    fontControls.addEventListener("keydown", event => {
+      const target = event.target;
+      if (target.dataset.fontPaste && event.key === "Enter") {
+        event.preventDefault(); addCharacters(target.dataset.fontPaste, target.value); return;
+      }
+      const picker = target.closest(".font-picker");
+      if (!picker) return;
+      if (event.key === "Escape") { event.preventDefault(); closeFontMenus(true); return; }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      if (target.matches(".font-picker-trigger")) { event.preventDefault(); target.click(); return; }
+      if (target.matches(".font-search") && event.key !== "ArrowDown") return;
+      const options = Array.from(picker.querySelectorAll(".font-option")).filter(option => !option.hidden && !option.disabled);
+      if (!options.length) return;
+      event.preventDefault();
+      const current = options.indexOf(target);
+      const index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 :
+        event.key === "ArrowUp" ? Math.max(0, current - 1) : Math.min(options.length - 1, current + 1);
+      options[index].focus();
+    });
+    document.addEventListener("click", event => { if (!event.target.closest(".font-picker")) closeFontMenus(); });
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -1161,6 +1678,7 @@
         }
 
         setTokenInputs(data);
+        renderFonts(data);
         renderDevices(data);
         renderOcrEngine(data);
         render(data);

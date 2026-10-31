@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
     app.state.devices = device_state
     app.state.session_id = str(uuid4())
     app.state.session = SessionService()
-    app.state.fonts = FontService()
+    app.state.fonts = FontService(settings_mgr)
 
     # Long jobs (typesetting, text clean) run in worker threads and answer with
     # an image, so they narrate through here and the UI polls /api/progress.

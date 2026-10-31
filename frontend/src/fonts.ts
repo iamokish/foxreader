@@ -3,8 +3,36 @@ import type { FontData } from "./state";
 
 export async function loadFontsAndBuildMenu(): Promise<void> {
     try {
-        const response = await fetch("/api/fonts");
+        const [response, fallbacks] = await Promise.all([
+            fetch("/api/fonts", { cache: "no-store" }),
+            fetch("/api/fonts/symbol-fallbacks", { cache: "no-store" }).catch(() => null),
+        ]);
+        if (!response.ok) throw new Error("Failed to load fonts");
         state.currentFontsData = (await response.json()) as FontData[];
+
+        // The typesetting-only symbol fallback. It is never a selectable face;
+        // it is what a character the primary face lacks resolves to, at the
+        // primary's `symbol_scale`, the same rule the render applies
+        // (`typeset._needs_symbol`). Without registering it the preview
+        // substitutes an engine-specific system font -- a different shape,
+        // unhinted advance and outline from the render's, i.e. the exact
+        // preview/render mismatch class the rest of the text engine covers.
+        // An absent face (`null`) keeps that historical behaviour.
+        state.currentSymbolFont = null;
+        state.currentSymbolFonts = [];
+        try {
+            if (fallbacks?.ok) {
+                const fonts: unknown = await fallbacks.json();
+                if (Array.isArray(fonts)) state.currentSymbolFonts = fonts as FontData[];
+                state.currentSymbolFont = state.currentSymbolFonts.at(-1) ?? null;
+            } else {
+                const sym = await fetch("/api/fonts/symbol-fallback");
+                state.currentSymbolFont = sym.ok ? ((await sym.json()) as FontData | null) : null;
+                if (state.currentSymbolFont) state.currentSymbolFonts = [state.currentSymbolFont];
+            }
+        } catch {
+            state.currentSymbolFont = null;
+        }
 
         const styleTag = document.getElementById("dynamicFontStyles");
         const container = document.getElementById("fontOptionsContainer");
@@ -12,6 +40,13 @@ export async function loadFontsAndBuildMenu(): Promise<void> {
 
         let cssRules = "";
         let htmlOptions = "";
+
+        // The hidden fallback's @font-face leads the sheet, so the main loop's
+        // `innerHTML` below preserves it without touching the loop itself.
+        for (const sym of state.currentSymbolFonts) {
+            const symFamily = sym.font_name.replace(/\s+/g, "_");
+            cssRules += `@font-face{font-family:'${symFamily}';src:url('${sym.font_data_uri}') format('${sym.font_format}');font-display:swap;}`;
+        }
 
         state.currentFontsData.forEach((font) => {
             const cssFontFamily = font.font_name.replace(/\s+/g, "_");
@@ -57,10 +92,38 @@ export async function loadFontsAndBuildMenu(): Promise<void> {
         `;
         container.innerHTML = htmlOptions;
 
+        // The measurer poisons itself easily: the first measurement through a
+        // family whose data-URI face is not loaded yet (`font-display: swap`)
+        // returns the fallback's widths, and the text caches keep them for the
+        // session. `document.fonts.ready` cannot help -- at boot it resolves
+        // before a data-URI face has ever been referenced, so there is no load
+        // to wait for. So load every face right now (they are inline, the menu
+        // rows wanted them anyway) and tell whoever caches measurements to
+        // drop them once every load has settled, whatever it resolved to.
+        if (state.currentFontsData.length && document.fonts?.load) {
+            // And the hidden face, whose probe deliberately names covered
+            // symbols: `document.fonts.load` only settles a face that has
+            // glyphs to draw, so a latin-only probe resolves without loading
+            // anything on engines that check coverage first.
+            const faces = [...state.currentFontsData, ...state.currentSymbolFonts];
+            void Promise.allSettled(
+                faces.map((font) => {
+                    const family = font.font_name.replace(/\s+/g, "_");
+                    const cp = font.coverage?.find((value) => value > 32 && value <= 0x10ffff);
+                    const probe = cp === undefined ? "MTghx" : String.fromCodePoint(cp);
+                    return document.fonts.load(`100px '${family}'`, probe);
+                }),
+            ).then(() => {
+                window.dispatchEvent(new CustomEvent("foxreader:fonts-loaded"));
+            });
+        }
+
         if (state.currentFontsData.length > 0) {
             const first = state.currentFontsData[0];
             selectFontOption(first.font_filename, first.font_name, first.font_name.replace(/\s+/g, "_"));
         }
+        // Consumers drop stale coverage, calibration, and measurement caches.
+        window.dispatchEvent(new CustomEvent("foxreader:fonts-loaded"));
     } catch (error) {
         console.error("Error loading font configuration menu:", error);
     }
@@ -179,6 +242,12 @@ export function getDefaultFontName(): string {
     return "sans-serif";
 }
 
+/** A saved entry may reference a face that the user has since made a fallback. */
+export function getTextFontName(filename: string, family: string): string {
+    return state.currentSymbolFonts.some((font) => font.font_filename === filename)
+        ? getDefaultFontName() : family;
+}
+
 export function getCurrentRawFontName(): string {
     const el = document.getElementById("selectedFontLabel");
     return el ? (el.textContent?.trim() ?? "") : "";
@@ -195,5 +264,8 @@ export function initFontListeners(): void {
 
     window.addEventListener("click", (e) => {
         if (!(e.target as HTMLElement).closest(".custom-font-dropdown")) closeFontDropdown();
+    });
+    window.addEventListener("storage", (event) => {
+        if (event.key === "foxreader:font-settings") void loadFontsAndBuildMenu();
     });
 }
