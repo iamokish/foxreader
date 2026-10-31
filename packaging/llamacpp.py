@@ -482,7 +482,20 @@ def cuda_architectures(version: tuple[int, int]) -> list[str]:
         if version >= (11, 1):
             entries.append(("86", "real"))
     if version >= (11, 8):
-        entries += [("89", "real"), ("90", "virtual")]
+        # Ada. Hopper (90) is deliberately left out on 11.x: common.cuh
+        # defines GGML_CUDA_USE_PDL for any non-MSVC compiler on CUDART >=
+        # 11.8, but the device-side declarations it calls
+        # (cudaGridDependencySynchronize,
+        # cudaTriggerProgrammaticLaunchCompletion) only exist in CTK >= 12.3,
+        # so compiling any 90 arch with nvcc 11.8 + gcc fails the whole build
+        # (see cu118-gguf-linux). MSVC builds never hit this: the same header
+        # leaves PDL off for MSVC below 12.3, which is why cu118-gguf-windows
+        # passed with the identical arch list. Upstream's own 11.8 wheels cover
+        # 6.0-8.9 for the same reason. Hopper cards still run via the 89 PTX
+        # fallback; 90-virtual returns with CUDA 12, whose headers have the APIs.
+        entries.append(("89", "real"))
+    if version >= (12, 0):
+        entries.append(("90", "virtual"))
     if version >= (12, 8):
         # Blackwell. Family-specific ("a") targets are not forward compatible, so
         # these have to be real -- PTX from 9.0 is what covers anything newer.

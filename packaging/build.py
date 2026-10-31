@@ -332,7 +332,7 @@ _DEVICE_EXTRA = re.compile(r"^(?:cpu|macos|cu\d+.*|rocm.*)$")
 
 #: The devices as they stood when this was written, used only if pyproject cannot
 #: be read for them. `--help` staying useful is worth more than being strict here.
-_DEVICE_FALLBACK = ("cpu", "macos", "cu118", "cu126", "cu129", "cu129_win", "cu130", "rocm71", "rocm72")
+_DEVICE_FALLBACK = ("cpu", "macos", "cu118", "cu126", "cu129", "cu129_win", "cu130", "cu132", "rocm71", "rocm72")
 
 
 def _device_choices() -> list[str]:

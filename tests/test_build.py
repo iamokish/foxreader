@@ -283,6 +283,7 @@ def _args(llama, device: str, **kwargs) -> dict[str, str]:
     ("cu126", "cuda", (12, 6), None),
     ("cu129_win", "cuda", (12, 9), None),
     ("cu130", "cuda", (13, 0), None),
+    ("cu132", "cuda", (13, 2), None),
     # A two-digit minor, which is the only shape a CUDA 12.10 could have.
     ("cu1210", "cuda", (12, 10), None),
     ("rocm71", "rocm", None, (7, 1)),
