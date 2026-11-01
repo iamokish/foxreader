@@ -133,10 +133,10 @@ are available from their PyPI sources / uv.lock URLs, not from bin/.
   cuda-bindings 12.9.7 / 13.3.1, cuda-pathfinder 1.8.1,
   cuda-toolkit 12.6.3 / 12.9.1 / 13.0.3.0;
   MIT — triton 3.3.1 / 3.7.1, triton-rocm 3.7.1 (Linux-only ROCm index),
-  uvloop 0.22.1.
+  uvloop 0.23.0.
 
 * OPTIONAL EXTRAS — in uv.lock, installed on demand, not via default sync:
-  MIT — llama-cpp-python 0.3.35 (gguf extra; installed separately via
+  MIT — llama-cpp-python 0.3.36 (gguf extra; installed separately via
   packaging/llamacpp.py with CMAKE_ARGS, never through uv sync);
   Apache-2.0 — nuitka 4.2.1 (bin-build extra; build compiler, its own code
   is not bundled into the output beyond compiled artifacts).

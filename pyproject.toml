@@ -19,11 +19,11 @@ dependencies = [
     # to asyncio/h11 without uvloop/httptools).
     "fastapi==0.141.1",
     "uvicorn==0.50.0",
-    "jinja2>=3.1.6",
-    "email-validator>=2.3.0",
-    "websockets>=17.2",
-    "python-multipart>=0.0.32",
-    "uvloop>=0.15.1; sys_platform != 'win32' and sys_platform != 'cygwin' and platform_python_implementation != 'PyPy'",
+    "jinja2==3.1.6",
+    "email-validator==2.3.0",
+    "websockets==17.2",
+    "python-multipart==0.0.32",
+    "uvloop==0.23.0; sys_platform != 'win32' and sys_platform != 'cygwin' and platform_python_implementation != 'PyPy'",
     "pillow==12.2.0",
     "fonttools==4.64.0",
     "natsort==8.4.0",
@@ -35,14 +35,6 @@ dependencies = [
     "psutil==7.2.2",
     "cryptography==50.0.1",
     "safetensors==0.8.0",
-    # The one OpenCV. Both distributions install into the same `cv2` package, so
-    # having both means whichever pip touched last owns the shared modules and the
-    # loser is left as empty namespace folders that import but export nothing.
-    # contrib is a superset of plain `opencv-python`, so it satisfies every
-    # consumer, and the override below stops the plain one being pulled in beside
-    # it. The exact pin is historical -- paddlex used to require this version and
-    # no longer figures in the tree at all -- but it is a known-good build against
-    # this numpy, so it stays until there is a reason to move it.
     "opencv-contrib-python==4.10.0.84"
 ]
 
@@ -57,7 +49,7 @@ bin-build = [
 ]
 # For GGUF Models
 gguf = [
-    "llama-cpp-python==0.3.35",
+    "llama-cpp-python==0.3.36",
 ]
 # CPU
 cpu = [
@@ -115,15 +107,15 @@ cu132 = [
 # and macOS. The CUDA extras need no equivalent: their `triton` is on PyPI.
 # ROCm 7.1
 rocm71 = [
-    "torch==2.13.0",
-    "torchvision==0.28.0",
-    "triton-rocm ; sys_platform == 'linux'",
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "triton-rocm==3.7.1 ; sys_platform == 'linux'",
 ]
 # ROCm 7.2
 rocm72 = [
-    "torch==2.13.0",
-    "torchvision==0.28.0",
-    "triton-rocm ; sys_platform == 'linux'",
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "triton-rocm==3.7.1 ; sys_platform == 'linux'",
 ]
 
 [project.scripts]
@@ -168,8 +160,11 @@ override-dependencies = [
     "opencv-python ; sys_platform == 'never'",
 ]
 environments = [
-    "sys_platform == 'linux'",
+    # Linux x86_64 only (Intel/AMD)
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # macOS Apple Silicon
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Windows x86_64 (Intel/AMD)
     "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 conflicts = [
