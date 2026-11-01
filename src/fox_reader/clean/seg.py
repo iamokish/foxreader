@@ -324,6 +324,11 @@ def unload(_locked: bool = False) -> None:
                     torch.cuda.empty_cache()
             except Exception:  # noqa: BLE001 - freeing memory is best-effort
                 pass
+            try:
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+            except Exception:  # noqa: BLE001 - absent on non-MPS torch builds
+                pass
 
     if _locked:
         _drop()

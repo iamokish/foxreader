@@ -114,15 +114,9 @@ class OCRModelUnavailable(RuntimeError):
 def torch_device(device: str | None) -> str:
     """A torch device string from whatever the device module handed over.
 
-    ``FOX_DEVICE.paddleocr`` is still spelled PaddleOCR's way (``gpu:0`` /
-    ``cpu``) because that slot fed Paddle for years. Translating here rather
-    than changing `fox_reader.device` keeps one concern in one place: the
-    saved settings, the settings page and the device probe all keep their
-    current meaning, and only the consumer moves.
-
-    (``device.py`` maps Apple GPUs to the CPU for this slot, on the grounds
-    that Paddle has no Metal backend. Pure torch does. Lifting that is a
-    settings-visible change, so it is left alone here.)
+    ``FOX_DEVICE.paddleocr`` retains PaddleOCR's ``gpu:N`` spelling for CUDA
+    because that slot fed Paddle for years. Translate that legacy spelling
+    at the consumer; Apple GPUs use ``mps``, which torch accepts directly.
     """
     text = str(device or "cpu").strip().lower() or "cpu"
     if text in {"gpu", "cuda"}:

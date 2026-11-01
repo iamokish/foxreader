@@ -59,11 +59,23 @@ def test_inherited_missing_card_falls_back_with_its_own_line(monkeypatch):
     assert resolution.selection["paddleocr_vl"] == "cuda:7"
 
 
-def test_metal_is_honoured_unlike_classic_paddleocr(monkeypatch):
+def test_metal_is_honoured_by_all_torch_and_llama_slots(monkeypatch):
     monkeypatch.setattr(device_mod, "probe", lambda refresh=False: _Hardware(mps=True))
     resolution = device_mod.resolve({})
+    for slot in device_mod.SLOTS:
+        assert resolution.resolved[slot] == "mps"
+        assert getattr(resolution.device, slot) == "mps"
+    assert resolution.fallbacks == []
+
+
+def test_metal_keeps_explicit_cpu_choices(monkeypatch):
+    monkeypatch.setattr(device_mod, "probe", lambda refresh=False: _Hardware(mps=True))
+    resolution = device_mod.resolve({"paddleocr": "cpu", "paddleocr_vl": "mps"})
     assert resolution.device.paddleocr == "cpu"
+    assert resolution.device.textseg == "cpu"  # inherited legacy preference
     assert resolution.device.paddleocr_vl == "mps"
+    assert resolution.device.bubble == "mps"
+    assert resolution.fallbacks == []
 
 
 def test_snapshot_carries_the_slot(monkeypatch):
@@ -154,3 +166,101 @@ def test_vl_engine_falls_back_to_classic_slot_without_one(monkeypatch):
     )
     eng = vl_mod.PaddleOCRVLEngine()
     assert eng.device == "cpu"
+
+
+@pytest.mark.parametrize("module_name", [
+    "gemma_e4b_q8_llamacpp", "gemma_e4b_q6_llamacpp", "vntl_llama3_8b_llamacpp",
+])
+def test_gguf_metal_offload_and_cpu_only_build_rejection(module_name):
+    import importlib
+    from types import SimpleNamespace
+
+    module = importlib.import_module(f"fox_reader.translate.machine_translation.{module_name}")
+    metal = SimpleNamespace(llama_supports_gpu_offload=lambda: True)
+    cpu = SimpleNamespace(llama_supports_gpu_offload=lambda: False)
+    # Metal handles its own GPU placement: never pass CUDA ordinals/split modes.
+    assert module.llama_device_kwargs("mps", metal) == {"n_gpu_layers": -1}
+    module._validate_requested_device("mps", metal)
+    with pytest.raises(RuntimeError, match="CPU-only"):
+        module._validate_requested_device("mps", cpu)
+    module._validate_requested_device("cpu", cpu)
+
+
+def test_vl_metal_offloads_both_model_and_projector(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import fox_reader.ocr_vl as vl
+
+    monkeypatch.setattr(vl, "resolve_vl_weights", lambda root=None: (
+        tmp_path / "model.gguf", tmp_path / "projector.gguf",
+    ))
+    engine = vl.PaddleOCRVLEngine(device="mps")
+    seen = {}
+    handler = object()
+
+    def vision_handler(llama_cpp, use_gpu=False):
+        seen["projector_gpu"] = use_gpu
+        return handler
+
+    def llama(**kwargs):
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(engine, "_vision_handler", vision_handler)
+    monkeypatch.setattr(vl, "supports_gpu_offload", lambda: True)
+    library = SimpleNamespace(Llama=llama)
+    engine._validate_device(library)
+    engine._build_llama(library)
+    assert seen["n_gpu_layers"] == -1
+    assert seen["projector_gpu"] is True
+    assert seen["chat_handler"] is handler
+    assert "main_gpu" not in seen
+    monkeypatch.setattr(vl, "supports_gpu_offload", lambda: False)
+    with pytest.raises(RuntimeError, match="CPU-only"):
+        engine._validate_device(library)
+
+
+@pytest.mark.parametrize(("platform_name", "configured", "expected"), [
+    ("darwin", None, "1"),
+    ("darwin", "0", "0"),
+    ("win32", None, None),
+    ("linux", None, None),
+])
+def test_mps_fallback_is_configured_before_submodule_imports(monkeypatch, platform_name, configured, expected):
+    import os
+    import runpy
+    import sys
+    from pathlib import Path
+
+    package_init = Path(device_mod.__file__).with_name("__init__.py")
+    monkeypatch.setattr(sys, "platform", platform_name)
+    if configured is None:
+        monkeypatch.delenv("PYTORCH_ENABLE_MPS_FALLBACK", raising=False)
+    else:
+        monkeypatch.setenv("PYTORCH_ENABLE_MPS_FALLBACK", configured)
+    runpy.run_path(str(package_init))
+    assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == expected
+
+
+def test_textseg_unload_releases_metal_cache_even_when_cuda_probe_fails(monkeypatch):
+    from types import SimpleNamespace
+
+    from fox_reader.clean import seg
+
+    released = []
+
+    def unavailable_cuda():
+        raise RuntimeError("no CUDA runtime")
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=unavailable_cuda),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        mps=SimpleNamespace(empty_cache=lambda: released.append(True)),
+    )
+    monkeypatch.setattr(device_mod, "torch_module", lambda: torch)
+    monkeypatch.setattr(seg, "_model", object())
+    monkeypatch.setattr(seg, "_model_device", "mps")
+    monkeypatch.setattr(seg, "_model_want", "mps")
+    seg.unload()
+    assert seg._model is seg._model_device is seg._model_want is None
+    assert released == [True]

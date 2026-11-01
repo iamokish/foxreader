@@ -281,6 +281,7 @@ def _args(llama, device: str, **kwargs) -> dict[str, str]:
     ("metal", "metal", None, None),
     ("cu118", "cuda", (11, 8), None),
     ("cu126", "cuda", (12, 6), None),
+    ("cu129", "cuda", (12, 9), None),
     ("cu129_win", "cuda", (12, 9), None),
     ("cu130", "cuda", (13, 0), None),
     ("cu132", "cuda", (13, 2), None),
@@ -294,6 +295,32 @@ def test_parse_device_reads_the_version_out_of_the_name(llama, device, kind, cud
     """No lookup table: a torch extra added to pyproject next year must just work."""
     target = llama.parse_device(device)
     assert (target.kind, target.cuda, target.rocm) == (kind, cuda, rocm)
+
+
+@pytest.mark.parametrize("system,platform_name,expected", [
+    ("Linux", "linux", {"torch": "==2.13.0", "torchvision": "==0.28.0"}),
+    ("Windows", "win32", {"torch": ">=2.7.1", "torchvision": ">=0.22.1"}),
+    ("Darwin", "darwin", {}),
+])
+def test_cuda129_selects_platform_requirements_and_cuda_index(system, platform_name, expected):
+    """The same extra must pick matching torch/vision from CUDA, never plain PyPI."""
+    import tomllib
+
+    from packaging.markers import Marker
+    from packaging.requirements import Requirement
+
+    project = tomllib.loads((suites.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    assert "cu129_win" not in extras
+    environment = {"sys_platform": platform_name, "platform_system": system}
+    requirements = [Requirement(value) for value in extras["cu129"]]
+    selected = [req for req in requirements if req.marker is None or req.marker.evaluate(environment)]
+    assert {req.name: str(req.specifier) for req in selected} == expected
+    assert len(selected) == len(expected)  # no overlapping pins on either OS
+    for package in ("torch", "torchvision"):
+        sources = [source for source in project["tool"]["uv"]["sources"][package]
+                   if source["extra"] == "cu129" and Marker(source["marker"]).evaluate(environment)]
+        assert [source["index"] for source in sources] == (["pytorch-cu129"] if expected else [])
 
 
 @pytest.mark.parametrize("device", ["", "cu", "gpu", "cuda12", "vulkan", "sycl", "rock"])
@@ -1073,6 +1100,25 @@ def test_the_archive_name_is_a_filename_on_every_platform(build_module):
     name = build_module.archive_stem("0.1.0rc1+local.1", "cu130", "cu130", "linux-x64")
     assert name == "fox-reader-v0.1.0rc1-local.1-cu130-gguf-linux-x64"
     assert not (set(name) & set('<>:"/\\|?*+ ')), f"{name!r} is not a filename on Windows"
+
+
+def test_build_and_ci_share_the_unified_cuda129_device(build_module, monkeypatch, tmp_path):
+    import yaml
+
+    choices = build_module._device_choices()
+    assert "cu129" in choices and "cu129_win" not in choices
+    workflow = yaml.safe_load((suites.REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8"))
+    matrix = workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
+    assert all(row["device"] in choices for row in matrix)
+    cuda129 = [row for row in matrix if row["name"].startswith("cu129-")]
+    assert {row["name"] for row in cuda129} == {
+        "cu129-gguf-linux", "cu129-no-gguf-linux", "cu129-gguf-windows", "cu129-no-gguf-windows",
+    }
+    assert all(row["device"] == "cu129" and row["cuda"] == "12.9.0" for row in cuda129)
+    # --help's fallback must agree even when pyproject cannot be read.
+    monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+    fallback = build_module._device_choices()
+    assert "cu129" in fallback and "cu129_win" not in fallback
 
 
 def test_a_read_only_venv_does_not_stop_a_clean(build_module, tmp_path):

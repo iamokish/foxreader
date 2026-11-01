@@ -39,7 +39,8 @@ What gets generated, by device:
              installed ROCm can compile. Builds on Linux, and on Windows with
              the HIP SDK -- but torch ships ROCm wheels for Linux only, so on
              Windows this is a `--gguf-device` and not a `--device`.
-  macos      Metal, embedded library, no BLAS (Accelerate is already there).
+  macos      Apple Silicon, M1 CPU baseline, runtime-compiled embedded Metal
+             shaders, and Apple's Accelerate framework.
 
 OpenBLAS goes into every one of those but macos, GPU devices included: their CPU
 backend is still there and still runs whatever the device has no kernel for.
@@ -167,7 +168,7 @@ class Target:
 
     #: "cpu", "cuda", "rocm" or "metal".
     kind: str
-    #: The name it came from, e.g. "cu129_win".
+    #: The name it came from, e.g. "cu129".
     device: str
     #: For CUDA, the version the extra asks for. The toolkit on the machine is
     #: found separately and gets the last word -- see `cuda_toolkit`.
@@ -1038,6 +1039,55 @@ def resolve_openblas(mode: str) -> OpenBlas | None:
 
 # ── The arguments ─────────────────────────────────────────────────────────────
 
+def _macos_policy():
+    """Load the shared Mac policy only for a Metal build."""
+    if str(PACKAGING_DIR) not in sys.path:
+        sys.path.insert(0, str(PACKAGING_DIR))
+    import macos
+
+    return macos
+
+
+def _metal_cmake_args() -> list[str]:
+    """One Apple Silicon artifact, independent of the builder's CPU generation.
+
+    M1 supports ARMv8.2 FP16 and dot product; later-only I8MM/BF16/SME/SVE
+    instructions must not leak in through host detection or compiler defaults.
+    Set the baseline for every translation unit as well as ggml's CPU kernels.
+    """
+    deployment = _macos_policy().DEPLOYMENT_TARGET
+    baseline = "armv8.2-a+fp16+dotprod"
+    return [
+        "-DGGML_NATIVE=OFF",
+        "-DLLAMA_BUILD_TESTS=OFF",
+        "-DLLAMA_BUILD_EXAMPLES=OFF",
+        "-DLLAMA_BUILD_TOOLS=OFF",
+        "-DLLAMA_BUILD_SERVER=OFF",
+        "-DLLAMA_CURL=OFF",
+        "-DGGML_OPENMP=OFF",
+        "-DCMAKE_OSX_ARCHITECTURES=arm64",
+        f"-DCMAKE_OSX_DEPLOYMENT_TARGET={deployment}",
+        f"-DGGML_CPU_ARM_ARCH={baseline}",
+        f"-DCMAKE_C_FLAGS=-march={baseline}",
+        f"-DCMAKE_CXX_FLAGS=-march={baseline}",
+        f"-DCMAKE_OBJC_FLAGS=-march={baseline}",
+        f"-DCMAKE_OBJCXX_FLAGS=-march={baseline}",
+        f"-DCMAKE_ASM_FLAGS=-march={baseline}",
+        "-DGGML_CPU_ALL_VARIANTS=OFF",
+        "-DGGML_ACCELERATE=ON",
+        "-DGGML_BLAS=OFF",
+        "-DGGML_METAL=ON",
+        # In the locked source this embeds shader *source*, not a host-compiled
+        # .metallib. Metal compiles it for the target GPU at runtime, selecting
+        # the supported language version and feature macros on that machine.
+        "-DGGML_METAL_EMBED_LIBRARY=ON",
+        "-DGGML_METAL_NDEBUG=ON",
+        "-DGGML_METAL_SHADER_DEBUG=OFF",
+        "-DCMAKE_INSTALL_RPATH=@loader_path",
+        "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+    ]
+
+
 def cmake_args(
     target: Target,
     *,
@@ -1056,6 +1106,9 @@ def cmake_args(
     ``toolkit`` is the CUDA version to gate architectures against -- the one
     actually installed, which may be older than the one the extra names.
     """
+    if target.kind == "metal":
+        return _metal_cmake_args()
+
     if cpu_baseline not in CPU_BASELINES:
         raise GgufError(
             f"unknown CPU baseline {cpu_baseline!r}. One of: {', '.join(CPU_BASELINES)}"
@@ -1133,14 +1186,6 @@ def cmake_args(
             f"-DGPU_TARGETS={joined}",
             f"-DAMDGPU_TARGETS={joined}",
             f"-DCMAKE_HIP_ARCHITECTURES={joined}",
-        ]
-
-    elif target.kind == "metal":
-        args += [
-            "-DGGML_METAL=ON",
-            # Without this the shaders are a separate .metallib file that has to
-            # sit next to the library, and nothing in the packaging copies it.
-            "-DGGML_METAL_EMBED_LIBRARY=ON",
         ]
 
     # Not gated on `target.kind`: a GPU backend never replaces ggml's CPU one, it
@@ -1946,6 +1991,29 @@ def _host_toolchain(
     return env, args, notes, libs
 
 
+def _prepare_metal(target: Target) -> Build:
+    macos = _macos_policy()
+    try:
+        environment = macos.preflight()
+    except macos.MacOSBuildError as exc:
+        raise GgufError(str(exc)) from exc
+    args = _metal_cmake_args()
+    # A stale CMake generator/compiler must not replace the Apple tools selected
+    # by preflight. scikit-build-core installs Ninja in its isolated environment.
+    environment["CMAKE_GENERATOR"] = "Ninja"
+    args += [f"-DCMAKE_C_COMPILER={environment['CC']}",
+             f"-DCMAKE_CXX_COMPILER={environment['CXX']}",
+             f"-DCMAKE_OSX_SYSROOT={environment['SDKROOT']}"]
+    version = locked_version()
+    return Build(
+        target=target, args=args, value=cmake_args_value(args),
+        spec=f"{DISTRIBUTION}=={version}" if version else DISTRIBUTION,
+        env=environment,
+        notes=[f"Apple Silicon M1 and newer; macOS {macos.DEPLOYMENT_TARGET}+; "
+               "Metal shaders compiled by the target GPU; Accelerate CPU fallback"],
+    )
+
+
 def prepare(
     target: Target,
     *,
@@ -1966,6 +2034,9 @@ def prepare(
     unimportable without a driver, CPU included. Compiling keeps the one
     property a distribution needs: a missing driver degrades to CPU instead.
     """
+    if target.kind == "metal":
+        return _prepare_metal(target)
+
     nvcc: Path | None = None
     rocm: Path | None = None
     toolkit: tuple[int, int] | None = None
@@ -2005,13 +2076,6 @@ def prepare(
                 f"toolkit is {toolkit[0]}.{toolkit[1]}, torch is for "
                 f"{target.cuda[0]}.{target.cuda[1]}; same major version, so they interoperate"
             )
-
-    if target.kind == "metal" and not IS_MACOS:
-        raise GgufError(
-            f"--device {target.device} wants a Metal llama.cpp, which only builds on macOS.\n"
-            "  Build the macOS distribution on a Mac, or pick this machine's device -- and\n"
-            "  if what you wanted was a CPU-only GGUF backend, --gguf-device cpu says so."
-        )
 
     if target.kind == "rocm":
         rocm = find_rocm()
@@ -2090,6 +2154,25 @@ def prepare(
     return build
 
 
+def _verify_metal_python(python: Path, env: dict[str, str] | None = None) -> None:
+    """A native builder can still have a stale Rosetta build venv."""
+    code, output = _capture(
+        [str(python), "-I", "-c",
+         "import json, platform, struct, sys; print(json.dumps([platform.system(), "
+         "platform.machine(), struct.calcsize('P') * 8, list(sys.version_info[:2])]))"],
+        env=env,
+    )
+    try:
+        native = code == 0 and json.loads(output) == ["Darwin", "arm64", 64, [3, 12]]
+    except ValueError:
+        native = False
+    if not native:
+        raise GgufError(
+            "the Metal build environment must use native arm64 Python 3.12, not Rosetta.\n"
+            f"  Interpreter: {python}\n  Recreate the build venv with --clean."
+        )
+
+
 def _force_remove_llama(python: Path, env: dict[str, str] | None = None) -> None:
     """Delete whatever `uv pip uninstall` left of a previous llama install.
 
@@ -2155,6 +2238,9 @@ def install(python: Path, build: Build, *, env: dict[str, str] | None = None) ->
             "  without the GGUF backend (--no-gguf)."
         )
 
+    if build.target.kind == "metal":
+        _verify_metal_python(python, env)
+
     # A version that is already there is a requirement uv considers satisfied, so
     # it would audit the environment and install nothing -- leaving whatever some
     # earlier build compiled, for whatever device that was. Only reachable with a
@@ -2176,6 +2262,9 @@ def install(python: Path, build: Build, *, env: dict[str, str] | None = None) ->
             _force_remove_llama(python, env)
 
     cmd = [uv, "pip", "install", "--python", str(python), "--no-cache-dir", build.spec]
+    if build.target.kind == "metal":
+        # Keep compiling our baseline if a future index begins offering wheels.
+        cmd += ["--no-binary", DISTRIBUTION]
 
     environment = dict(env or os.environ)
     # `prepare` put the generator and the compiler's own environment in here, so
@@ -3124,8 +3213,114 @@ def _missing_runtime(python: Path, build: Build, env: dict[str, str] | None) -> 
                    if not (lib / name).is_file() and name.lower() not in elsewhere})
 
 
+_METAL_VERIFY_PROBE = r"""
+import ctypes
+import json
+import sys
+from pathlib import Path
+
+answer = {"error": None, "version": None, "info": "", "device": "", "initialized": False}
+try:
+    import llama_cpp
+    import llama_cpp.llama_cpp as core
+
+    answer["version"] = llama_cpp.__version__
+    base = Path(core._base_path)
+    handles = [core._lib]
+    for stem in ("ggml", "ggml-base", "ggml-cpu", "ggml-metal"):
+        handles.append(ctypes.CDLL(str(base / ("lib" + stem + ".dylib"))))
+
+    def bind(name, restype, argtypes):
+        for handle in handles:
+            try:
+                function = getattr(handle, name)
+            except AttributeError:
+                continue
+            function.restype = restype
+            function.argtypes = argtypes
+            return function
+        raise RuntimeError("the locked llama.cpp ABI is missing " + name)
+
+    ptr = ctypes.c_void_p
+    string = ctypes.c_char_p
+    size = ctypes.c_size_t
+    registry = bind("ggml_backend_reg_by_name", ptr, [string])
+    count = bind("ggml_backend_reg_dev_count", size, [ptr])
+    get_device = bind("ggml_backend_reg_dev_get", ptr, [ptr, size])
+    describe = bind("ggml_backend_dev_description", string, [ptr])
+    initialize = bind("ggml_backend_dev_init", ptr, [ptr, string])
+    release = bind("ggml_backend_free", None, [ptr])
+    # The registry must contain both Metal and its CPU fallback; importing the
+    # package or merely finding a dylib on disk cannot prove that either works.
+    llama_cpp.llama_backend_init()
+    metal = registry(b"Metal")
+    cpu = registry(b"CPU")
+    if not metal or not cpu:
+        raise RuntimeError("the Metal and CPU backends must both be registered")
+    if not count(metal) or not count(cpu) or not llama_cpp.llama_supports_gpu_offload():
+        raise RuntimeError("no usable Metal GPU/CPU fallback; validate on a physical Apple Silicon Mac")
+    gpu = get_device(metal, 0)
+    if not gpu:
+        raise RuntimeError("the Metal registry returned no device")
+    answer["device"] = (describe(gpu) or b"").decode("utf-8", "replace")
+    # Initializing Metal compiles the embedded shader library on this GPU. It
+    # needs no model download and catches missing resources/unsupported shaders.
+    for device in (get_device(cpu, 0), gpu):
+        if not device:
+            raise RuntimeError("the backend registry returned no device")
+        backend = initialize(device, None)
+        if not backend:
+            raise RuntimeError("could not initialize the CPU or Metal backend")
+        release(backend)
+    raw = llama_cpp.llama_print_system_info()
+    answer["info"] = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+    answer["initialized"] = True
+except Exception as exc:
+    answer["error"] = type(exc).__name__ + ": " + str(exc)
+json.dump(answer, sys.stdout)
+sys.stdout.flush()
+"""
+
+compile(_METAL_VERIFY_PROBE, "<llama-metal-verify>", "exec")
+
+
+def _verify_metal(python: Path, build: Build, env: dict[str, str] | None) -> None:
+    """A Metal release must initialize its embedded shaders and CPU fallback."""
+    environment = dict(env if env is not None else os.environ)
+    for name in tuple(environment):
+        if name.startswith(("DYLD_", "GGML_METAL_")) or name == "LLAMA_CPP_LIB_PATH":
+            environment.pop(name)
+    try:
+        # Neither cwd shader files nor a developer's library override can make
+        # an incomplete package appear to work.
+        with tempfile.TemporaryDirectory(prefix="fox-metal-verify-") as scratch:
+            result = subprocess.run(
+                [str(python), "-I", "-c", _METAL_VERIFY_PROBE], cwd=scratch,
+                env=environment, capture_output=True, text=True, timeout=300,
+            )
+        answer = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise GgufError(f"could not validate the Metal llama.cpp: {exc}") from exc
+    if result.returncode or answer.get("error") or answer.get("initialized") is not True:
+        detail = "\n".join(result.stderr.strip().splitlines()[-12:])
+        raise GgufError(
+            f"Metal llama.cpp verification failed (exit {result.returncode}): "
+            f"{answer.get('error') or 'the backend did not initialize'}.\n"
+            "  Build/verify on a physical Apple Silicon Mac with a usable Metal GPU.\n"
+            "  A CPU-only or unverified Metal library cannot be shipped as the macos build.\n"
+            + (f"{detail}\n" if detail else "")
+        )
+    build.system_info = answer.get("info") or ""
+    print(f"      {PACKAGE} {answer.get('version')}: Metal initialized on {answer.get('device')}")
+    print("      embedded Metal shader library and CPU fallback initialized")
+
+
 def verify(python: Path, build: Build, env: dict[str, str] | None = None) -> None:
     """Import the built package and insist it is what was asked for."""
+    if build.target.kind == "metal":
+        _verify_metal(python, build, env)
+        return
+
     proc = subprocess.run([str(python), "-c", _VERIFY_PROBE], capture_output=True,
                           env=_import_env(env))
     try:
@@ -3337,6 +3532,10 @@ def bundle(dist: Path, python: Path, build: Build, env: dict[str, str] | None = 
         pinned = {path.name.lower() for path in _cuda_runtime(python, build, env)}
         pinned |= {path.name.lower() for path in
                    (build.openblas.runtime if build.openblas is not None else ())}
+    if build.target.kind == "metal":
+        # dyld resolves @loader_path beside each library; a duplicate that Nuitka
+        # put at bin/ cannot stand in for the ctypes package's own lib/ copy.
+        pinned |= {path.name.lower() for path in source.iterdir() if path.is_file()}
 
     copied, skipped = [], []
     for entry in sorted(source.iterdir()):

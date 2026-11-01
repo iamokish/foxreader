@@ -139,6 +139,7 @@ jobs:
           | Your machine | Download |
           |---|---|
           | Windows or Linux, no NVIDIA GPU | the `cpu` archive for your OS (runs anywhere) |
+          | Apple Silicon, macOS 14+ | the `macos` / `macos-arm64` archive when listed (Torch MPS and llama.cpp Metal) |
           | NVIDIA GPU | the `cuXXX` archive matching your card (`cu118` older, `cu126`/`cu129` current, `cu130` newest). CUDA builds need that CUDA driver installed |
           | Only OCR/typesetting, no local translation | a build *without* `gguf` in its name (smaller, no translator backend) |
           | Local GGUF translation models | a build *with* `gguf` in its name (bundled llama.cpp, no toolchain needed) |
@@ -146,9 +147,14 @@ jobs:
           Archive names read as
           `fox-reader-v{version}-{device}[-gguf]-{platform}`:
           `cpu` = PyTorch backend, `gguf` = translator backend included,
-          `windows-x64` = `.zip`, `linux-x64` = `.tar.gz`. Missing your
+          `windows-x64` = `.zip`, `linux-x64` / `macos-arm64` = `.tar.gz`. Missing your
           combination? Build it yourself with
           [`packaging/build.md`](../blob/master/packaging/build.md).
+
+          Mac artifacts are included when the GPU-capable Mac runner is enabled.
+          They target Apple Silicon ARM64, not Intel Macs or Rosetta. Mac binaries
+          are ad-hoc signed; Developer ID signing and notarization are separate,
+          so a downloaded build may need approval in Privacy & Security.
 
           ### Downloads in parts (`.001`, `.002`, …)
 
@@ -174,7 +180,8 @@ jobs:
           ### Checking your download
 
           `SHA256SUMS.txt` lists every file attached here. Verify with
-          `sha256sum -c SHA256SUMS.txt` (Linux/macOS) or
+          `sha256sum -c SHA256SUMS.txt` (Linux),
+          `shasum -a 256 -c SHA256SUMS.txt` (macOS), or
           `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
           split download, the `#` line naming the archive gives the digest of
           the **joined** file, so you can check the result of the step above.
@@ -215,7 +222,7 @@ jobs:
           TAG="${{ steps.target.outputs.tag }}"
 
           shopt -s nullglob
-          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
+          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*-macos-arm64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
 
           if [ ${#files[@]} -eq 0 ]; then
             echo "Error: No release assets found to upload." >&2

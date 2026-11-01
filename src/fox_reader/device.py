@@ -1,7 +1,7 @@
 """Central device configuration for all ML models.
 
-Each consumer wants the device spelled a different way — PaddleOCR takes
-``gpu:0`` while torch-based consumers take ``cuda:0`` — so the choice is
+The classic OCR slot keeps its legacy ``gpu:0`` spelling, while its torch
+predictors and other consumers accept ``cuda:0`` — so the choice is
 made once here and handed out per slot. The CPU's own
 shape is answered here as well (see `thread_count`), for the one model that
 chooses its own thread count instead of being told.
@@ -67,8 +67,7 @@ class FoxDevice(BaseModel):
     translator: str = Field(default=CPU)
     paddleocr: str = Field(default=CPU)
     #: PaddleOCR-VL transcriber, as a torch-style device string (``cuda:0`` /
-    #: ``mps`` / ``cpu``). llama.cpp understands Metal, so unlike `paddleocr`
-    #: an Apple GPU is honoured here rather than mapped back to the CPU.
+    #: ``mps`` / ``cpu``). llama.cpp understands Metal, as do the torch consumers.
     paddleocr_vl: str = Field(default=CPU)
     #: Bubble segmentation network, as a torch device string (``cuda:0`` /
     #: ``mps`` / ``cpu``) — the same spelling torch understands directly.
@@ -679,13 +678,12 @@ def options(refresh: bool = False) -> list[DeviceOption]:
 
 
 def _for_paddleocr(device_id: str) -> str:
-    """PaddleOCR's own spelling: ``gpu:0``, or ``cpu``.
-
-    Metal is not one of the backends PaddleOCR can target, so an Apple GPU
-    lands on the CPU here even when the other slots use it.
-    """
+    """Keep legacy ``gpu:N`` ids; the torch OCR predictors also accept ``mps``."""
     if (index := _cuda_index(device_id)) is not None:
         return f"gpu:{index}"
+
+    if device_id == MPS:
+        return MPS
 
     return CPU
 
@@ -842,11 +840,6 @@ def resolve(
         resolved[slot] = wanted
 
     paddle = _for_paddleocr(resolved["paddleocr"])
-
-    if resolved["paddleocr"] == MPS:
-        fallbacks.append(
-            "paddleocr: PaddleOCR cannot use the Apple GPU, using the CPU"
-        )
 
     bubble = _for_bubble(resolved["bubble"])
 

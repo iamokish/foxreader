@@ -34,6 +34,7 @@ Usage::
 
     python packaging/build.py                      # cpu, default scope
     python packaging/build.py --device cu129       # bundle a CUDA torch
+    python packaging/build.py --device macos       # Apple Silicon: MPS + Metal
     python packaging/build.py --deep-compile       # compile the dependencies too
     python packaging/build.py --skip-frontend      # reuse a built frontend/static
     python packaging/build.py --clean              # discard previous artifacts
@@ -73,6 +74,7 @@ del _stream
 
 # pyrefly: ignore [missing-import]
 import llamacpp  # noqa: E402
+import macos  # noqa: E402
 
 # pyrefly: ignore [missing-import]
 from toolchain import LAUNCHER_NAME, ToolchainError, build_launcher, find_compiler  # noqa: E402
@@ -332,7 +334,7 @@ _DEVICE_EXTRA = re.compile(r"^(?:cpu|macos|cu\d+.*|rocm.*)$")
 
 #: The devices as they stood when this was written, used only if pyproject cannot
 #: be read for them. `--help` staying useful is worth more than being strict here.
-_DEVICE_FALLBACK = ("cpu", "macos", "cu118", "cu126", "cu129", "cu129_win", "cu130", "cu132", "rocm71", "rocm72")
+_DEVICE_FALLBACK = ("cpu", "macos", "cu118", "cu126", "cu129", "cu130", "cu132", "rocm71", "rocm72")
 
 
 def _device_choices() -> list[str]:
@@ -367,12 +369,16 @@ def _platform_tag() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system == "windows":
+        if machine not in ("amd64", "x86_64"):
+            raise BuildError("Windows distributions require native AMD64 Python")
         return "windows-x64"
     if system == "darwin":
-        mac_arch = "macOS-arm64" if machine in ("arm64", "aarch64") else "macOS-x64"
-        print(f"{mac_arch} Detected. You need to perform the ritual of compiling from source.")
-        sys.exit(0)
+        if machine != "arm64":
+            raise BuildError("macOS distributions require native Apple Silicon arm64 Python (not Intel/Rosetta)")
+        return "macos-arm64"
     if system == "linux":
+        if machine not in ("x86_64", "amd64"):
+            raise BuildError("Linux distributions require native x86_64 Python")
         return "linux-x64"
     raise BuildError(f"Unsupported: {system} {machine}")
 
@@ -1158,6 +1164,11 @@ def create_build_venv(device: str) -> Path:
         )
 
     verify_opencv(python, repair_cmd=[*install_args, "--reinstall-package", "opencv-contrib-python"])
+    if platform.system() == "Darwin":
+        try:
+            macos.verify_environment(python, _build_env())
+        except macos.MacOSBuildError as exc:
+            raise BuildError(str(exc)) from exc
     print("      Build environment ready.\n")
     return python
 
@@ -1618,6 +1629,13 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
             nuitka.add(cmd, "--msvc", "latest")
         elif compiler_kind == "gcc":
             nuitka.add(cmd, "--mingw64")
+    elif platform.system() == "Darwin":
+        for option in ("--clang", "--macos-target-arch"):
+            nuitka.require(option)
+        # Nuitka 4.2 derives the minimum OS from its Python binary, not a CLI
+        # target-version flag. verify_environment checks that binary's floor;
+        # finalize checks every output against our 14.0 release baseline.
+        cmd += ["--clang", "--macos-target-arch=arm64"]
 
     for name in WANTED_PLUGINS:
         if nuitka.plugin(cmd, name):
@@ -2428,6 +2446,12 @@ def stage_layout(dist: Path, launcher: Path) -> Path:
     (root / "cache").mkdir()
     (root / "models").mkdir()
 
+    if platform.system() == "Darwin":
+        try:
+            macos.finalize(root)
+        except macos.MacOSBuildError as exc:
+            raise BuildError(str(exc)) from exc
+
     total = _tree_size(root) / (1024 * 1024)
     print(f"      {root}  ({total:.0f} MB)")
     for entry in sorted(root.iterdir()):
@@ -2745,8 +2769,8 @@ def main() -> int:
         "--device",
         type=str.lower,
         choices=_device_choices(),
-        default="cpu",
-        help="torch backend to bundle (default: cpu)",
+        default="macos" if platform.system() == "Darwin" else "cpu",
+        help="torch backend to bundle (default: macos on Apple Silicon, cpu elsewhere)",
     )
     parser.add_argument(
         "--split-bin",
@@ -2766,8 +2790,7 @@ def main() -> int:
     gguf = parser.add_argument_group(
         "GGUF backend (llama-cpp-python)",
         "Compiled from source against this machine's toolchain, once per build. "
-        "The defaults produce a binary that runs on any x86-64 machine, not just "
-        "this one.",
+        "Defaults use a portable x86-64 or Apple Silicon baseline for the target platform.",
     )
     gguf.add_argument("--no-gguf", action="store_true",
                       help="leave llama-cpp-python out; GGUF models then will not load")
@@ -2807,6 +2830,19 @@ def main() -> int:
         except llamacpp.GgufError as exc:
             parser.error(str(exc))
 
+    if args.device == "macos" and platform.system() != "Darwin":
+        parser.error("--device macos requires a native Apple Silicon Mac")
+    if platform.system() == "Darwin":
+        if args.device != "macos":
+            parser.error("macOS ARM64 distributions use --device macos (MPS + Metal)")
+        if not args.no_gguf and llamacpp.parse_device(args.gguf_device or args.device).kind != "metal":
+            parser.error("macOS GGUF distributions use --gguf-device macos (Metal)")
+        if args.cuda_arch or args.hip_arch:
+            parser.error("CUDA/HIP architecture overrides do not apply to macOS")
+        if any(arg.startswith(("--macos-target-arch", "--macos-target-version", "--target-arch", "--mode", "--onefile",
+                               "--macos-create-app-bundle")) for arg in args.nuitka_arg):
+            parser.error("macOS builds require the fixed arm64 deployment target and standalone layout")
+
     if args.device.startswith("rocm") and platform.system() != "Linux":
         # The extras resolve on every platform, because a lock has to; what they
         # resolve *to* off Linux is the ordinary PyPI torch, since AMD publishes
@@ -2821,6 +2857,13 @@ def main() -> int:
         )
 
     platform_tag = _platform_tag()
+    if platform_tag == "macos-arm64":
+        try:
+            mac_env = macos.preflight()
+        except macos.MacOSBuildError as exc:
+            raise BuildError(str(exc)) from exc
+        OS_ENV.update(mac_env)
+        os.environ.update(mac_env)
     version = _read_version()
     gguf_device = None if args.no_gguf else (args.gguf_device or args.device)
     blas_mode = "left out (--no-gguf)" if args.no_gguf else _effective_openblas_mode(args)
@@ -2857,7 +2900,8 @@ def main() -> int:
     if args.device == "cpu":
         purge_cuda_libs(dist)
     else:
-        step(f"Keeping CUDA libraries ({args.device}).")
+        step("Keeping Metal libraries (macos)." if args.device == "macos"
+             else f"Keeping CUDA libraries ({args.device}).")
         print()
 
     # After the purge, so a CPU distribution with a deliberately CUDA GGUF backend

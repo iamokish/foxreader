@@ -173,10 +173,10 @@ check("auto takes the apple gpu", resolution.resolved["bubble"] == "mps", str(re
 check("bubble uses mps", resolution.device.bubble == "mps", resolution.device.bubble)
 check("translator uses mps", resolution.device.translator == "mps", resolution.device.translator)
 check("textseg uses mps", resolution.device.textseg == "mps", resolution.device.textseg)
-check("paddleocr_vl uses mps too, unlike classic paddleocr",
+check("paddleocr_vl uses mps too",
       resolution.device.paddleocr_vl == "mps", resolution.device.paddleocr_vl)
-check("paddleocr cannot, so cpu", resolution.device.paddleocr == "cpu", resolution.device.paddleocr)
-check("and it explains why", any("Apple GPU" in line for line in resolution.fallbacks), str(resolution.fallbacks))
+check("classic OCR now uses torch MPS", resolution.device.paddleocr == "mps", resolution.device.paddleocr)
+check("all slots use Metal without fallback", not resolution.fallbacks, str(resolution.fallbacks))
 check("backend says mps", resolution.device.backend == "mps", resolution.device.backend)
 check("no cuda", resolution.device.cuda_available is False and resolution.device.device_count == 0)
 

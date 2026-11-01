@@ -729,11 +729,18 @@ def _torch_nms(boxes, scores, thresh):
 
 
 def _nms_boxes(boxes, scores, thresh):
+    device = boxes.device
+    on_mps = device.type == "mps"
+    if on_mps:
+        # torchvision has no Metal NMS kernel. Transfer once so the fallback
+        # loop also avoids synchronizing the GPU for every candidate box.
+        boxes, scores = boxes.cpu(), scores.cpu()
     try:
         import torchvision.ops as _ops
-        return _ops.nms(boxes, scores, thresh)
+        keep = _ops.nms(boxes, scores, thresh)
     except Exception:
-        return _torch_nms(boxes, scores, thresh)
+        keep = _torch_nms(boxes, scores, thresh)
+    return keep.to(device) if on_mps else keep
 
 
 def _non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.7, max_det=300):

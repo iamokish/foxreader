@@ -15,10 +15,10 @@ calls it is `packaging/build.py` (`install_llama_cpp`, step 5/15).
 | Item | Value | Where |
 |---|---|---|
 | Package | `llama-cpp-python` | `pyproject.toml`, `gguf` extra |
-| Pinned version | `==0.3.35` | `uv.lock` |
-| Vendored llama.cpp | ggml `0.20.0` (commit `4df29be`) | inside the sdist, `vendor/llama.cpp` |
+| Pinned version | `==0.3.36` | `uv.lock` |
+| Vendored llama.cpp | ggml `0.25.3` | inside the locked sdist, `vendor/llama.cpp` |
 | Torch for cu118 | `2.7.1+cu118` (last release on the cu118 index) | `uv.lock` |
-| Torch for cu129_win | `2.8.0+cu129` | `uv.lock` |
+| Torch for cu129 on Windows | `2.8.0+cu129` | `uv.lock` |
 | Torch for everything else | `2.13.0` (+cpu/cu126/cu129/cu130/cu132/rocm7.1/rocm7.2) | `uv.lock` |
 
 Three rules follow from the fact that PyPI ships no wheels for this
@@ -48,11 +48,11 @@ list that cannot be satisfied is a build failure, never a downgrade.
 | `--device` | Torch index | Torch | Needs toolkit | CI runner |
 |---|---|---|---|---|
 | `cpu` | CPU | 2.13.0 | none | ubuntu-24.04 / windows-latest |
-| `macos` | PyPI | 2.13.0 | none (Metal) | Mac only |
+| `macos` | PyPI | 2.13.0 | Apple Clang + macOS SDK, working Metal GPU | self-hosted Apple Silicon, macOS 14+ |
 | `cu118` | cu118 | **2.7.1** | CUDA 11.8 + gcc-11 | ubuntu-22.04 / windows-latest |
 | `cu126` | cu126 | 2.13.0 | CUDA 12.6 + gcc-13 | ubuntu-24.04 / windows-latest |
-| `cu129` | cu129 | 2.13.0 | CUDA 12.9 + gcc-13 | ubuntu-24.04 |
-| `cu129_win` | cu129 (Windows split) | 2.8.0 | CUDA 12.9 + MSVC | windows-latest |
+| `cu129` (Linux) | cu129 | 2.13.0 | CUDA 12.9 + gcc-13 | ubuntu-24.04 |
+| `cu129` (Windows) | cu129 | 2.8.0 | CUDA 12.9 + MSVC | windows-latest |
 | `cu130` | cu130 | 2.13.0 | CUDA 13.0 + gcc-14 | ubuntu-24.04 / windows-latest |
 | `cu132` | cu132 | 2.13.0 | CUDA 13.2 + gcc-14 | — (no CI row yet; see notes below) |
 | `rocm71` / `rocm72` | rocm7.1 / rocm7.2 | 2.13.0 | ROCm 6.1+ | Linux only |
@@ -60,9 +60,15 @@ list that cannot be satisfied is a build failure, never a downgrade.
 Notes:
 
 * `cu118` is stuck on torch 2.7.1 because that is the newest release the
-  cu118 index carries; `cu129_win` tracks 2.8.0. Everything else tracks 2.13.0.
-* `cu129_win` exists because the Windows CUDA wheel lives on a different
-  PyPI index split than the Linux one; same toolkit either way.
+  cu118 index carries; `cu129` on Windows is locked to 2.8.0. Everything
+  else tracks 2.13.0.
+* `cu129` is one extra with platform-specific requirements. Linux pins Torch
+  2.13.0 and torchvision 0.28.0; Windows requires Torch >=2.7.1 and
+  torchvision >=0.22.1, with the lock retaining 2.8.0+cu129 / 0.23.0+cu129.
+  Both platforms use `https://download.pytorch.org/whl/cu129` and the CUDA
+  12.9 toolkit. The compiler selection and GPU architecture coverage are
+  unchanged. Replace the former `--extra cu129_win` with `--extra cu129`
+  when installing, and `--device cu129_win` with `--device cu129` when building.
 * **13.x torch landscape (PyTorch 2.11+).** Plain `pip install torch` now
   ships CUDA **13.0** wheels by default; `cu126` stays as the fallback for
   older drivers and pre-Turing GPUs; `cu128` is deprecated in favour of
@@ -89,6 +95,57 @@ Notes:
 | `--openblas {auto,download,off}` / `--no-blas` | OpenBLAS for ggml's CPU backend (`auto` = system copy, else fetch into `nc/`) |
 | `--cpu-baseline {avx2,avx,sse42}` | Oldest x86-64 CPU the result must run on (default `avx2`, ≈2013+) |
 | `--cuda-arch LIST` / `--hip-arch LIST` | Override the arch lists below, e.g. `--cuda-arch "75-real;86-real"` |
+
+### Apple Silicon portability
+
+`--device macos` builds natively for **ARM64, macOS 14.0 and newer**. The
+locked Torch and torchvision wheels set that OS floor. The hardware target
+includes M1 and later Apple Silicon generations, including Pro, Max and
+Ultra variants. Intel Macs and Rosetta processes are rejected.
+
+The Mac branch uses these independent portability controls:
+
+| Setting | Purpose |
+|---|---|
+| `GGML_NATIVE=OFF` | Do not tune native CPU code to the build host |
+| `GGML_CPU_ARM_ARCH=armv8.2-a+fp16+dotprod` | Explicit M1-compatible CPU instruction baseline |
+| `CMAKE_OSX_ARCHITECTURES=arm64` | Native Apple Silicon output |
+| `CMAKE_OSX_DEPLOYMENT_TARGET=14.0` | Keep the minimum OS independent of the build host's OS |
+| `GGML_METAL=ON` | Include the Metal backend |
+| `GGML_METAL_EMBED_LIBRARY=ON` | Embed shader **source**, compiled by the destination GPU's Metal driver |
+| `GGML_ACCELERATE=ON` | Use Apple's system Accelerate framework for CPU operations |
+| `GGML_OPENMP=OFF` | Avoid a dependency on the build host's OpenMP runtime |
+
+In the locked source, “embed library” embeds the Metal kernel source and its
+headers into the native library; it does not freeze a precompiled library for
+the build machine's GPU. The Metal runtime chooses the shader language and
+feature macros for the destination OS and GPU. This keeps runtime capability
+selection while avoiding a separate `.metallib` file or an offline Metal
+compiler requirement. CPU fallback kernels retain the M1 baseline even when
+the build host has newer ARM instructions.
+
+The installer verifies that the Metal backend is registered and supports GPU
+offload, then initializes it to exercise embedded shader compilation. A
+missing GPU, CPU-only library or shader failure stops the build. Torch's MPS
+backend is checked separately; Torch MPS availability alone does not prove
+that llama.cpp supports Metal.
+
+The distribution builder restores the native libraries needed by ctypes,
+relocates non-system dependencies within the bundle, checks ARM64 support and
+minimum OS load commands, and ad-hoc signs the final native files. OpenBLAS
+is not downloaded for the Metal branch. The Windows/Linux CPU and CUDA build
+paths retain their existing behavior.
+
+Use `macos` for both Torch and llama.cpp in a Mac distribution; `--no-gguf`
+can omit llama.cpp. CPU/CUDA/HIP architecture overrides are for other build
+variants. At runtime, selecting `cpu` in Fox Reader settings still uses the
+CPU backend included in the Metal build.
+
+Build checks and a fixed baseline do not replace inference testing. Before a
+release, test the same relocated archive on an M1 Mac running macOS 14 and a
+newer Apple Silicon Mac, including GGUF translation and PaddleOCR-VL. The
+[Mac build guide](../packaging/build.md#macos-release-verification) describes
+the automated and manual checks.
 
 ---
 
@@ -224,14 +281,19 @@ packaging/llamacpp.py --find-openblas` reports what would be used.
 # What would this device build with (no toolchain needed for the answer)?
 python packaging/llamacpp.py --device cu129 --print-args
 python packaging/llamacpp.py --device cpu --openblas auto --print-args
+python packaging/llamacpp.py --device macos --print-args
 
 # What OpenBLAS is here?
 python packaging/llamacpp.py --find-openblas
 
 # Install into an environment (note --no-cache-dir is mandatory, see §1):
 python packaging/llamacpp.py --device cu129 --install --python .venv/bin/python
-CMAKE_ARGS="<printed line>" uv pip install --no-cache-dir llama-cpp-python==0.3.35
+CMAKE_ARGS="<printed line>" uv pip install --no-cache-dir llama-cpp-python==0.3.36
 ```
+
+On Apple Silicon, prefer `python3.12 packaging/llamacpp.py --device macos
+--install --python .venv/bin/python` so the installer also sets the Apple
+toolchain environment and performs Metal verification.
 
 `--print-args` answers even on a machine that couldn't build the result
 (exit 1 with the reason first, then the unfiltered args). `verify()` afterwards
@@ -250,3 +312,6 @@ CUDA devices, `lib/` layout intact, linked runtimes shippable.
 | CUDA build fails on MinGW (Windows) | Expected — nvcc only drives MSVC | Visual Studio Build Tools, "Desktop development with C++" |
 | Rebuild behaves oddly | Stale `packaging/build/` or reused venv compiled for another device | `--clean`; installs always `--no-cache-dir` |
 | GGUF problems you don't need | — | `--no-gguf` builds everything else |
+| Metal library present but initialization fails | Missing GPU access or unusable embedded shaders | Build and validate on a native Apple Silicon Mac with a working GPU; inspect the Metal probe output |
+| Mac binary fails on an older Apple chip | Host-specific CPU flags or stale native libraries | Rebuild with the Mac branch's fixed M1 baseline and `--clean`; do not add `-mcpu=native` |
+| Mac binary requires a newer OS than advertised | A dependency has a higher minimum OS load command | Use dependencies compatible with macOS 14; the bundle audit rejects this instead of silently raising the release floor |

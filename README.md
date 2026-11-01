@@ -91,16 +91,24 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 ### Prerequisites
 
 - Python `>=3.12,<3.13`
+- Supported systems: Windows AMD64, Linux x86_64, or Apple Silicon ARM64 with macOS 14 or newer. Intel Macs and Rosetta Python are unsupported.
 - [`uv`](https://docs.astral.sh/uv/) installed
 - For the UI build: Node.js `22+` and `pnpm` (`pnpm@11`, CI uses Node 24)
 
 ### Install & run (source)
 
-Pick the PyTorch backend matching your system. `<backend>` is one of: `cpu`, `macos`, `cu118`, `cu126`, `cu129`, `cu129_win`, `cu130`, `rocm71`, `rocm72` (ROCm wheels are Linux-only).
+Pick the PyTorch backend matching your system. `<backend>` is one of: `cpu`, `macos`, `cu118`, `cu126`, `cu129`, `cu130`, `rocm71`, `rocm72` (ROCm wheels are Linux-only).
 
 ```bash
 uv sync --extra dev --extra cpu
 uv run --extra cpu fox-reader
+```
+
+On Apple Silicon, use the `macos` extra so Torch uses its MPS backend:
+
+```bash
+uv sync --extra dev --extra macos
+uv run --extra macos fox-reader
 ```
 
 Or with the shortcuts (CPU backend):
@@ -124,6 +132,10 @@ uv run --extra <backend> python packaging/llamacpp.py --device <backend> --insta
 ```
 
 `<backend>` mirrors the torch extras (`cpu`, `cu129`, `rocm72`, `macos`). On CPU it looks for OpenBLAS (offers a download into `nc/`); on CUDA/ROCm it needs the matching toolkit (`nvcc` / ROCm 6.1+). Preview without installing, or install by hand (note `--no-cache-dir` is mandatory — uv's cache key ignores `CMAKE_ARGS`):
+
+On Apple Silicon, `--device macos` builds llama.cpp with Metal and Apple's Accelerate framework using native ARM64 Python and Apple Clang. It targets the M1 CPU baseline and compiles embedded Metal shader source on the destination GPU. The build requires macOS 14+ and a working Metal device; it verifies the backend instead of silently accepting a CPU-only library. See [Apple Silicon build details](docs/llama-cpp-python.md#apple-silicon-portability).
+
+The `auto` device choice uses MPS for Torch OCR, bubble detection and Text Seg, and Metal for GGUF translation and PaddleOCR-VL. On macOS, unsupported Torch operations may fall back to CPU; bubble suppression runs on CPU because torchvision has no MPS NMS kernel. Explicit CPU selection remains available in settings.
 
 ```bash
 python packaging/llamacpp.py --device cu129 --print-args
@@ -400,11 +412,12 @@ Pages:
 
 | Backend extra | Torch index | Platform |
 |---|---|---|
-| `cpu` | CPU | Win/Linux/macOS |
-| `macos` | PyPI | Apple Silicon |
-| `cu118` / `cu126` / `cu129` / `cu130` | matching CUDA index | Linux (CUDA toolkit needed for GGUF builds) |
-| `cu129_win` | CUDA index (Windows split) | Windows |
+| `cpu` | CPU | Windows AMD64 / Linux x86_64 |
+| `macos` | PyPI | Apple Silicon ARM64, macOS 14+ |
+| `cu118` / `cu126` / `cu129` / `cu130` | matching CUDA index | Windows AMD64 / Linux x86_64 (CUDA toolkit needed for GGUF builds) |
 | `rocm71` / `rocm72` | ROCm index | Linux only (no ROCm wheels on Windows/macOS) |
+
+`cu129` is the CUDA 12.9 extra on both Windows and Linux. Platform markers select the compatible versions from the same CUDA 12.9 index: the lock contains Torch 2.8.0 / torchvision 0.23.0 on Windows and Torch 2.13.0 / torchvision 0.28.0 on Linux. Replace the former `--extra cu129_win` with `--extra cu129` in install commands, and `--device cu129_win` with `--device cu129` in build commands. Windows archives now use `cu129` in their names too.
 
 ```bash
 uv sync --extra dev --extra <backend>
@@ -426,7 +439,7 @@ Windows `pnpm install` may fail with `UNKNOWN ... symlink`: enable Developer Mod
 
 > New to this? Start with [`packaging/build.md`](packaging/build.md) — the
 > copy-paste guide (what to download, which `--device` for your GPU, build,
-> run) for Windows and Linux.
+> run) for Windows, Linux, and Apple Silicon macOS.
 
 Standalone builds compile the backend with [Nuitka](https://nuitka.net/), embed the frontend, and ship a small C launcher (the user-visible entry point).
 
@@ -448,7 +461,7 @@ fox-reader/
 - C compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
   - Windows: VS Build Tools (“Desktop development with C++”) or MinGW-w64 (`gcc` on `PATH`; use winlibs/MSYS2 `mingw-w64-x86_64-gcc`, not MinGW.org bare `gcc`). With no compiler, the build asks Nuitka to fetch its MinGW64.
   - Linux: `gcc`/`clang` (`apt install build-essential`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
-  - macOS: Xcode CLT (Metal builds only on macOS).
+  - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+ and a working Metal GPU.
 - GPU builds: matching CUDA toolkit (`nvcc`) or ROCm 6.1+; CPU GGUF builds want OpenBLAS (`apt install libopenblas-dev` on Linux, or `--openblas download`).
 
 ### Build commands
@@ -459,7 +472,8 @@ python packaging/build.py --clean            # wipe previous artifacts first
 python packaging/build.py --skip-frontend    # reuse prebuilt static/app.js
 python packaging/build.py --keep-venv        # reuse build venv next time
 python packaging/build.py --deep-compile     # compile deps too (hours)
-python packaging/build.py --device cpu       # cpu|macos|cu118|cu126|cu129|cu129_win|cu130|rocm71|rocm72
+python packaging/build.py --device cpu       # cpu|macos|cu118|cu126|cu129|cu130|rocm71|rocm72
+python packaging/build.py --device macos     # Apple Silicon: Torch MPS + llama.cpp Metal
 python packaging/build.py --nuitka-arg ARG   # repeatable, forwarded to Nuitka
 python packaging/build.py --no-blas          # alias for --openblas off
 ```
@@ -475,7 +489,9 @@ python packaging/build.py --cuda-arch 75-real,86-real,120-virtual
 python packaging/build.py --hip-arch gfx1100,gfx1201
 ```
 
-Defaults compile only `fox_reader` + entry (5–15 min); `--deep-compile` is the slow release path. Nothing targets the build machine specifically (`GGML_NATIVE=OFF`, pinned ISA, virtual GPU arches for JIT fallback). Archives are named `fox-reader-v{version}-{device}[-gguf[-ggufDevice]]-{platform}` (zip on Windows, tar.gz on Linux).
+Defaults compile only `fox_reader` + entry (5–15 min); `--deep-compile` is the slow release path. Nothing targets the build machine specifically (`GGML_NATIVE=OFF`, pinned ISA, virtual GPU arches for CUDA JIT fallback and embedded Metal shader source on macOS). Archives are named `fox-reader-v{version}-{device}[-gguf[-ggufDevice]]-{platform}` (zip on Windows, tar.gz on Linux/macOS).
+
+macOS defaults to `--device macos`; Windows/Linux default to `cpu`. The Mac archive ends in `macos-arm64.tar.gz` and targets all Apple Silicon generations running macOS 14+, subject to available memory and model requirements. `--no-gguf` omits the llama.cpp backend; the x86 CPU/CUDA build flags do not apply to Mac builds. The build checks bundled ARM64 libraries, their minimum OS versions and relocatable dependencies, then ad-hoc signs them. Developer ID signing and notarization are separate release steps; see the [build guide](packaging/build.md#apple-silicon-macos-build).
 
 ### Slimming the Linux tree
 
@@ -497,14 +513,15 @@ Needs the HIP SDK (`$HIP_PATH` / `hipconfig` / `%ProgramFiles%\AMD\ROCm`); the b
 
 Grab a ready-made build from
 [GitHub releases](https://github.com/iamokish/foxreader/releases) when one
-matches your machine — CPU builds (`...-cpu-gguf-...`) run anywhere, GPU
-builds need that CUDA driver:
+matches your machine. CPU builds (`...-cpu-gguf-...`) target Windows AMD64 or
+Linux x86_64; CUDA builds need the matching driver:
 
 | You need | Get it |
 |---|---|
 | Windows or Linux, no NVIDIA GPU | Download the `cpu` archive for your OS |
+| Apple Silicon, macOS 14+ | Download the `macos-gguf-macos-arm64.tar.gz` archive when listed, or build with `python3.12 packaging/build.py --device macos` |
 | Windows + older NVIDIA GPU | Download a `cu118`/`cu126` archive if one is listed |
-| Linux + NVIDIA GPU, RTX 40/50 series, or CUDA 12.9/13.0 | **Not provided — build it locally** (one command, see below) |
+| Windows or Linux + NVIDIA GPU, CUDA 12.9/13.0 | Download the matching `cu129`/`cu130` archive when listed, or build it locally |
 | AMD GPU | **Not provided yet** (ROCm builds are coming soon) — use `cpu` |
 
 Missing your build? Make it yourself — no programming needed, just copy
@@ -521,8 +538,8 @@ run): [`packaging/build.md`](packaging/build.md).
 ## Releases
 
 - GitHub releases: `https://github.com/iamokish/foxreader/releases`
-- Produced by `.github/workflows/build.yml` on `v*` tags (or manually): native matrix builds → one release with all active archives + auto notes.
-- Active variants today: `cpu-gguf-linux`, `cpu-gguf-windows`, `cu118-gguf-windows`, `cu126-gguf-windows` (e.g. `fox-reader-v0.1.0-cpu-gguf-windows-x64.zip`). Further `cu129`/`cu130`/Linux-CUDA rows exist commented-out in the workflow — uncomment to enable.
+- Produced by `.github/workflows/build.yml` on pushed tags (or manually): successful tagged builds publish one release with all active archives and auto notes.
+- Active Windows/Linux variants: `cpu`, `cu118`, `cu126`, `cu129`, and `cu130`, each with and without GGUF. `cu129` uses the same device name on both systems; archive names retain the platform suffix. Mac variants join the release when `FOX_MACOS_RUNNER_ENABLED=true` and the Mac runner is available.
 - Pick the archive matching your OS + GPU (CPU builds run anywhere; CUDA builds need that CUDA driver; GGUF models run through the bundled llama.cpp with no toolchain needed).
 
 ## Development

@@ -87,6 +87,10 @@
 #  ifdef __linux__
 #    include <sys/prctl.h>
 #  endif
+#  ifdef __APPLE__
+#    include <mach-o/dyld.h>
+#    include <stdint.h>
+#  endif
 #endif
 
 #include <stdarg.h>
@@ -336,6 +340,24 @@ static int exe_dir(pchar *dst, size_t cap)
         }
     }
     return 0;
+#elif defined(__APPLE__)
+    uint32_t size = (uint32_t)cap;
+    char *resolved;
+    char *separator;
+    if (_NSGetExecutablePath(dst, &size) != 0)
+        return 0;
+    resolved = realpath(dst, NULL);
+    if (!resolved)
+        return 0;
+    separator = strrchr(resolved, '/');
+    if (!separator || (size_t)(separator - resolved) >= cap) {
+        free(resolved);
+        return 0;
+    }
+    *separator = 0;
+    strcpy(dst, resolved);
+    free(resolved);
+    return 1;
 #else
     ssize_t n = readlink("/proc/self/exe", dst, cap - 1);
     size_t i;

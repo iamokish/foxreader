@@ -1,0 +1,105 @@
+name: Build macOS ARM64
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+# Hosted macOS VMs may not expose Metal. Use a dedicated Apple Silicon runner
+# with a working GPU, tagged "metal", to validate both Torch MPS and llama.cpp.
+jobs:
+  build-macos:
+    runs-on: [self-hosted, macOS, ARM64, metal]
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: metal-gguf-macos-arm64, extra: "", smoke: "--gguf" }
+          - { name: metal-no-gguf-macos-arm64, extra: "--no-gguf", smoke: "" }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          clean: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Check native Apple toolchain
+        run: |
+          python -c "import platform; assert platform.system() == 'Darwin' and platform.machine() == 'arm64'; assert tuple(map(int, platform.mac_ver()[0].split('.')[:2])) >= (14, 0)"
+          xcrun --find clang
+          xcrun --sdk macosx --show-sdk-path
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build native distribution
+        run: python packaging/build.py --device macos --skip-frontend --split-bin 1000 ${{ matrix.extra }}
+
+      - name: Smoke test relocated distribution
+        run: python tests/dist/smoke_macos.py ${{ matrix.smoke }}
+
+      - name: Check release files
+        id: dist
+        run: |
+          ls -lh dist/
+          if compgen -G "dist/fox-reader-*.[0-9][0-9][0-9]" > /dev/null; then
+            echo "split=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "split=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        continue-on-error: true
+        with:
+          subject-path: |
+            dist/fox-reader-*-macos-arm64.tar.gz
+            dist/fox-reader-*.[0-9][0-9][0-9]
+
+      - name: Upload archive
+        if: steps.dist.outputs.split == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/fox-reader-*-macos-arm64.tar.gz
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload parts
+        if: steps.dist.outputs.split == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: parts-${{ matrix.name }}
+          path: dist/fox-reader-*.[0-9][0-9][0-9]
+          if-no-files-found: error
+
+      - name: Upload checksum manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: checksums-${{ matrix.name }}
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error

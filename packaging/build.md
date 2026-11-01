@@ -19,25 +19,30 @@ Most of the time is the computer compiling things — you just wait.
 Find your situation in the table. The `--device` value is what you will
 paste into the build command later.
 
+Supported distribution targets are Windows **AMD64**, Linux **x86_64**, and
+macOS **ARM64**. Mac builds require Apple Silicon and **macOS 14 or newer**;
+Intel Macs, Rosetta Python and cross-compilation are unsupported.
+
 | Your machine | `--device` | CUDA toolkit |
 |---|---|---|
-| No NVIDIA GPU, any OS | `cpu` | none needed |
+| Windows or Linux, no NVIDIA GPU | `cpu` | none needed |
 | NVIDIA GTX 10xx / RTX 20xx | `cu118` | 11.8 |
 | NVIDIA RTX 30xx / 40xx | `cu126` or `cu129` | 12.6 / 12.9 |
 | NVIDIA RTX 50xx / newest cards | `cu129` or `cu130` | 12.9 / 13.0 |
 | AMD GPU | — | coming soon (build `cpu` for now) |
-| Apple Silicon Mac | `macos` | none needed |
+| Apple Silicon Mac, macOS 14+ | `macos` | none needed (Metal) |
 
 Notes:
 
-- On **Windows**, CUDA 12.9 uses the name `cu129_win` instead of `cu129`.
-  Every other name is the same on both systems.
+- CUDA 12.9 uses `cu129` on both Windows and Linux. Platform markers select
+  each system's Torch/torchvision versions from the same CUDA 12.9 index.
 - The CUDA toolkit is only needed to *build* a GPU build (the translator
   backend compiles from source). To *run* a finished build you only need an
   NVIDIA driver, no toolkit.
 - `cu118` on Linux wants Ubuntu 22.04 (NVIDIA's own 11.8 packages stop
   there). Everything else builds on Ubuntu 24.04.
-- When in doubt, build `cpu` first. It runs everywhere and needs no toolkit.
+- Windows/Linux default to `cpu`; macOS defaults to `macos` (Torch MPS and
+  llama.cpp Metal). Mac distribution builds accept only `--device macos`.
 
 ---
 
@@ -80,6 +85,17 @@ sudo apt install -y python3.12 python3.12-venv
 
 From here on, if a command says `python`, Linux users type `python3`
 (or set it once: `sudo apt install -y python-is-python3`).
+
+**macOS (Apple Silicon):** install a native ARM64 or universal2 Python 3.12
+from python.org and run it natively. Check the interpreter, not just the chip:
+
+```bash
+python3.12 -c "import platform; print(platform.python_version(), platform.machine())"
+# 3.12.x arm64
+```
+
+Use `python3.12` wherever this guide says `python`. Disable “Open using
+Rosetta” for your terminal if the check reports `x86_64`.
 
 ### 1b. Node.js 24 + package manager
 
@@ -152,15 +168,23 @@ sudo apt install -y build-essential
 gcc --version
 ```
 
-**macOS (only for `--device macos` builds):**
+**macOS (Apple Silicon):**
 
 ```bash
 xcode-select --install
+xcrun --find clang
+xcrun --sdk macosx --show-sdk-path
 ```
+
+Apple Clang and the macOS SDK are required. Metal shader source is embedded
+in llama.cpp and compiled by the destination Mac's Metal driver, so a
+separate offline `metal` shader compiler is not required. The build checks
+for a working MPS/Metal device; a VM without GPU access cannot validate a
+release build.
 
 ---
 
-## 2. Extras for GPU builds (skip this whole section for `cpu`)
+## 2. Extras for CUDA builds (skip for `cpu` and `macos`)
 
 ### 2a. NVIDIA driver (build machine and every run machine)
 
@@ -182,7 +206,7 @@ Install exactly the version matching your `--device`:
 |---|---|
 | `cu118` | 11.8.0 |
 | `cu126` | 12.6.x |
-| `cu129` / `cu129_win` | 12.9.x |
+| `cu129` | 12.9.x |
 | `cu130` | 13.0.x |
 
 Check it afterwards (both systems):
@@ -217,7 +241,9 @@ sudo apt install -y gcc-13 g++-13
 sudo apt install -y libopenblas-dev pkg-config
 ```
 
-- **Windows / macOS:** nothing to do — the build fetches it automatically.
+- **Windows:** nothing to do — the build fetches it automatically.
+- **macOS:** Metal builds use Apple's system Accelerate framework; OpenBLAS
+  is not downloaded or bundled.
 
 > Skipping the translator backend entirely is also possible
 > (`--no-gguf` in step 4). Then you need neither OpenBLAS nor CUDA,
@@ -235,7 +261,7 @@ git clone https://github.com/iamokish/foxreader
 cd foxreader
 ```
 
-**Linux:**
+**Linux / macOS:**
 
 ```bash
 cd ~
@@ -250,6 +276,79 @@ cd foxreader
 Everything is one script. It builds the web UI, creates an isolated
 environment, compiles the translator backend, compiles the app with
 Nuitka, and packs the result into `dist/`.
+
+### Apple Silicon macOS build
+
+```bash
+python3.12 packaging/build.py --device macos
+# dist/fox-reader-v<version>-macos-gguf-macos-arm64.tar.gz
+
+# Without the GGUF backend:
+python3.12 packaging/build.py --device macos --no-gguf
+```
+
+The same archive targets M1 and newer Apple Silicon Macs running macOS 14+.
+The OS floor comes from the locked Torch 2.13 and torchvision 0.28 wheels,
+which are tagged `macosx_14_0_arm64`; setting an older deployment target
+cannot make those dependencies run on an older OS.
+
+The build fixes the ARM64 CPU baseline and macOS deployment target instead
+of selecting the build machine's CPU instructions or OS version. Metal
+shader source is compiled at runtime for the destination GPU. All bundled
+native files are checked for ARM64 support and the macOS 14 floor;
+non-system library dependencies must resolve inside the distribution.
+Libraries and executables receive ad-hoc signatures after relocation.
+The user needs neither Python nor Xcode to run the result.
+
+The archive is a portable folder with `launcher`, not an `.app` or DMG.
+Extract it to a writable folder and run `./fox-reader/launcher` from
+Terminal. Ad-hoc signatures satisfy local Apple Silicon signing requirements
+but do not identify a publisher: downloaded builds may need approval in
+System Settings → Privacy & Security. Developer ID signing and notarization
+are separate release operations requiring the publisher's credentials.
+
+Before publishing, run the [Mac distribution smoke check](#macos-release-verification)
+and inference on an M1 Mac at the minimum OS version and a newer Apple
+Silicon Mac. The fixed baseline is a compatibility target, not a claim that
+every hardware and OS combination has been tested.
+
+### macOS release verification
+
+The build tests MPS and Metal separately. After building, run this check on
+the same GPU-capable Mac:
+
+```bash
+python3.12 tests/dist/smoke_macos.py --gguf
+# For --no-gguf builds, omit --gguf.
+```
+
+The check copies the compiled distribution into a temporary path containing
+spaces, loads its native Metal libraries with host library overrides removed,
+initializes the embedded shaders, starts `launcher` from an unrelated working
+directory, and checks MPS selection through the compiled settings API. It
+uses an isolated config and port, changes no staged release files and
+downloads no models. To check an extracted archive, add
+`--root /path/to/fox-reader`.
+
+Before publishing the same archive, exercise real models on an M1 running
+macOS 14 and a newer Apple Silicon Mac: classic OCR, bubble detection,
+Text Seg, a GGUF translator and PaddleOCR-VL. Confirm MPS/Metal execution,
+then select CPU in settings, restart and check that CPU inference works.
+Include model unload/reload and a page large enough to expose memory issues.
+Available unified memory still limits which models and context sizes fit.
+
+`.github/workflows/build-macos.yml` builds both GGUF and `--no-gguf`
+variants and runs the relocated smoke test. Register a self-hosted runner
+with labels `self-hosted`, `macOS`, `ARM64`, `metal`, install the base tools
+above, and ensure the runner process can use the GPU. Hosted Mac VMs may not
+expose MPS/Metal and are insufficient for these checks.
+
+Set repository Actions variable `FOX_MACOS_RUNNER_ENABLED` to `true` to
+include the Mac job in **Build Executables**. Until enabled, it is skipped
+and existing builds run normally. Its artifacts enter the existing release
+collector along with Windows/Linux artifacts. **Build macOS ARM64** can also
+be dispatched manually; artifacts from that separate run are available for
+download but are not automatically merged into another run's release.
 
 ### CPU build (no GPU needed)
 
@@ -270,7 +369,7 @@ python3 packaging/build.py --device cpu
 **Windows (CUDA 12.9):**
 
 ```powershell
-python packaging/build.py --device cu129_win
+python packaging/build.py --device cu129
 ```
 
 **Linux (CUDA 12.9):**
@@ -285,7 +384,7 @@ python3 packaging/build.py --device cu129
 python3 packaging/build.py --device cu118
 ```
 
-### Useful variants (append to any command above)
+### Useful variants for Windows / Linux
 
 ```bash
 # Rebuild from scratch (fixes most "it worked yesterday" states)
@@ -315,6 +414,10 @@ The finished archive lands in `dist/`, e.g.
 `dist/fox-reader-v0.1.0-cpu-gguf-windows-x64.zip` /
 `dist/fox-reader-v0.1.0-cpu-gguf-linux-x64.tar.gz`, next to a
 `dist/SHA256SUMS.txt` listing its SHA-256.
+
+Mac builds also accept `--clean`, `--keep-venv`, `--skip-frontend`,
+`--deep-compile`, `--split-bin` and `--no-gguf`. CPU baseline, OpenBLAS,
+CUDA and HIP tuning options are for the existing Windows/Linux variants.
 
 ### If the build stops with an error
 
@@ -382,6 +485,8 @@ Written on every build, split or not, in the format `sha256sum -c` reads:
 cd dist && sha256sum -c SHA256SUMS.txt
 ```
 
+On macOS, use `shasum -a 256 -c SHA256SUMS.txt` instead.
+
 The plain lines cover the files as they are on disk. The `#` line — which
 `sha256sum -c` skips — carries the digest of the **joined** archive, which
 is not a file any more, so you can still check the result of rejoining:
@@ -417,7 +522,7 @@ gh attestation verify <file> --repo iamokish/foxreader
 
 | Flag | Effect |
 |---|---|
-| `--device {cpu,macos,cu118,cu126,cu129,cu129_win,cu130,rocm71,rocm72}` | Which PyTorch to bundle (default `cpu`) |
+| `--device {cpu,macos,cu118,cu126,cu129,cu130,rocm71,rocm72}` | Which PyTorch to bundle (default `macos` on Mac, `cpu` elsewhere) |
 | `--no-gguf` | Skip the llama.cpp translator backend entirely |
 | `--gguf-device DEVICE` | Build llama.cpp for another device than `--device` |
 | `--openblas {auto,download,off}` | OpenBLAS for the CPU backend (`auto` = system, else download) |
@@ -466,3 +571,7 @@ translation works, on any machine.
 | A downloaded `.zip.001` will not open | It is one part of a split archive. Get every part and join them first — see [4a](#4a-splitting-a-big-archive---split-bin) |
 | Rebuild behaves oddly | Add `--clean` and build again |
 | GGUF compile problems you don't need | Add `--no-gguf` — builds everything else, skips llama.cpp |
+| Mac interpreter reports `x86_64` | Use native ARM64 Python 3.12 and a terminal running without Rosetta |
+| macOS version or bundled library exceeds the target | The release floor is macOS 14.0; build on 14+ with dependencies supporting that floor, rather than raising the target for one build host |
+| MPS/Metal probe fails | Build on an Apple Silicon Mac with GPU access; virtual runners without Metal cannot validate this build |
+| `xcrun` cannot find Apple Clang or the SDK | Run `xcode-select --install` and select the installed Apple developer tools |

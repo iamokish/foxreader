@@ -190,3 +190,61 @@ class TestDevice:
             B.getBubbleModel(weights, device="cpu")
         with pytest.raises(B.BubbleUnavailable):
             B.getBubbleModel(weights, device="cpu")
+
+
+class TestMetalNMS:
+    @pytest.mark.parametrize("compiled_available", [True, False])
+    def test_metal_boxes_use_cpu_nms_and_return_indices_to_metal(self, monkeypatch, compiled_available):
+        """No MPS device needed: fail any attempt to dispatch NMS on Metal."""
+        from types import SimpleNamespace
+
+        import torch
+        import torchvision.ops
+
+        B = _fresh_bubble()
+        boxes = torch.tensor([[0., 0., 10., 10.], [1., 1., 9., 9.], [20., 20., 25., 25.]])
+        scores = torch.tensor([0.9, 0.8, 0.7])
+        mps = torch.device("mps")
+        returned_to = []
+        fallback = B._torch_nms
+
+        class Indices:
+            def __init__(self, values):
+                self.values = values
+
+            def to(self, device):
+                returned_to.append(device)
+                return self.values
+
+        def cpu_nms(got_boxes, got_scores, threshold):
+            assert got_boxes.device.type == got_scores.device.type == "cpu"
+            return Indices(fallback(got_boxes, got_scores, threshold))
+
+        def compiled(got_boxes, got_scores, threshold):
+            assert got_boxes.device.type == got_scores.device.type == "cpu"
+            if not compiled_available:
+                raise RuntimeError("torchvision extension unavailable")
+            return cpu_nms(got_boxes, got_scores, threshold)
+
+        monkeypatch.setattr(torchvision.ops, "nms", compiled)
+        monkeypatch.setattr(B, "_torch_nms", cpu_nms)
+        kept = B._nms_boxes(
+            SimpleNamespace(device=mps, cpu=lambda: boxes),
+            SimpleNamespace(device=mps, cpu=lambda: scores),
+            0.5,
+        )
+        assert kept.tolist() == [0, 2]
+        assert returned_to == [mps]
+
+    def test_native_metal_nms_matches_cpu(self):
+        import torch
+
+        if not torch.backends.mps.is_available():
+            pytest.skip("requires an Apple GPU")
+        B = _fresh_bubble()
+        boxes = torch.tensor([[0., 0., 10., 10.], [1., 1., 9., 9.], [20., 20., 25., 25.]])
+        scores = torch.tensor([0.9, 0.8, 0.7])
+        expected = B._nms_boxes(boxes, scores, 0.5)
+        actual = B._nms_boxes(boxes.to("mps"), scores.to("mps"), 0.5)
+        assert actual.device.type == "mps"
+        assert torch.equal(actual.cpu(), expected)

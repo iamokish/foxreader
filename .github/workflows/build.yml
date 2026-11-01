@@ -16,8 +16,8 @@ jobs:
   # One job per (OS, variant). Every job builds natively on its runner via
   # packaging/build.py; CUDA jobs install exactly their pinned toolkit first.
   #
-  # To enable a variant later, uncomment its line -- nothing else changes.
-  # Active today: CPU+gguf on Linux and Windows, CU118+gguf on Windows.
+  # Active variants: CPU and CUDA 11.8/12.6/12.9/13.0 on Linux and Windows,
+  # each with and without GGUF. The separate Mac job is enabled by a variable.
   #
   # No CU121 entry: pyproject.toml has no cu121 extra and build.py rejects
   # unknown --device values, so CU121 needs a pyproject change first.
@@ -50,11 +50,11 @@ jobs:
           - { name: cu126-no-gguf-linux, os: ubuntu-24.04,   device: cu126,     cuda: "12.6.0", gcc: "13", extra: "--no-gguf" }
           - { name: cu126-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "" }
           - { name: cu126-no-gguf-windows,  os: windows-latest, device: cu126,     cuda: "12.6.0", gcc: "",   extra: "--no-gguf" }
-          # Windows uses the cu129_win torch extra (a different PyPI index); Linux uses cu129. Same CUDA toolkit either way.
+          # cu129 selects platform-specific torch versions from the same CUDA 12.9 index.
           - { name: cu129-gguf-linux,    os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "" }
           - { name: cu129-no-gguf-linux, os: ubuntu-24.04,   device: cu129,     cuda: "12.9.0", gcc: "13", extra: "--no-gguf" }
-          - { name: cu129-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "" }
-          - { name: cu129-no-gguf-windows,  os: windows-latest, device: cu129_win, cuda: "12.9.0", gcc: "",   extra: "--no-gguf" }
+          - { name: cu129-gguf-windows,  os: windows-latest, device: cu129,     cuda: "12.9.0", gcc: "",   extra: "" }
+          - { name: cu129-no-gguf-windows,  os: windows-latest, device: cu129,     cuda: "12.9.0", gcc: "",   extra: "--no-gguf" }
           - { name: cu130-gguf-linux,    os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "" }
           - { name: cu130-no-gguf-linux, os: ubuntu-24.04,   device: cu130,     cuda: "13.0.0", gcc: "14", extra: "--no-gguf" }
           - { name: cu130-gguf-windows,  os: windows-latest, device: cu130,     cuda: "13.0.0", gcc: "",   extra: "" }
@@ -300,3 +300,13 @@ jobs:
           name: parts-${{ matrix.name }}
           path: dist/fox-reader-*.[0-9][0-9][0-9]
           if-no-files-found: error
+
+  # Enable after registering a GPU-capable Apple Silicon self-hosted runner.
+  # The existing CPU/CUDA matrix and steps above are deliberately unchanged.
+  macos:
+    if: vars.FOX_MACOS_RUNNER_ENABLED == 'true'
+    uses: ./.github/workflows/build-macos.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write

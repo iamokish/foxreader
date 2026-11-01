@@ -557,6 +557,23 @@ def find_compiler(*, allow_download: bool = True, python: Path | None = None,
     ``max_msc_ver`` asks MSVC for a toolset below that ``_MSC_VER``, for a caller
     whose real compiler -- nvcc -- will not accept a newer one.
     """
+    if platform.system() == "Darwin":
+        # Apple's selected SDK/Clang must agree across launcher, Nuitka and GGUF.
+        # Do not accidentally select a Homebrew gcc before Apple's clang.
+        import macos
+
+        try:
+            env = os.environ.copy()
+            env.update(macos.preflight())
+        except macos.MacOSBuildError as exc:
+            raise ToolchainError(str(exc)) from exc
+        compiler = Compiler("clang", Path(env["CC"]), "Apple Clang (arm64)", env=env)
+        compiler.target = _dumpmachine(compiler)
+        reason = _verify(compiler)
+        if reason:
+            raise ToolchainError(f"Apple Clang {reason}")
+        return compiler
+
     finders = (
         [lambda: _find_msvc(max_msc_ver=max_msc_ver),
          lambda: _find_on_path("clang", "clang"), lambda: _find_on_path("gcc", "gcc"),
@@ -638,6 +655,12 @@ def find_compiler(*, allow_download: bool = True, python: Path | None = None,
 # ── Compiling ─────────────────────────────────────────────────────────────────
 
 def _command(compiler: Compiler, source: Path, out: Path, scratch: Path) -> list[str]:
+    if platform.system() == "Darwin":
+        import macos
+
+        return [str(compiler.path), "-O2", "-Wall", "-Wextra", "-DNDEBUG",
+                "-arch", "arm64", f"-mmacosx-version-min={macos.DEPLOYMENT_TARGET}",
+                str(source), "-o", str(out)]
     if compiler.kind == "msvc":
         return [
             str(compiler.path),

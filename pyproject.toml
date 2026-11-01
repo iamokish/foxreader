@@ -72,12 +72,13 @@ cu126 = [
 ]
 # CUDA 12.9
 cu129 = [
-    "torch==2.13.0",
-    "torchvision==0.28.0",
-]
-cu129_win = [
-    "torch>=2.7.1",
-    "torchvision>=0.22.1",
+    # Linux
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+
+    # Windows
+    "torch>=2.7.1 ; sys_platform == 'win32'",
+    "torchvision>=0.22.1 ; sys_platform == 'win32'",
 ]
 # CUDA 13.0
 cu130 = [
@@ -174,7 +175,6 @@ conflicts = [
         { extra = "cu118" },
         { extra = "cu126" },
         { extra = "cu129" },
-        { extra = "cu129_win" },
         { extra = "cu130" },
         { extra = "cu132" },
         { extra = "rocm71" },
@@ -232,8 +232,7 @@ torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu118", extra = "cu118", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu126", extra = "cu126", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system != 'Darwin' and platform_system != 'Windows'" },
-    { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
+    { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu132", extra = "cu132", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },
@@ -244,8 +243,7 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu118", extra = "cu118", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu126", extra = "cu126", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system != 'Darwin' and platform_system != 'Windows'" },
-    { index = "pytorch-cu129", extra = "cu129_win", marker = "platform_system == 'Windows'" },
+    { index = "pytorch-cu129", extra = "cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { index = "pytorch-cu130", extra = "cu130", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-cu132", extra = "cu132", marker = "platform_system != 'Darwin'" },
     { index = "pytorch-rocm71", extra = "rocm71", marker = "platform_system == 'Linux'" },

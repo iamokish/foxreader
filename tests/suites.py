@@ -292,11 +292,11 @@ BACKEND = Domain(
 )
 
 # ── the build: the pipeline, and what it produces ─────────────────────────────
-# No pytest module of its own: a build cannot be exercised by importing it. The
-# static half lives in test_build.py, which reads packaging/build.py without
-# running it; the rest is these scripts, which need something already built.
+# Static checks live in test_build.py; Mac packaging helpers have focused unit
+# tests. The live scripts need an already compiled distribution.
 BUILD = Domain(
     name="build",
+    modules=("test_macos_build", "test_llamacpp_macos"),
     scripts=(
         Script(
             path="dist/cvcheck.py",
@@ -355,6 +355,11 @@ BUILD = Domain(
         ),
     ),
     helpers=(
+        Helper(
+            path="dist/smoke_macos.py",
+            why="Mac CI entry point with explicit stage/GGUF options; needs native Apple Silicon "
+                "and a working MPS/Metal GPU",
+        ),
         Helper(
             path="dist/hold_lock.py",
             why="holds .fox-reader.lock the way launcher.c does, for a peer-launcher "
