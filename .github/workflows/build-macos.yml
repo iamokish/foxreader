@@ -4,12 +4,14 @@ on:
   workflow_call:
   workflow_dispatch:
 
-# Hosted macOS VMs may not expose Metal. Use a dedicated Apple Silicon runner
-# with a working GPU, tagged "metal", to validate both Torch MPS and llama.cpp.
+# Standard GitHub-hosted Apple Silicon runner. GPU access is not required to
+# compile portable MPS/Metal libraries; absent GPU execution is reported by the
+# checks, while missing/broken backends remain build failures.
 jobs:
   build-macos:
-    runs-on: [self-hosted, macOS, ARM64, metal]
-    timeout-minutes: 180
+    runs-on: macos-15
+    env:
+      FOX_BUILD_ALLOW_NO_GPU: "1"
     permissions:
       contents: read
       id-token: write
@@ -57,7 +59,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Build native distribution
+      - name: Build portable Apple Silicon distribution
         run: python packaging/build.py --device macos --skip-frontend --split-bin 1000 ${{ matrix.extra }}
 
       - name: Smoke test relocated distribution

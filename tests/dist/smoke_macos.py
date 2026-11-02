@@ -1,12 +1,13 @@
-"""Run a relocated Mac distribution on real Apple Silicon, without model downloads.
+"""Run a relocated ARM64 Mac distribution without model downloads.
 
 Called by the macOS build workflow. Use --gguf for the Metal GGUF variant.
 Only the temporary copy is modified; the staged release remains untouched.
+FOX_BUILD_ALLOW_NO_GPU=1 permits a host that exposes no GPU; available GPUs
+must still pass their live checks.
 """
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import os
 import platform
@@ -21,42 +22,52 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+PACKAGING = Path(__file__).resolve().parents[2] / "packaging"
+sys.path.insert(0, str(PACKAGING))
 
-def _metal_smoke(root: Path) -> None:
-    libdir = root / "bin" / "llama_cpp" / "lib"
-    # Keep both handles alive. Checking libllama alone does not prove the
-    # separately built Metal library or its embedded shaders work.
-    llama = ctypes.CDLL(str(libdir / "libllama.dylib"))
-    metal = ctypes.CDLL(str(libdir / "libggml-metal.dylib"))
-    base = ctypes.CDLL(str(libdir / "libggml-base.dylib"))
-    registry = metal.ggml_backend_metal_reg
-    registry.argtypes = []
-    registry.restype = ctypes.c_void_p
-    device_count = base.ggml_backend_reg_dev_count
-    device_count.argtypes = [ctypes.c_void_p]
-    device_count.restype = ctypes.c_size_t
-    metal_registry = registry()
-    if not metal_registry or not device_count(metal_registry):
-        raise RuntimeError("the relocated Metal backend found no usable Apple GPU")
-    initialize = metal.ggml_backend_metal_init
-    initialize.argtypes = []
-    initialize.restype = ctypes.c_void_p
-    release = base.ggml_backend_free
-    release.argtypes = [ctypes.c_void_p]
-    release.restype = None
-    backend = initialize()
-    if not backend:
-        raise RuntimeError("the relocated Metal backend could not initialize its embedded shaders")
-    release(backend)
-    # This also catches a mismatched libllama beside otherwise valid ggml libs.
-    initialize_llama = llama.llama_backend_init
-    initialize_llama.argtypes = []
-    initialize_llama.restype = None
-    initialize_llama()
-    free_llama = llama.llama_backend_free
-    free_llama.argtypes = []
-    free_llama.restype = None
-    free_llama()
+import llamacpp  # noqa: E402
+import macos  # noqa: E402
+
+
+def _metal_smoke(root: Path, env: dict[str, str]) -> dict:
+    # The installed-package and relocated-library checks share one probe. It
+    # always checks exported APIs, embedded source and CPU initialization, and
+    # runs Metal when the framework reports a device. The subprocess runs in
+    # a fresh directory with build-host library/resource overrides removed.
+    return llamacpp.run_metal_probe(
+        Path(sys.executable), env=env, libdir=root / "bin" / "llama_cpp" / "lib",
+    )
+
+
+def _torch_smoke(root: Path, env: dict[str, str], scratch: Path) -> dict:
+    # Probe the bundled torch through the compiled entry point. A missing
+    # torch library must not pass merely because the app's device discovery
+    # catches ImportError and offers CPU-only settings.
+    result = subprocess.run(
+        [str(root / "bin" / "fox-reader"), "--verify-macos-runtime"],
+        cwd=scratch, env=env, capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"the compiled Torch smoke failed (exit {result.returncode}):\n"
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    try:
+        state = json.loads(result.stdout)
+    except ValueError as exc:
+        raise RuntimeError(f"the compiled Torch smoke returned invalid output: {result.stdout}") from exc
+    if (not isinstance(state, dict) or state.get("mps_built") is not True or state.get("cpu_ok") is not True
+            or not isinstance(state.get("mps_available"), bool)
+            or not isinstance(state.get("gpu_available"), bool)):
+        raise RuntimeError(f"the compiled Torch smoke did not verify its MPS build and CPU operation: {state}")
+    if state["gpu_available"] != state["mps_available"]:
+        raise RuntimeError(f"the compiled Torch smoke's MPS availability disagrees with Apple's GPU probe: {state}")
+    if state["mps_available"]:
+        if state.get("mps_ok") is not True:
+            raise RuntimeError(f"the compiled Torch smoke did not exercise its available MPS device: {state}")
+    elif not macos.allow_no_gpu(env):
+        raise RuntimeError("the compiled Torch smoke found no usable Apple GPU")
+    return state
 
 
 def _get(base: str, path: str, *, timeout: float = 5) -> dict:
@@ -64,6 +75,50 @@ def _get(base: str, path: str, *, timeout: float = 5) -> dict:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(f"{base}{path}", timeout=timeout) as response:
         return json.load(response)
+
+
+def _clean_env() -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("DYLD_", "PYTHON", "FOX_READER_", "GGML_"))
+           and key != "LLAMA_CPP_LIB_PATH"}
+    env["FOX_READER_NO_BROWSER"] = "1"
+    env["HF_HUB_OFFLINE"] = "1"
+    return env
+
+
+def _check_devices(devices: dict, *, mps_available: bool) -> None:
+    """Compare UI placement with the independent compiled Torch smoke result."""
+    actual_mps = any(option.get("id") == "mps" and option.get("available")
+                     for option in devices["options"])
+    if actual_mps != mps_available:
+        raise RuntimeError(f"the compiled settings API disagrees with Torch's MPS probe: {devices}")
+    expected = "mps" if mps_available else "cpu"
+    if not any(option.get("id") == expected and option.get("available") for option in devices["options"]):
+        raise RuntimeError(f"the compiled backend has no available {expected} option: {devices}")
+    if any(devices["resolved"].get(slot) != expected for slot in ("paddleocr", "bubble", "textseg")):
+        raise RuntimeError(f"the compiled Torch consumers did not select {expected} by default: {devices}")
+
+
+def _write_summary(env: dict[str, str], *, torch_state: dict, metal_state: dict | None) -> None:
+    summary = env.get("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    mps = "Passed" if torch_state["mps_available"] else "Not run: no GPU exposed by this runner"
+    if metal_state is None:
+        metal_libraries = metal_execution = "Not included (--no-gguf)"
+    else:
+        metal_libraries = "Passed: library loading, embedded source, CPU initialization"
+        metal_execution = "Passed" if metal_state["initialized"] else "Not run: no GPU exposed by this runner"
+    with Path(summary).open("a", encoding="utf-8") as output:
+        output.write(
+            "### macOS runtime validation\n\n"
+            "| Check | Result |\n|---|---|\n"
+            "| Relocated launcher and settings API | Passed |\n"
+            "| Compiled Torch MPS support and CPU tensor operation | Passed |\n"
+            f"| MPS tensor execution | {mps} |\n"
+            f"| llama.cpp package checks | {metal_libraries} |\n"
+            f"| Metal initialization and shader compilation | {metal_execution} |\n\n"
+        )
 
 
 def _run(root: Path, *, gguf: bool, scratch: Path) -> None:
@@ -76,19 +131,9 @@ def _run(root: Path, *, gguf: bool, scratch: Path) -> None:
         f"host: 127.0.0.1\nport: {port}\nmtl_dir: models\ntheme: dark\nlayout: basic\n",
         encoding="utf-8",
     )
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("DYLD_", "PYTHON", "FOX_READER_", "GGML_"))
-           and key != "LLAMA_CPP_LIB_PATH"}
-    env["FOX_READER_NO_BROWSER"] = "1"
-    env["HF_HUB_OFFLINE"] = "1"
-    if gguf:
-        # dyld reads some environment variables at process startup. A fresh
-        # interpreter prevents host library/resource overrides hiding a broken
-        # relocated library or missing embedded shader source.
-        subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--root", str(root), "--native-only"],
-            cwd=scratch, env=env, check=True, timeout=120,
-        )
+    env = _clean_env()
+    torch_state = _torch_smoke(root, env, scratch)
+    metal_state = _metal_smoke(root, env) if gguf else None
     base = f"http://127.0.0.1:{port}"
     log_path = scratch / "launcher.log"
     with log_path.open("wb") as log:
@@ -119,13 +164,12 @@ def _run(root: Path, *, gguf: bool, scratch: Path) -> None:
                 raise RuntimeError("the relocated backend did not become ready in 120 seconds")
 
             devices = _get(base, "/api/settings", timeout=15)["devices"]
-            if not any(option.get("id") == "mps" and option.get("available")
-                       for option in devices["options"]):
-                raise RuntimeError(f"the compiled backend cannot use MPS: {devices}")
-            if any(devices["resolved"].get(slot) != "mps" for slot in ("paddleocr", "bubble", "textseg")):
-                raise RuntimeError(f"the compiled Torch consumers did not select MPS by default: {devices}")
-            print("macOS smoke passed: relocated launcher, compiled backend, MPS device settings"
-                  + (", Metal shader initialization" if gguf else ""))
+            _check_devices(devices, mps_available=torch_state["mps_available"])
+            checked = "MPS execution and settings" if torch_state["mps_available"] else (
+                "CPU execution and settings; GPU execution unavailable on this host"
+            )
+            print(f"macOS smoke passed: relocated launcher, compiled backend, {checked}")
+            _write_summary(env, torch_state=torch_state, metal_state=metal_state)
         except Exception:
             print(log_path.read_text(encoding="utf-8", errors="replace"))
             raise
@@ -149,20 +193,16 @@ def _run(root: Path, *, gguf: bool, scratch: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gguf", action="store_true", help="require and initialize bundled Metal llama.cpp")
-    parser.add_argument("--native-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--gguf", action="store_true", help="verify bundled Metal llama.cpp libraries")
     parser.add_argument("--root", type=Path, default=(
         Path(__file__).resolve().parents[2] / "packaging" / "build" / "stage" / "fox-reader"
     ))
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine().lower() != "arm64":
-        parser.error("this smoke test requires native Apple Silicon macOS with a working GPU")
+        parser.error("this smoke test requires native ARM64 macOS")
     source = args.root.resolve()
     if not (source / "launcher").is_file():
         parser.error(f"no staged launcher at {source}")
-    if args.native_only:
-        _metal_smoke(source)
-        return
     with tempfile.TemporaryDirectory(prefix="fox macOS smoke ") as temporary:
         scratch = Path(temporary)
         root = scratch / "relocated Fox Reader"

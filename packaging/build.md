@@ -178,9 +178,11 @@ xcrun --sdk macosx --show-sdk-path
 
 Apple Clang and the macOS SDK are required. Metal shader source is embedded
 in llama.cpp and compiled by the destination Mac's Metal driver, so a
-separate offline `metal` shader compiler is not required. The build checks
-for a working MPS/Metal device; a VM without GPU access cannot validate a
-release build.
+separate offline `metal` shader compiler is not required. Local builds check
+GPU execution by default. GitHub-hosted ARM64 builds explicitly allow absent
+GPU hardware and still validate the MPS-enabled Torch wheel, Metal libraries,
+embedded shader source, CPU backend and standalone distribution. GPU
+execution remains untested when the runner exposes no GPU.
 
 ---
 
@@ -307,15 +309,16 @@ but do not identify a publisher: downloaded builds may need approval in
 System Settings → Privacy & Security. Developer ID signing and notarization
 are separate release operations requiring the publisher's credentials.
 
-Before publishing, run the [Mac distribution smoke check](#macos-release-verification)
-and inference on an M1 Mac at the minimum OS version and a newer Apple
-Silicon Mac. The fixed baseline is a compatibility target, not a claim that
-every hardware and OS combination has been tested.
+The [Mac distribution smoke check](#macos-release-verification) runs in CI.
+Hardware verification additionally requires inference on an M1 Mac at the
+minimum OS version and a newer Apple Silicon Mac. The fixed baseline is a
+compatibility target, not a claim that every hardware and OS combination
+has been tested.
 
 ### macOS release verification
 
-The build tests MPS and Metal separately. After building, run this check on
-the same GPU-capable Mac:
+The build tests MPS and Metal separately. After a local build, run this check
+on the same GPU-capable Mac:
 
 ```bash
 python3.12 tests/dist/smoke_macos.py --gguf
@@ -324,31 +327,54 @@ python3.12 tests/dist/smoke_macos.py --gguf
 
 The check copies the compiled distribution into a temporary path containing
 spaces, loads its native Metal libraries with host library overrides removed,
-initializes the embedded shaders, starts `launcher` from an unrelated working
-directory, and checks MPS selection through the compiled settings API. It
-uses an isolated config and port, changes no staged release files and
-downloads no models. To check an extracted archive, add
-`--root /path/to/fox-reader`.
+starts `launcher` from an unrelated working directory, and checks device
+selection through the compiled settings API. With a GPU, it initializes
+the embedded shaders and checks MPS selection. Without a GPU, the hosted
+workflow verifies the Metal library and embedded source, initializes the CPU
+backend, and checks that the compiled app correctly selects CPU. It reports
+GPU execution as untested. Both paths use an isolated config and port,
+change no staged release files and download no models. To check an extracted
+archive, add `--root /path/to/fox-reader`.
 
-Before publishing the same archive, exercise real models on an M1 running
-macOS 14 and a newer Apple Silicon Mac: classic OCR, bubble detection,
+For hardware verification, exercise the same archive with real models on an
+M1 running macOS 14 and a newer Apple Silicon Mac: classic OCR, bubble detection,
 Text Seg, a GGUF translator and PaddleOCR-VL. Confirm MPS/Metal execution,
 then select CPU in settings, restart and check that CPU inference works.
 Include model unload/reload and a page large enough to expose memory issues.
 Available unified memory still limits which models and context sizes fit.
 
-`.github/workflows/build-macos.yml` builds both GGUF and `--no-gguf`
-variants and runs the relocated smoke test. Register a self-hosted runner
-with labels `self-hosted`, `macOS`, `ARM64`, `metal`, install the base tools
-above, and ensure the runner process can use the GPU. Hosted Mac VMs may not
-expose MPS/Metal and are insufficient for these checks.
+The workflow sets `FOX_BUILD_ALLOW_NO_GPU=1` to allow only absent GPU hardware.
+It does not disable Metal or MPS in the archive, change the M1 CPU baseline,
+or accept broken libraries. Missing Metal support, missing embedded shaders,
+CPU initialization failures and GPU initialization failures on an available
+device still stop the build. Without this variable, local build and smoke
+verification continue to require working GPU execution.
 
-Set repository Actions variable `FOX_MACOS_RUNNER_ENABLED` to `true` to
-include the Mac job in **Build Executables**. Until enabled, it is skipped
-and existing builds run normally. Its artifacts enter the existing release
-collector along with Windows/Linux artifacts. **Build macOS ARM64** can also
-be dispatched manually; artifacts from that separate run are available for
-download but are not automatically merged into another run's release.
+### Build macOS releases on GitHub
+
+You do not need to own a Mac or register a self-hosted runner.
+`.github/workflows/build-macos.yml` uses GitHub's hosted **`macos-15` ARM64**
+runner, builds both GGUF and `--no-gguf` variants, and runs the relocated
+smoke test. The runner's macOS version does not raise the release's macOS
+14.0 deployment floor.
+
+1. Push the workflow and packaging changes to your repository's default branch.
+2. Open **Actions → Build macOS ARM64 → Run workflow**, select the branch,
+   and start a Mac-only build. Download its artifacts from the completed run.
+3. For a full release, push a new Git tag for the intended release commit.
+   **Build Executables** builds Windows, Linux and Mac variants; after the
+   whole tagged run succeeds, **Release** publishes their artifacts together.
+
+No repository enablement variable is needed. The former
+`FOX_MACOS_RUNNER_ENABLED` variable is no longer read and can be removed if
+you created it. A manually dispatched **Build macOS ARM64** run provides
+artifacts for download; it does not automatically publish a full release.
+
+GitHub-hosted macOS virtualization may expose no MPS/Metal device. The build
+logs distinguish packaged backend checks from GPU execution checks, so a
+successful hosted run does not claim that GPU inference was exercised.
+See [GitHub-hosted runner documentation](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+for runner availability and usage limits.
 
 ### CPU build (no GPU needed)
 
@@ -541,6 +567,7 @@ Environment (advanced):
 | Variable | Effect |
 |---|---|
 | `FOX_BUILD_KEEP_DUP_LIBS=1` | Ship `bin/` as Nuitka produced it (no duplicate-`.so` slimming) |
+| `FOX_BUILD_ALLOW_NO_GPU=1` | Mac builds and smoke tests: allow absent GPU hardware while retaining backend, embedded-source, CPU and bundle checks; set by hosted Mac CI |
 
 ---
 
@@ -573,5 +600,6 @@ translation works, on any machine.
 | GGUF compile problems you don't need | Add `--no-gguf` — builds everything else, skips llama.cpp |
 | Mac interpreter reports `x86_64` | Use native ARM64 Python 3.12 and a terminal running without Rosetta |
 | macOS version or bundled library exceeds the target | The release floor is macOS 14.0; build on 14+ with dependencies supporting that floor, rather than raising the target for one build host |
-| MPS/Metal probe fails | Build on an Apple Silicon Mac with GPU access; virtual runners without Metal cannot validate this build |
+| MPS/Metal probe reports no GPU in a local VM | Use `FOX_BUILD_ALLOW_NO_GPU=1` only when GPU hardware is absent; hosted CI sets it automatically and reports GPU execution untested |
+| Metal or MPS initialization fails despite available GPU hardware | Inspect the probe error; allowing absent GPUs does not bypass an actual initialization failure |
 | `xcrun` cannot find Apple Clang or the SDK | Run `xcode-select --install` and select the installed Apple developer tools |

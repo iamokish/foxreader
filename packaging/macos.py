@@ -15,6 +15,7 @@ from pathlib import Path
 
 # The locked torch/torchvision wheels require macosx_14_0_arm64.
 DEPLOYMENT_TARGET = "14.0"
+ALLOW_NO_GPU_ENV = "FOX_BUILD_ALLOW_NO_GPU"
 _SYSTEM_ROOTS = ("/usr/lib/", "/System/Library/")
 _MACHO_MAGIC = {
     b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
@@ -26,6 +27,15 @@ _MACHO_MAGIC = {
 
 class MacOSBuildError(RuntimeError):
     """The build cannot produce a portable Apple Silicon distribution."""
+
+
+def allow_no_gpu(env: dict[str, str] | None = None) -> bool:
+    """Opt in to checking compiled GPU support without executing it on a GPU.
+
+    Used by hosted ARM64 CI. This changes verification only, never what gets
+    compiled or packaged. A detected GPU must still pass its execution checks.
+    """
+    return (env if env is not None else os.environ).get(ALLOW_NO_GPU_ENV) == "1"
 
 
 def _run(cmd: list[str]) -> str:
@@ -75,16 +85,25 @@ def preflight() -> dict[str, str]:
 
 
 _VENV_PROBE = """\
-import json, platform, struct, sys
+import ctypes, json, platform, struct, sys
 import torch
+if (torch.ones(2) + 1).tolist() != [2.0, 2.0]:
+    raise RuntimeError('Torch CPU operation failed')
+metal = ctypes.CDLL('/System/Library/Frameworks/Metal.framework/Metal')
+default_device = metal.MTLCreateSystemDefaultDevice
+default_device.argtypes = []
+default_device.restype = ctypes.c_void_p
+gpu_available = bool(default_device())
 available = torch.backends.mps.is_available()
 if available:
     value = (torch.ones(2, device='mps') + 1).cpu().tolist()
-    assert value == [2.0, 2.0], value
+    if value != [2.0, 2.0]:
+        raise RuntimeError('Torch MPS operation failed')
 print(json.dumps({
     'machine': platform.machine(), 'bits': struct.calcsize('P') * 8,
     'python': list(sys.version_info[:2]), 'mps_built': torch.backends.mps.is_built(),
     'mps_available': available,
+    'gpu_available': gpu_available,
 }))
 """
 
@@ -105,7 +124,15 @@ def verify_environment(python: Path, env: dict[str, str]) -> None:
     if not state.get("mps_built"):
         raise MacOSBuildError("the macos build requires an MPS-enabled torch wheel")
     if not state.get("mps_available"):
-        raise MacOSBuildError("MPS is unavailable: validate this build on a physical Apple Silicon Mac")
+        if state.get("gpu_available") is not False:
+            raise MacOSBuildError("MPS is unavailable despite a present or unverified Metal GPU")
+        if not allow_no_gpu(env):
+            raise MacOSBuildError(
+                "MPS is unavailable: use a Mac with GPU access for execution checks, "
+                f"or set {ALLOW_NO_GPU_ENV}=1 on a builder without a GPU"
+            )
+        print("      MPS is built into Torch; this host exposes no MPS device. "
+              "CPU execution checked; MPS GPU execution not tested.")
     # Nuitka inherits its deployment target from Python itself. An interpreter
     # built for a newer macOS cannot produce our 14.0 release, even with env set.
     _inspect(python.resolve())

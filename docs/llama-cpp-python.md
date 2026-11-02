@@ -48,7 +48,7 @@ list that cannot be satisfied is a build failure, never a downgrade.
 | `--device` | Torch index | Torch | Needs toolkit | CI runner |
 |---|---|---|---|---|
 | `cpu` | CPU | 2.13.0 | none | ubuntu-24.04 / windows-latest |
-| `macos` | PyPI | 2.13.0 | Apple Clang + macOS SDK, working Metal GPU | self-hosted Apple Silicon, macOS 14+ |
+| `macos` | PyPI | 2.13.0 | Apple Clang + macOS SDK | GitHub-hosted `macos-15` ARM64 |
 | `cu118` | cu118 | **2.7.1** | CUDA 11.8 + gcc-11 | ubuntu-22.04 / windows-latest |
 | `cu126` | cu126 | 2.13.0 | CUDA 12.6 + gcc-13 | ubuntu-24.04 / windows-latest |
 | `cu129` (Linux) | cu129 | 2.13.0 | CUDA 12.9 + gcc-13 | ubuntu-24.04 |
@@ -124,11 +124,24 @@ selection while avoiding a separate `.metallib` file or an offline Metal
 compiler requirement. CPU fallback kernels retain the M1 baseline even when
 the build host has newer ARM instructions.
 
-The installer verifies that the Metal backend is registered and supports GPU
-offload, then initializes it to exercise embedded shader compilation. A
-missing GPU, CPU-only library or shader failure stops the build. Torch's MPS
-backend is checked separately; Torch MPS availability alone does not prove
-that llama.cpp supports Metal.
+With GPU hardware available, the installer verifies that the Metal backend
+supports GPU offload and initializes it to exercise embedded shader
+compilation. Torch's MPS backend is checked separately; Torch MPS availability
+alone does not prove that llama.cpp supports Metal.
+
+GitHub-hosted ARM64 runners may expose no GPU. The Mac workflow sets
+`FOX_BUILD_ALLOW_NO_GPU=1` so those runners can build the same Metal-enabled
+release. Verification still loads the Metal libraries, checks their backend
+symbols and embedded shader source, and initializes the CPU backend. The
+relocated distribution must also start successfully and select the available
+device. Logs report GPU execution as untested when no GPU is present.
+
+The variable changes verification policy only; the CPU instruction baseline,
+Metal compilation flags and resulting backend support remain the same.
+Missing Metal support, missing embedded source or CPU initialization failures
+are fatal. If a GPU is available, shader and GPU initialization failures are
+also fatal. Local builds remain strict by default and require GPU execution
+unless the variable is explicitly set.
 
 The distribution builder restores the native libraries needed by ctypes,
 relocates non-system dependencies within the bundle, checks ARM64 support and
@@ -141,9 +154,11 @@ can omit llama.cpp. CPU/CUDA/HIP architecture overrides are for other build
 variants. At runtime, selecting `cpu` in Fox Reader settings still uses the
 CPU backend included in the Metal build.
 
-Build checks and a fixed baseline do not replace inference testing. Before a
-release, test the same relocated archive on an M1 Mac running macOS 14 and a
-newer Apple Silicon Mac, including GGUF translation and PaddleOCR-VL. The
+Build checks and a fixed baseline do not replace inference testing. Hardware
+verification requires testing the same relocated archive on an M1 Mac running
+macOS 14 and a newer Apple Silicon Mac, including GGUF translation and
+PaddleOCR-VL. Hosted builds can produce and publish releases without a
+personally owned Mac; they do not establish GPU inference coverage. The
 [Mac build guide](../packaging/build.md#macos-release-verification) describes
 the automated and manual checks.
 
@@ -312,6 +327,7 @@ CUDA devices, `lib/` layout intact, linked runtimes shippable.
 | CUDA build fails on MinGW (Windows) | Expected — nvcc only drives MSVC | Visual Studio Build Tools, "Desktop development with C++" |
 | Rebuild behaves oddly | Stale `packaging/build/` or reused venv compiled for another device | `--clean`; installs always `--no-cache-dir` |
 | GGUF problems you don't need | — | `--no-gguf` builds everything else |
-| Metal library present but initialization fails | Missing GPU access or unusable embedded shaders | Build and validate on a native Apple Silicon Mac with a working GPU; inspect the Metal probe output |
+| No Metal GPU on a hosted runner | The VM exposes no GPU hardware | Hosted CI sets `FOX_BUILD_ALLOW_NO_GPU=1`; backend/source and CPU checks remain mandatory, GPU execution is reported untested |
+| Metal library present but initialization fails on an available GPU | Unusable embedded shaders or backend failure | Inspect the Metal probe output; allowing absent GPUs does not suppress this failure |
 | Mac binary fails on an older Apple chip | Host-specific CPU flags or stale native libraries | Rebuild with the Mac branch's fixed M1 baseline and `--clean`; do not add `-mcpu=native` |
 | Mac binary requires a newer OS than advertised | A dependency has a higher minimum OS load command | Use dependencies compatible with macOS 14; the bundle audit rejects this instead of silently raising the release floor |

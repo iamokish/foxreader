@@ -301,10 +301,8 @@ jobs:
           path: dist/fox-reader-*.[0-9][0-9][0-9]
           if-no-files-found: error
 
-  # Enable after registering a GPU-capable Apple Silicon self-hosted runner.
-  # The existing CPU/CUDA matrix and steps above are deliberately unchanged.
+  # GitHub-hosted Apple Silicon builds join the same artifact/release run.
   macos:
-    if: vars.FOX_MACOS_RUNNER_ENABLED == 'true'
     uses: ./.github/workflows/build-macos.yml
     permissions:
       contents: read

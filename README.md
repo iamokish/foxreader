@@ -133,7 +133,7 @@ uv run --extra <backend> python packaging/llamacpp.py --device <backend> --insta
 
 `<backend>` mirrors the torch extras (`cpu`, `cu129`, `rocm72`, `macos`). On CPU it looks for OpenBLAS (offers a download into `nc/`); on CUDA/ROCm it needs the matching toolkit (`nvcc` / ROCm 6.1+). Preview without installing, or install by hand (note `--no-cache-dir` is mandatory — uv's cache key ignores `CMAKE_ARGS`):
 
-On Apple Silicon, `--device macos` builds llama.cpp with Metal and Apple's Accelerate framework using native ARM64 Python and Apple Clang. It targets the M1 CPU baseline and compiles embedded Metal shader source on the destination GPU. The build requires macOS 14+ and a working Metal device; it verifies the backend instead of silently accepting a CPU-only library. See [Apple Silicon build details](docs/llama-cpp-python.md#apple-silicon-portability).
+On Apple Silicon, `--device macos` builds llama.cpp with Metal and Apple's Accelerate framework using native ARM64 Python and Apple Clang. It targets the M1 CPU baseline and compiles embedded Metal shader source on the destination GPU. Local builds validate a working Metal device by default. GitHub-hosted ARM64 runners can build the same release without exposed GPU hardware: they verify the packaged backends and report GPU execution as untested. See [Apple Silicon build details](docs/llama-cpp-python.md#apple-silicon-portability).
 
 The `auto` device choice uses MPS for Torch OCR, bubble detection and Text Seg, and Metal for GGUF translation and PaddleOCR-VL. On macOS, unsupported Torch operations may fall back to CPU; bubble suppression runs on CPU because torchvision has no MPS NMS kernel. Explicit CPU selection remains available in settings.
 
@@ -461,7 +461,7 @@ fox-reader/
 - C compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
   - Windows: VS Build Tools (“Desktop development with C++”) or MinGW-w64 (`gcc` on `PATH`; use winlibs/MSYS2 `mingw-w64-x86_64-gcc`, not MinGW.org bare `gcc`). With no compiler, the build asks Nuitka to fetch its MinGW64.
   - Linux: `gcc`/`clang` (`apt install build-essential`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
-  - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+ and a working Metal GPU.
+  - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+. Local verification requires a working GPU by default; [GitHub-hosted builds](packaging/build.md#build-macos-releases-on-github) handle runners without GPU access.
 - GPU builds: matching CUDA toolkit (`nvcc`) or ROCm 6.1+; CPU GGUF builds want OpenBLAS (`apt install libopenblas-dev` on Linux, or `--openblas download`).
 
 ### Build commands
@@ -492,6 +492,8 @@ python packaging/build.py --hip-arch gfx1100,gfx1201
 Defaults compile only `fox_reader` + entry (5–15 min); `--deep-compile` is the slow release path. Nothing targets the build machine specifically (`GGML_NATIVE=OFF`, pinned ISA, virtual GPU arches for CUDA JIT fallback and embedded Metal shader source on macOS). Archives are named `fox-reader-v{version}-{device}[-gguf[-ggufDevice]]-{platform}` (zip on Windows, tar.gz on Linux/macOS).
 
 macOS defaults to `--device macos`; Windows/Linux default to `cpu`. The Mac archive ends in `macos-arm64.tar.gz` and targets all Apple Silicon generations running macOS 14+, subject to available memory and model requirements. `--no-gguf` omits the llama.cpp backend; the x86 CPU/CUDA build flags do not apply to Mac builds. The build checks bundled ARM64 libraries, their minimum OS versions and relocatable dependencies, then ad-hoc signs them. Developer ID signing and notarization are separate release steps; see the [build guide](packaging/build.md#apple-silicon-macos-build).
+
+You do not need your own Mac to produce a release. **Actions → Build macOS ARM64 → Run workflow** builds and checks both Mac variants on GitHub's hosted ARM64 runner. Tagged **Build Executables** runs include them automatically; no self-hosted runner or repository enablement variable is needed. Hosted builds retain Torch MPS and llama.cpp Metal support, but a runner without GPU access cannot verify GPU inference.
 
 ### Slimming the Linux tree
 
@@ -539,7 +541,7 @@ run): [`packaging/build.md`](packaging/build.md).
 
 - GitHub releases: `https://github.com/iamokish/foxreader/releases`
 - Produced by `.github/workflows/build.yml` on pushed tags (or manually): successful tagged builds publish one release with all active archives and auto notes.
-- Active Windows/Linux variants: `cpu`, `cu118`, `cu126`, `cu129`, and `cu130`, each with and without GGUF. `cu129` uses the same device name on both systems; archive names retain the platform suffix. Mac variants join the release when `FOX_MACOS_RUNNER_ENABLED=true` and the Mac runner is available.
+- Active Windows/Linux variants: `cpu`, `cu118`, `cu126`, `cu129`, and `cu130`, each with and without GGUF. `cu129` uses the same device name on both systems; archive names retain the platform suffix. Both Mac variants build on GitHub-hosted ARM64 runners and join the same release automatically.
 - Pick the archive matching your OS + GPU (CPU builds run anywhere; CUDA builds need that CUDA driver; GGUF models run through the bundled llama.cpp with no toolchain needed).
 
 ## Development

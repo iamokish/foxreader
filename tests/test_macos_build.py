@@ -104,6 +104,101 @@ def test_venv_python_deployment_target_is_checked_before_nuitka(mac, monkeypatch
     assert inspected == [python.resolve()]
 
 
+def test_hosted_builder_checks_mps_wheel_and_python_without_a_gpu(mac, monkeypatch, capsys):
+    state = {"machine": "arm64", "python": [3, 12], "bits": 64,
+             "mps_built": True, "mps_available": False, "gpu_available": False}
+    monkeypatch.setattr(mac.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(state)))
+    inspected = []
+    monkeypatch.setattr(mac, "_inspect", lambda path: inspected.append(path))
+    python = Path("build-venv/bin/python")
+    mac.verify_environment(python, {"FOX_BUILD_ALLOW_NO_GPU": "1"})
+    assert inspected == [python.resolve()]
+    assert "GPU execution not tested" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", [
+    {"machine": "x86_64"}, {"python": [3, 13]}, {"mps_built": False},
+    {"gpu_available": True}, {"gpu_available": None},
+])
+def test_hosted_flag_does_not_accept_a_broken_build_environment(mac, monkeypatch, change):
+    state = {"machine": "arm64", "python": [3, 12], "bits": 64,
+             "mps_built": True, "mps_available": False, "gpu_available": False, **change}
+    monkeypatch.setattr(mac.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=json.dumps(state)))
+    with pytest.raises(mac.MacOSBuildError):
+        mac.verify_environment(Path("python"), {"FOX_BUILD_ALLOW_NO_GPU": "1"})
+
+
+def test_hosted_flag_does_not_hide_a_gpu_execution_failure(mac, monkeypatch):
+    def gpu_failure(*args, **kwargs):
+        raise mac.subprocess.CalledProcessError(1, ["python"], stderr="MPS allocation failed")
+
+    monkeypatch.setattr(mac.subprocess, "run", gpu_failure)
+    with pytest.raises(mac.MacOSBuildError, match="MPS allocation failed"):
+        mac.verify_environment(Path("python"), {"FOX_BUILD_ALLOW_NO_GPU": "1"})
+
+
+@pytest.fixture
+def entry():
+    spec = importlib.util.spec_from_file_location("fox_macos_entry_tests", PACKAGING / "fox_reader_main.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("gpu_available", [False, True])
+def test_compiled_torch_probe_exercises_the_available_devices(entry, monkeypatch, capsys, gpu_available):
+    calls = []
+    monkeypatch.setattr(entry, "_macos_gpu_available", lambda: gpu_available)
+
+    class Tensor:
+        def __add__(self, other):
+            assert other == 1
+            return self
+
+        def cpu(self):
+            return self
+
+        def tolist(self):
+            return [2.0, 2.0]
+
+    def ones(count, device="cpu"):
+        assert count == 2
+        calls.append(device)
+        return Tensor()
+
+    torch = SimpleNamespace(ones=ones, backends=SimpleNamespace(mps=SimpleNamespace(
+        is_built=lambda: True, is_available=lambda: gpu_available,
+    )))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    entry._verify_macos_runtime()
+    assert calls == (["cpu", "mps"] if gpu_available else ["cpu"])
+    assert json.loads(capsys.readouterr().out) == {
+        "mps_built": True, "mps_available": gpu_available, "cpu_ok": True, "mps_ok": gpu_available,
+        "gpu_available": gpu_available,
+    }
+
+
+def test_compiled_torch_probe_rejects_non_mps_wheel_even_on_hosted_runner(entry, monkeypatch):
+    monkeypatch.setenv("FOX_BUILD_ALLOW_NO_GPU", "1")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(backends=SimpleNamespace(mps=SimpleNamespace(
+        is_built=lambda: False,
+    ))))
+    with pytest.raises(RuntimeError, match="without MPS support"):
+        entry._verify_macos_runtime()
+
+
+def test_compiled_probe_exits_before_starting_the_app(entry, monkeypatch):
+    calls = []
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "argv", ["fox-reader", "--verify-macos-runtime"])
+    monkeypatch.setattr(entry, "_mark_frozen", lambda: None)
+    monkeypatch.setattr(entry, "_force_utf8_output", lambda: None)
+    monkeypatch.setattr(entry, "_register_dll_directories", lambda: None)
+    monkeypatch.setattr(entry, "_verify_macos_runtime", lambda: calls.append("verified"))
+    entry.main()
+    assert calls == ["verified"]
+
+
 def test_preflight_rejects_old_os(mac, monkeypatch):
     monkeypatch.setattr(mac.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(mac.platform, "machine", lambda: "arm64")
@@ -319,3 +414,117 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
         assert mac_flags == []
         assert "--clang" not in cmd
         assert ("--msvc=latest" in cmd) == (system == "Windows")
+
+
+@pytest.fixture
+def mac_smoke():
+    source = Path(__file__).resolve().parent / "dist" / "smoke_macos.py"
+    spec = importlib.util.spec_from_file_location("fox_macos_dist_smoke_tests", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_mac_smoke_removes_host_library_overrides_but_keeps_validation_policy(mac_smoke, monkeypatch):
+    monkeypatch.setenv("DYLD_LIBRARY_PATH", "/build/host/libs")
+    monkeypatch.setenv("LLAMA_CPP_LIB_PATH", "/build/host/llama.dylib")
+    monkeypatch.setenv("GGML_METAL_PATH_RESOURCES", "/build/source")
+    monkeypatch.setenv("PYTHONPATH", "/build/venv")
+    monkeypatch.setenv("FOX_READER_MODELS_DIR", "/models")
+    monkeypatch.setenv("FOX_BUILD_ALLOW_NO_GPU", "1")
+    env = mac_smoke._clean_env()
+    assert not any(name.startswith(("DYLD_", "PYTHON", "GGML_")) for name in env)
+    assert "LLAMA_CPP_LIB_PATH" not in env
+    assert "FOX_READER_MODELS_DIR" not in env
+    assert env["FOX_BUILD_ALLOW_NO_GPU"] == "1"
+    assert env["FOX_READER_NO_BROWSER"] == "1"
+    assert env["HF_HUB_OFFLINE"] == "1"
+
+
+@pytest.mark.parametrize("mps_available", [False, True])
+def test_mac_smoke_settings_must_match_independent_compiled_probe(mac_smoke, mps_available):
+    expected = "mps" if mps_available else "cpu"
+    devices = {
+        "options": [{"id": "cpu", "available": True}, {"id": "mps", "available": mps_available}],
+        "resolved": {slot: expected for slot in ("paddleocr", "bubble", "textseg")},
+    }
+    mac_smoke._check_devices(devices, mps_available=mps_available)
+    with pytest.raises(RuntimeError, match="disagrees"):
+        mac_smoke._check_devices(devices, mps_available=not mps_available)
+    devices["resolved"]["textseg"] = "cpu" if mps_available else "mps"
+    with pytest.raises(RuntimeError, match="did not select"):
+        mac_smoke._check_devices(devices, mps_available=mps_available)
+
+
+def test_mac_smoke_executes_the_relocated_torch_binary(mac_smoke, monkeypatch, tmp_path):
+    calls = []
+    state = {"mps_built": True, "mps_available": False, "gpu_available": False, "cpu_ok": True, "mps_ok": False}
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(state), stderr="")
+
+    monkeypatch.setattr(mac_smoke.subprocess, "run", run)
+    root = tmp_path / "relocated app"
+    scratch = tmp_path / "unrelated cwd"
+    env = {"FOX_BUILD_ALLOW_NO_GPU": "1"}
+    assert mac_smoke._torch_smoke(root, env, scratch) == state
+    assert calls[0][0] == [str(root / "bin" / "fox-reader"), "--verify-macos-runtime"]
+    assert calls[0][1]["cwd"] == scratch
+    assert calls[0][1]["env"] == env
+    with pytest.raises(RuntimeError, match="no usable Apple GPU"):
+        mac_smoke._torch_smoke(root, {}, scratch)
+
+
+@pytest.mark.parametrize("change", [
+    {"mps_built": False}, {"cpu_ok": False}, {"mps_available": None},
+    {"gpu_available": None}, {"gpu_available": True},
+    {"mps_available": True, "gpu_available": True, "mps_ok": False},
+])
+def test_mac_smoke_no_gpu_permission_cannot_hide_a_broken_torch_build(mac_smoke, monkeypatch, tmp_path, change):
+    state = {"mps_built": True, "mps_available": False, "gpu_available": False,
+             "cpu_ok": True, "mps_ok": False, **change}
+    monkeypatch.setattr(mac_smoke.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=json.dumps(state), stderr=""))
+    with pytest.raises(RuntimeError, match="compiled Torch smoke"):
+        mac_smoke._torch_smoke(tmp_path, {"FOX_BUILD_ALLOW_NO_GPU": "1"}, tmp_path)
+
+
+def test_mac_smoke_reuses_metal_validation_against_relocated_libraries(mac_smoke, monkeypatch, tmp_path):
+    calls = []
+    state = {"gpu_available": False, "cpu_initialized": True}
+
+    def probe(python, **kwargs):
+        calls.append((python, kwargs))
+        return state
+
+    monkeypatch.setattr(mac_smoke.llamacpp, "run_metal_probe", probe, raising=False)
+    env = {"FOX_BUILD_ALLOW_NO_GPU": "1"}
+    assert mac_smoke._metal_smoke(tmp_path, env) is state
+    assert calls == [(Path(sys.executable), {"env": env, "libdir": tmp_path / "bin" / "llama_cpp" / "lib"})]
+
+
+@pytest.mark.parametrize("gpu_available", [False, True])
+def test_mac_smoke_summary_distinguishes_validation_from_gpu_execution(mac_smoke, tmp_path, gpu_available):
+    summary = tmp_path / "summary.md"
+    mac_smoke._write_summary(
+        {"GITHUB_STEP_SUMMARY": str(summary)},
+        torch_state={"mps_available": gpu_available}, metal_state={"initialized": gpu_available},
+    )
+    text = summary.read_text(encoding="utf-8")
+    assert "embedded source, CPU initialization" in text
+    if gpu_available:
+        assert "| MPS tensor execution | Passed |" in text
+        assert "| Metal initialization and shader compilation | Passed |" in text
+        assert "Not run" not in text
+    else:
+        assert text.count("Not run: no GPU exposed") == 2
+        assert "| MPS tensor execution | Passed |" not in text
+
+
+def test_mac_smoke_summary_marks_omitted_gguf_backend(mac_smoke, tmp_path):
+    summary = tmp_path / "summary.md"
+    mac_smoke._write_summary(
+        {"GITHUB_STEP_SUMMARY": str(summary)}, torch_state={"mps_available": False}, metal_state=None,
+    )
+    assert summary.read_text(encoding="utf-8").count("Not included (--no-gguf)") == 2

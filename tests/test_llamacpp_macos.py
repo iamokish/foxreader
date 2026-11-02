@@ -120,7 +120,9 @@ def test_metal_probe_cannot_be_rescued_by_build_directory_or_external_libraries(
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         return SimpleNamespace(stdout=json.dumps({"initialized": True, "error": None, "info": "CPU Metal",
-                                                 "version": "0.3.36", "device": "Apple M1"}),
+                                                 "version": "0.3.36", "device": "Apple M1",
+                                                 "gpu_available": True, "cpu_initialized": True,
+                                                 "embedded_sources": True}),
                                stderr="", returncode=0)
 
     monkeypatch.setattr(llama.subprocess, "run", run)
@@ -150,10 +152,78 @@ def test_metal_bundle_keeps_its_ctypes_library_directory_complete(llama, monkeyp
         assert (dist / "llama_cpp" / "lib" / path.name).read_bytes() == b"package copy"
 
 
-def test_metal_probe_initializes_and_frees_both_registered_backends(llama, monkeypatch, capsys, tmp_path):
-    """Execute the subprocess code against the pinned ABI, catching ctypes drift."""
+@pytest.mark.parametrize("allowed", [None, "0", "1"])
+def test_headless_probe_requires_explicit_opt_in(llama, monkeypatch, allowed, capsys):
+    answer = {"initialized": False, "error": None, "gpu_available": False,
+              "cpu_initialized": True, "embedded_sources": True}
+    monkeypatch.setattr(llama.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        stdout=json.dumps(answer), stderr="", returncode=0))
+    env = {} if allowed is None else {"FOX_BUILD_ALLOW_NO_GPU": allowed}
+    if allowed == "1":
+        assert llama.run_metal_probe(Path("python"), env=env) == answer
+        assert "SKIPPED Metal GPU execution" in capsys.readouterr().out
+    else:
+        with pytest.raises(llama.GgufError, match="explicit FOX_BUILD_ALLOW_NO_GPU"):
+            llama.run_metal_probe(Path("python"), env=env)
+
+
+@pytest.mark.parametrize("change", [
+    {"gpu_available": None}, {"embedded_sources": False}, {"cpu_initialized": False},
+    {"gpu_available": True}, {"error": "corrupt library"},
+])
+def test_headless_opt_in_never_hides_incomplete_or_failed_checks(llama, monkeypatch, change):
+    answer = {"initialized": False, "error": None, "gpu_available": False,
+              "cpu_initialized": True, "embedded_sources": True, **change}
+    monkeypatch.setattr(llama.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        stdout=json.dumps(answer), stderr="", returncode=0))
+    with pytest.raises(llama.GgufError, match="verification failed"):
+        llama.run_metal_probe(Path("python"), env={"FOX_BUILD_ALLOW_NO_GPU": "1"})
+
+
+def test_relocated_probe_checks_the_requested_library_directory(llama, monkeypatch, tmp_path):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout=json.dumps({
+            "initialized": False, "error": None, "gpu_available": False,
+            "cpu_initialized": True, "embedded_sources": True,
+        }), stderr="", returncode=0)
+
+    monkeypatch.setattr(llama.subprocess, "run", run)
+    library = tmp_path / "relocated app" / "bin" / "llama_cpp" / "lib"
+    llama.run_metal_probe(Path("python"), env={"FOX_BUILD_ALLOW_NO_GPU": "1"}, libdir=library)
+    assert commands[0][-1] == str(library.resolve())
+    assert commands[0][3] == llama._METAL_VERIFY_PROBE
+
+
+@pytest.mark.parametrize("output", ["", "[]", "null", "not JSON"])
+def test_probe_crashes_and_malformed_results_preserve_native_diagnostics(llama, monkeypatch, output):
+    monkeypatch.setattr(llama.subprocess, "run", lambda *a, **k: SimpleNamespace(
+        stdout=output, stderr="dyld: missing symbol in libggml-metal", returncode=-6))
+    with pytest.raises(llama.GgufError, match="exit -6") as error:
+        llama.run_metal_probe(Path("python"), env={"FOX_BUILD_ALLOW_NO_GPU": "1"})
+    assert "dyld: missing symbol" in str(error.value)
+
+
+def test_installed_metal_version_must_match_the_lock(llama, monkeypatch):
+    monkeypatch.setattr(llama, "run_metal_probe", lambda *a, **k: {"version": "0.3.35"})
+    with pytest.raises(llama.GgufError, match="does not match llama-cpp-python==0.3.36"):
+        llama.verify(Path("python"), _build(llama))
+
+
+@pytest.mark.parametrize("gpu_available,broken_source,broken_gpu,apple_error", [
+    (True, False, False, False), (False, False, False, False),
+    (False, True, False, False), (True, False, True, False), (False, False, False, True),
+])
+@pytest.mark.parametrize("relocated", [False, True])
+def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path,
+                                          gpu_available, broken_source, broken_gpu, apple_error, relocated):
+    """Execute the subprocess code against the pinned ABI, including a headless VM."""
     initialized = []
     freed = []
+    shader_symbols = []
+    shader = b"#include <metal_stdlib>\nkernel void example() {}"
 
     class Function:
         def __init__(self, call):
@@ -165,7 +235,7 @@ def test_metal_probe_initializes_and_frees_both_registered_backends(llama, monke
     def initialize(device, params):
         assert params is None
         initialized.append(device)
-        return device + 100
+        return 0 if broken_gpu else device + 100
 
     symbols = SimpleNamespace(**{name: Function(call) for name, call in {
         "ggml_backend_reg_by_name": lambda name: {b"Metal": 1, b"CPU": 2}[name],
@@ -174,7 +244,36 @@ def test_metal_probe_initializes_and_frees_both_registered_backends(llama, monke
         "ggml_backend_dev_description": lambda device: b"Apple M1",
         "ggml_backend_dev_init": initialize,
         "ggml_backend_free": lambda backend: freed.append(backend),
+        "ggml_backend_cpu_init": lambda: 112,
+        "ggml_backend_metal_reg": lambda: 1,
+        "ggml_backend_metal_init": lambda: 111,
+        "llama_backend_init": lambda: None,
+        "llama_backend_free": lambda: None,
+        "llama_print_system_info": lambda: b"CPU Metal",
+        "llama_supports_gpu_offload": lambda: True,
     }.items()})
+
+    class Char:
+        @staticmethod
+        def in_dll(library, symbol):
+            assert library is symbols
+            shader_symbols.append(symbol)
+            if broken_source and symbol == "ggml_metallib_misc_start":
+                raise ValueError("missing embedded shader symbol")
+            return 1000 if symbol.endswith("_start") else 1000 + len(shader)
+
+    def apple_device():
+        if apple_error:
+            raise OSError("Metal framework probe failed")
+        return 1 if gpu_available else 0
+
+    apple = SimpleNamespace(MTLCreateSystemDefaultDevice=Function(apple_device))
+    fake_ctypes = SimpleNamespace(
+        CDLL=lambda path: apple if "Metal.framework" in path else symbols,
+        c_void_p=llama.ctypes.c_void_p, c_char_p=llama.ctypes.c_char_p,
+        c_size_t=llama.ctypes.c_size_t, c_bool=llama.ctypes.c_bool,
+        c_char=Char, addressof=lambda value: value, string_at=lambda address, length: shader,
+    )
     core = SimpleNamespace(_base_path=str(tmp_path), _lib=symbols)
     package = SimpleNamespace(__version__="0.3.36", llama_cpp=core,
                               llama_backend_init=lambda: None,
@@ -182,10 +281,20 @@ def test_metal_probe_initializes_and_frees_both_registered_backends(llama, monke
                               llama_print_system_info=lambda: b"CPU Metal")
     monkeypatch.setitem(sys.modules, "llama_cpp", package)
     monkeypatch.setitem(sys.modules, "llama_cpp.llama_cpp", core)
-    monkeypatch.setattr(llama.ctypes, "CDLL", lambda path: symbols)
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+    monkeypatch.setattr(sys, "argv", ["-c", str(tmp_path)] if relocated else ["-c"])
     exec(llama._METAL_VERIFY_PROBE, {})
     answer = json.loads(capsys.readouterr().out)
-    assert answer["error"] is None
-    assert answer["initialized"] is True
-    assert initialized == [12, 11]
-    assert freed == [112, 111]
+    if broken_source or broken_gpu or apple_error:
+        assert answer["error"]
+        assert answer["initialized"] is False
+    else:
+        assert answer["error"] is None
+        assert answer["embedded_sources"] is True
+        assert answer["version"] == (None if relocated else "0.3.36")
+        assert answer["cpu_initialized"] is True
+        assert answer["gpu_available"] is gpu_available
+        assert answer["initialized"] is gpu_available
+        assert initialized == ([11] if gpu_available else [])
+        assert freed == ([112, 111] if gpu_available else [112])
+        assert len(shader_symbols) == 68  # all 34 embedded source regions

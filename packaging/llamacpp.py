@@ -3219,16 +3219,55 @@ import json
 import sys
 from pathlib import Path
 
-answer = {"error": None, "version": None, "info": "", "device": "", "initialized": False}
+answer = {"error": None, "version": None, "info": "", "device": "", "initialized": False,
+          "gpu_available": None, "cpu_initialized": False, "embedded_sources": False}
 try:
-    import llama_cpp
-    import llama_cpp.llama_cpp as core
+    # The locked ggml Metal registry reports one virtual device even on a
+    # headless VM. Ask Apple's API before treating a missing GPU as skippable.
+    apple_metal = ctypes.CDLL("/System/Library/Frameworks/Metal.framework/Metal")
+    default_device = apple_metal.MTLCreateSystemDefaultDevice
+    default_device.argtypes = []
+    default_device.restype = ctypes.c_void_p
+    apple_device = default_device()
+    answer["gpu_available"] = bool(apple_device)
 
-    answer["version"] = llama_cpp.__version__
-    base = Path(core._base_path)
-    handles = [core._lib]
+    if len(sys.argv) > 1:
+        # The relocated-distribution smoke uses the exact same native checks,
+        # without needing llama_cpp installed in the interpreter running it.
+        base = Path(sys.argv[1])
+        handles = [ctypes.CDLL(str(base / "libllama.dylib"))]
+    else:
+        import llama_cpp
+        import llama_cpp.llama_cpp as core
+
+        answer["version"] = llama_cpp.__version__
+        base = Path(core._base_path)
+        handles = [core._lib]
     for stem in ("ggml", "ggml-base", "ggml-cpu", "ggml-metal"):
         handles.append(ctypes.CDLL(str(base / ("lib" + stem + ".dylib"))))
+    metal_library = handles[-1]
+
+    # These are all GGML_METAL_LIBS entries in the locked 0.3.36 source. The
+    # symbols delimit UTF-8 shader source, not compiled GPU machine code. Even
+    # without a GPU, an absent/empty/corrupt source payload must fail the build.
+    source_names = (
+        "fa_aux", "fa_f16", "fa_f32", "fa_q4_0", "fa_q4_1", "fa_q5_0", "fa_q5_1", "fa_q8_0",
+        "fa_vec_f16", "fa_vec_f32", "fa_vec_q4_0", "fa_vec_q4_1", "fa_vec_q5_0", "fa_vec_q5_1",
+        "fa_vec_q8_0", "mul_mv", "mul_mm", "quantize", "softmax", "norm", "unary", "binbcast",
+        "reduce", "tri", "ssm", "wkv", "gated_delta_net", "solve_tri", "rope", "conv",
+        "upscale", "argsort", "pool", "misc",
+    )
+    for name in source_names:
+        prefix = "ggml_metallib_" + name
+        start = ctypes.addressof(ctypes.c_char.in_dll(metal_library, prefix + "_start"))
+        end = ctypes.addressof(ctypes.c_char.in_dll(metal_library, prefix + "_end"))
+        length = end - start
+        if not 0 < length <= 16 * 1024 * 1024:
+            raise RuntimeError("invalid embedded Metal source length for " + name)
+        source = ctypes.string_at(start, length).decode("utf-8")
+        if "metal_stdlib" not in source or "kernel" not in source:
+            raise RuntimeError("invalid embedded Metal shader source for " + name)
+    answer["embedded_sources"] = True
 
     def bind(name, restype, argtypes):
         for handle in handles:
@@ -3250,31 +3289,42 @@ try:
     describe = bind("ggml_backend_dev_description", string, [ptr])
     initialize = bind("ggml_backend_dev_init", ptr, [ptr, string])
     release = bind("ggml_backend_free", None, [ptr])
-    # The registry must contain both Metal and its CPU fallback; importing the
-    # package or merely finding a dylib on disk cannot prove that either works.
-    llama_cpp.llama_backend_init()
-    metal = registry(b"Metal")
-    cpu = registry(b"CPU")
-    if not metal or not cpu:
-        raise RuntimeError("the Metal and CPU backends must both be registered")
-    if not count(metal) or not count(cpu) or not llama_cpp.llama_supports_gpu_offload():
-        raise RuntimeError("no usable Metal GPU/CPU fallback; validate on a physical Apple Silicon Mac")
-    gpu = get_device(metal, 0)
-    if not gpu:
-        raise RuntimeError("the Metal registry returned no device")
-    answer["device"] = (describe(gpu) or b"").decode("utf-8", "replace")
-    # Initializing Metal compiles the embedded shader library on this GPU. It
-    # needs no model download and catches missing resources/unsupported shaders.
-    for device in (get_device(cpu, 0), gpu):
-        if not device:
-            raise RuntimeError("the backend registry returned no device")
-        backend = initialize(device, None)
-        if not backend:
-            raise RuntimeError("could not initialize the CPU or Metal backend")
-        release(backend)
-    raw = llama_cpp.llama_print_system_info()
-    answer["info"] = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
-    answer["initialized"] = True
+    init_cpu = bind("ggml_backend_cpu_init", ptr, [])
+    init_llama = bind("llama_backend_init", None, [])
+    free_llama = bind("llama_backend_free", None, [])
+    system_info = bind("llama_print_system_info", string, [])
+    offload = bind("llama_supports_gpu_offload", ctypes.c_bool, [])
+    # Require the Metal entry points in the Metal library itself. Finding a
+    # similarly named symbol in another backend is insufficient.
+    for name in ("ggml_backend_metal_reg", "ggml_backend_metal_init"):
+        getattr(metal_library, name)
+    cpu_backend = init_cpu()
+    if not cpu_backend:
+        raise RuntimeError("could not initialize the CPU backend")
+    release(cpu_backend)
+    answer["cpu_initialized"] = True
+
+    init_llama()
+    try:
+        if answer["gpu_available"]:
+            metal = registry(b"Metal")
+            if not metal or not count(metal) or not offload():
+                raise RuntimeError("an Apple GPU is present but the Metal backend is unavailable")
+            gpu = get_device(metal, 0)
+            if not gpu:
+                raise RuntimeError("the Metal registry returned no device")
+            answer["device"] = (describe(gpu) or b"").decode("utf-8", "replace")
+            # A present GPU must initialize, even when headless builds are
+            # allowed. Shader/driver/backend errors never become skipped tests.
+            backend = initialize(gpu, None)
+            if not backend:
+                raise RuntimeError("could not initialize the Metal backend or embedded shaders")
+            release(backend)
+            answer["initialized"] = True
+        raw = system_info()
+        answer["info"] = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+    finally:
+        free_llama()
 except Exception as exc:
     answer["error"] = type(exc).__name__ + ": " + str(exc)
 json.dump(answer, sys.stdout)
@@ -3284,8 +3334,14 @@ sys.stdout.flush()
 compile(_METAL_VERIFY_PROBE, "<llama-metal-verify>", "exec")
 
 
-def _verify_metal(python: Path, build: Build, env: dict[str, str] | None) -> None:
-    """A Metal release must initialize its embedded shaders and CPU fallback."""
+def run_metal_probe(python: Path, *, env: dict[str, str] | None = None,
+                    libdir: Path | None = None) -> dict:
+    """Check installed or relocated Metal libraries, with explicit headless opt-in.
+
+    A host without a GPU still has to load every library, expose the Metal ABI,
+    carry every embedded shader source and initialize the CPU backend. Only
+    shader execution can be skipped, and only after Apple's API reports no GPU.
+    """
     environment = dict(env if env is not None else os.environ)
     for name in tuple(environment):
         if name.startswith(("DYLD_", "GGML_METAL_")) or name == "LLAMA_CPP_LIB_PATH":
@@ -3294,25 +3350,58 @@ def _verify_metal(python: Path, build: Build, env: dict[str, str] | None) -> Non
         # Neither cwd shader files nor a developer's library override can make
         # an incomplete package appear to work.
         with tempfile.TemporaryDirectory(prefix="fox-metal-verify-") as scratch:
+            command = [str(python), "-I", "-c", _METAL_VERIFY_PROBE]
+            if libdir is not None:
+                command.append(str(libdir.resolve()))
             result = subprocess.run(
-                [str(python), "-I", "-c", _METAL_VERIFY_PROBE], cwd=scratch,
+                command, cwd=scratch,
                 env=environment, capture_output=True, text=True, timeout=300,
             )
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", "") or ""
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        detail = "\n".join(detail.strip().splitlines()[-12:])
+        raise GgufError(f"could not validate the Metal llama.cpp: {exc}\n{detail}") from exc
+    detail = "\n".join(result.stderr.strip().splitlines()[-12:])
+    try:
         answer = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise GgufError(f"could not validate the Metal llama.cpp: {exc}") from exc
-    if result.returncode or answer.get("error") or answer.get("initialized") is not True:
-        detail = "\n".join(result.stderr.strip().splitlines()[-12:])
+        if not isinstance(answer, dict):
+            raise ValueError("the probe did not return a JSON object")
+    except ValueError as exc:
+        raise GgufError(
+            f"Metal llama.cpp verification failed (exit {result.returncode}): invalid probe output ({exc}).\n"
+            + (detail or "The native probe produced no usable diagnostic.")
+        ) from exc
+    no_gpu_allowed = _macos_policy().allow_no_gpu(environment)
+    complete = (answer.get("embedded_sources") is True and answer.get("cpu_initialized") is True)
+    gpu_checked = (answer.get("gpu_available") is True and answer.get("initialized") is True)
+    headless = (answer.get("gpu_available") is False and answer.get("initialized") is False and no_gpu_allowed)
+    if result.returncode or answer.get("error") or not complete or not (gpu_checked or headless):
         raise GgufError(
             f"Metal llama.cpp verification failed (exit {result.returncode}): "
-            f"{answer.get('error') or 'the backend did not initialize'}.\n"
-            "  Build/verify on a physical Apple Silicon Mac with a usable Metal GPU.\n"
-            "  A CPU-only or unverified Metal library cannot be shipped as the macos build.\n"
+            f"{answer.get('error') or 'the required native checks did not complete'}.\n"
+            "  Metal libraries, embedded shader sources and the CPU backend are always required.\n"
+            "  A host without GPU access needs explicit FOX_BUILD_ALLOW_NO_GPU=1; "
+            "errors on a present GPU remain fatal.\n"
             + (f"{detail}\n" if detail else "")
         )
+    if headless:
+        print("      SKIPPED Metal GPU execution: this host exposes no Apple GPU; "
+              "native libraries, embedded shader sources and CPU initialization passed.")
+    else:
+        print(f"      Metal initialized on {answer.get('device')}; embedded shaders and CPU backend passed")
+    return answer
+
+
+def _verify_metal(python: Path, build: Build, env: dict[str, str] | None) -> None:
+    """Validate the installed package as well as its native Metal libraries."""
+    answer = run_metal_probe(python, env=env)
+    expected_version = build.spec.partition("==")[2]
+    if expected_version and answer.get("version") != expected_version:
+        raise GgufError(f"Metal package version {answer.get('version')!r} does not match {build.spec}")
     build.system_info = answer.get("info") or ""
-    print(f"      {PACKAGE} {answer.get('version')}: Metal initialized on {answer.get('device')}")
-    print("      embedded Metal shader library and CPU fallback initialized")
+    print(f"      {PACKAGE} {answer.get('version')}: Metal-capable package verified")
 
 
 def verify(python: Path, build: Build, env: dict[str, str] | None = None) -> None:

@@ -151,10 +151,12 @@ jobs:
           combination? Build it yourself with
           [`packaging/build.md`](../blob/master/packaging/build.md).
 
-          Mac artifacts are included when the GPU-capable Mac runner is enabled.
-          They target Apple Silicon ARM64, not Intel Macs or Rosetta. Mac binaries
-          are ad-hoc signed; Developer ID signing and notarization are separate,
-          so a downloaded build may need approval in Privacy & Security.
+          Mac artifacts are built on GitHub-hosted ARM64 runners and target
+          Apple Silicon with macOS 14 or newer. Torch MPS and llama.cpp Metal
+          support are included; GPU execution is untested when the hosted runner
+          exposes no GPU. Mac binaries are ad-hoc signed; Developer ID signing
+          and notarization are separate, so a downloaded build may need approval
+          in Privacy & Security.
 
           ### Downloads in parts (`.001`, `.002`, …)
 

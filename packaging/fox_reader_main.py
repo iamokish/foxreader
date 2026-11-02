@@ -98,6 +98,43 @@ def _force_utf8_output() -> None:
             pass
 
 
+def _macos_gpu_available() -> bool:
+    """Ask Metal directly so an unusable Torch backend is not mistaken for a VM."""
+    import ctypes
+
+    metal = ctypes.CDLL("/System/Library/Frameworks/Metal.framework/Metal")
+    default_device = metal.MTLCreateSystemDefaultDevice
+    default_device.argtypes = []
+    default_device.restype = ctypes.c_void_p
+    return bool(default_device())
+
+
+def _verify_macos_runtime() -> None:
+    """Exercise the bundled Torch wheel from a relocated distribution.
+
+    The build smoke invokes this before starting the server. Device discovery
+    normally tolerates an unavailable torch import, so its CPU fallback alone
+    cannot prove that a standalone build contains a working MPS-enabled wheel.
+    """
+    import json
+
+    import torch
+
+    mps_built = torch.backends.mps.is_built()
+    if not mps_built:
+        raise RuntimeError("the macOS distribution contains a Torch wheel without MPS support")
+    if (torch.ones(2) + 1).tolist() != [2.0, 2.0]:
+        raise RuntimeError("the bundled Torch CPU operation failed")
+    mps_available = torch.backends.mps.is_available()
+    gpu_available = _macos_gpu_available()
+    if gpu_available and not mps_available:
+        raise RuntimeError("Metal exposes a GPU but the bundled Torch MPS backend is unavailable")
+    if mps_available and (torch.ones(2, device="mps") + 1).cpu().tolist() != [2.0, 2.0]:
+        raise RuntimeError("the bundled Torch MPS operation failed")
+    print(json.dumps({"mps_built": mps_built, "mps_available": mps_available,
+                      "cpu_ok": True, "mps_ok": mps_available, "gpu_available": gpu_available}))
+
+
 def main() -> None:
     # Before anything else. On Windows a spawned multiprocessing child re-runs
     # this executable from the top, and freeze_support is what makes it hand over
@@ -112,6 +149,10 @@ def main() -> None:
     _mark_frozen()
     _force_utf8_output()
     _register_dll_directories()
+
+    if sys.platform == "darwin" and sys.argv[1:] == ["--verify-macos-runtime"]:
+        _verify_macos_runtime()
+        return
 
     # Imported here, not at module scope: everything above has to have run first,
     # because `fox_reader.utils` reads `sys.frozen` at import time to decide where
