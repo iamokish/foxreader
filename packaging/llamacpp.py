@@ -3220,7 +3220,8 @@ import sys
 from pathlib import Path
 
 answer = {"error": None, "version": None, "info": "", "device": "", "initialized": False,
-          "gpu_available": None, "cpu_initialized": False, "embedded_sources": False}
+          "gpu_available": None, "cpu_initialized": False, "embedded_sources": False,
+          "registry_name": None}
 try:
     # The locked ggml Metal registry reports one virtual device even on a
     # headless VM. Ask Apple's API before treating a missing GPU as skippable.
@@ -3311,12 +3312,20 @@ try:
     init_llama()
     try:
         if answer["gpu_available"]:
-            # The locked source names this backend "MTL", not "Metal". Get
-            # its identity from the Metal library instead of assuming a name.
-            metal = metal_registry()
-            name = registry_name(metal) if metal else None
-            if not name or registry(name) != metal:
-                raise RuntimeError("an Apple GPU is present but the Metal backend is not registered")
+            # Discover the native name, then exercise the registry used by
+            # libllama. Versioned and unversioned dylib copies can have distinct
+            # registry addresses; pointer equality across them is not required.
+            direct_metal = metal_registry()
+            if not direct_metal:
+                raise RuntimeError("the Metal library returned no native backend registry")
+            name = registry_name(direct_metal)
+            if not name:
+                raise RuntimeError("the Metal library returned an empty backend registry name")
+            answer["registry_name"] = name.decode("utf-8", "replace")
+            metal = registry(name)
+            if not metal:
+                raise RuntimeError("an Apple GPU is present but the Metal backend "
+                                   + repr(answer["registry_name"]) + " is not registered")
             if not count(metal):
                 raise RuntimeError("an Apple GPU is present but the Metal registry contains no devices")
             if not offload():

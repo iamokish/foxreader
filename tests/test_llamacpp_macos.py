@@ -212,14 +212,16 @@ def test_installed_metal_version_must_match_the_lock(llama, monkeypatch):
         llama.verify(Path("python"), _build(llama))
 
 
-@pytest.mark.parametrize("gpu_available,failure", [
-    (True, None), (False, None), (False, "source"), (True, "gpu"), (False, "apple"),
-    (True, "registry"), (True, "offload"), (True, "devices"),
+@pytest.mark.parametrize("gpu_available,failure,registered_metal", [
+    (True, None, 1), (True, None, 41), (False, None, 1),
+    (False, "source", 1), (True, "gpu", 41), (False, "apple", 1),
+    (True, "native_registry", 1), (True, "registry_name", 1),
+    (True, "registry", 41), (True, "offload", 41), (True, "devices", 41),
 ])
 @pytest.mark.parametrize("registry_name", [b"MTL", b"Metal"])
 @pytest.mark.parametrize("relocated", [False, True])
 def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path,
-                                          gpu_available, failure, registry_name, relocated):
+                                          gpu_available, failure, registered_metal, registry_name, relocated):
     """Execute the subprocess code against the pinned ABI, including a headless VM."""
     initialized = []
     freed = []
@@ -243,18 +245,28 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
         # locked 0.3.36 Metal backend is named MTL; an assumed Metal fails.
         if failure == "registry":
             return 0
-        return {registry_name: 1, b"CPU": 2}.get(name, 0)
+        return {registry_name: registered_metal, b"CPU": 2}.get(name, 0)
+
+    def device_count(registry):
+        # The direct unversioned library may be another loaded image. All
+        # execution checks must use libllama's globally registered instance.
+        assert registry == registered_metal
+        return 0 if failure == "devices" else 1
+
+    def get_device(registry, index):
+        assert registry == registered_metal and index == 0
+        return registry + 10
 
     symbols = SimpleNamespace(**{name: Function(call) for name, call in {
         "ggml_backend_reg_by_name": find_registry,
-        "ggml_backend_reg_name": lambda registry: registry_name if registry == 1 else b"CPU",
-        "ggml_backend_reg_dev_count": lambda registry: 0 if failure == "devices" else 1,
-        "ggml_backend_reg_dev_get": lambda registry, index: registry + 10,
+        "ggml_backend_reg_name": lambda registry: b"" if failure == "registry_name" else registry_name,
+        "ggml_backend_reg_dev_count": device_count,
+        "ggml_backend_reg_dev_get": get_device,
         "ggml_backend_dev_description": lambda device: b"Apple M1",
         "ggml_backend_dev_init": initialize,
         "ggml_backend_free": lambda backend: freed.append(backend),
         "ggml_backend_cpu_init": lambda: 112,
-        "ggml_backend_metal_reg": lambda: 1,
+        "ggml_backend_metal_reg": lambda: 0 if failure == "native_registry" else 1,
         "ggml_backend_metal_init": lambda: 111,
         "llama_backend_init": lambda: None,
         "llama_backend_free": lambda: None,
@@ -297,8 +309,15 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
     if failure:
         assert answer["error"]
         assert answer["initialized"] is False
-        if failure in {"registry", "offload", "devices"}:
+        if failure in {"native_registry", "registry_name", "registry", "offload", "devices"}:
             assert initialized == []
+        if failure == "native_registry":
+            assert "no native backend registry" in answer["error"]
+        elif failure == "registry_name":
+            assert "empty backend registry name" in answer["error"]
+        elif failure == "registry":
+            assert repr(registry_name.decode()) in answer["error"]
+            assert "is not registered" in answer["error"]
     else:
         assert answer["error"] is None
         assert answer["embedded_sources"] is True
@@ -306,6 +325,7 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
         assert answer["cpu_initialized"] is True
         assert answer["gpu_available"] is gpu_available
         assert answer["initialized"] is gpu_available
-        assert initialized == ([11] if gpu_available else [])
-        assert freed == ([112, 111] if gpu_available else [112])
+        assert answer["registry_name"] == (registry_name.decode() if gpu_available else None)
+        assert initialized == ([registered_metal + 10] if gpu_available else [])
+        assert freed == ([112, registered_metal + 110] if gpu_available else [112])
         assert len(shader_symbols) == 68  # all 34 embedded source regions
