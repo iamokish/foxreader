@@ -242,6 +242,36 @@ def test_load_commands_preserve_spaces_and_separate_install_id(mac):
     assert info.minimum_os == "14.0"
 
 
+@pytest.mark.parametrize("architectures", [("arm64",), ("x86_64", "arm64"), ("x86_64",)])
+def test_inspect_obeys_lipo_verify_arch_argument_contract(mac, monkeypatch, architectures):
+    binary = Path("bundle with spaces") / "Python"
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["xcrun", "lipo"]:
+            # Apple's -verify_arch consumes all remaining arguments as
+            # architecture names; the input filename must precede it.
+            verify_at = cmd.index("-verify_arch")
+            assert cmd[2:verify_at] == [str(binary)]
+            requested = cmd[verify_at + 1:]
+            assert requested == ["arm64"]
+            missing = set(requested) - set(architectures)
+            return SimpleNamespace(returncode=int(bool(missing)), stdout="",
+                                   stderr="input file does not contain arm64" if missing else "")
+        assert cmd[:2] == ["xcrun", "otool"]
+        return SimpleNamespace(returncode=0, stdout=_commands(), stderr="")
+
+    monkeypatch.setattr(mac.subprocess, "run", run)
+    if "arm64" in architectures:
+        assert mac._inspect(binary).minimum_os == "14.0"
+        assert len(calls) == 2
+    else:
+        with pytest.raises(mac.MacOSBuildError, match="does not contain arm64"):
+            mac._inspect(binary)
+        assert len(calls) == 1
+
+
 def test_inspect_rejects_newer_deployment_target(mac, monkeypatch):
     monkeypatch.setattr(mac, "_run", lambda cmd: _commands(minimum="15.0") if "otool" in cmd else "")
     with pytest.raises(mac.MacOSBuildError, match="above the 14.0"):

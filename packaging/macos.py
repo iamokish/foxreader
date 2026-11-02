@@ -184,7 +184,8 @@ def _is_macho(path: Path) -> bool:
 
 
 def _inspect(path: Path) -> MachO:
-    _run(["xcrun", "lipo", "-verify_arch", "arm64", str(path)])
+    # -verify_arch consumes the remaining arguments as architecture names.
+    _run(["xcrun", "lipo", str(path), "-verify_arch", "arm64"])
     info = _load_commands(_run(["xcrun", "otool", "-arch", "arm64", "-l", str(path)]))
     if info.minimum_os is None:
         raise MacOSBuildError(f"{path}: no macOS deployment target recorded")
