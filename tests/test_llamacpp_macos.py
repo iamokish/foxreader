@@ -212,13 +212,14 @@ def test_installed_metal_version_must_match_the_lock(llama, monkeypatch):
         llama.verify(Path("python"), _build(llama))
 
 
-@pytest.mark.parametrize("gpu_available,broken_source,broken_gpu,apple_error", [
-    (True, False, False, False), (False, False, False, False),
-    (False, True, False, False), (True, False, True, False), (False, False, False, True),
+@pytest.mark.parametrize("gpu_available,failure", [
+    (True, None), (False, None), (False, "source"), (True, "gpu"), (False, "apple"),
+    (True, "registry"), (True, "offload"), (True, "devices"),
 ])
+@pytest.mark.parametrize("registry_name", [b"MTL", b"Metal"])
 @pytest.mark.parametrize("relocated", [False, True])
 def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path,
-                                          gpu_available, broken_source, broken_gpu, apple_error, relocated):
+                                          gpu_available, failure, registry_name, relocated):
     """Execute the subprocess code against the pinned ABI, including a headless VM."""
     initialized = []
     freed = []
@@ -235,11 +236,19 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
     def initialize(device, params):
         assert params is None
         initialized.append(device)
-        return 0 if broken_gpu else device + 100
+        return 0 if failure == "gpu" else device + 100
+
+    def find_registry(name):
+        # ggml_backend_reg_by_name returns NULL for an unknown name. The
+        # locked 0.3.36 Metal backend is named MTL; an assumed Metal fails.
+        if failure == "registry":
+            return 0
+        return {registry_name: 1, b"CPU": 2}.get(name, 0)
 
     symbols = SimpleNamespace(**{name: Function(call) for name, call in {
-        "ggml_backend_reg_by_name": lambda name: {b"Metal": 1, b"CPU": 2}[name],
-        "ggml_backend_reg_dev_count": lambda registry: 1,
+        "ggml_backend_reg_by_name": find_registry,
+        "ggml_backend_reg_name": lambda registry: registry_name if registry == 1 else b"CPU",
+        "ggml_backend_reg_dev_count": lambda registry: 0 if failure == "devices" else 1,
         "ggml_backend_reg_dev_get": lambda registry, index: registry + 10,
         "ggml_backend_dev_description": lambda device: b"Apple M1",
         "ggml_backend_dev_init": initialize,
@@ -250,7 +259,7 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
         "llama_backend_init": lambda: None,
         "llama_backend_free": lambda: None,
         "llama_print_system_info": lambda: b"CPU Metal",
-        "llama_supports_gpu_offload": lambda: True,
+        "llama_supports_gpu_offload": lambda: failure != "offload",
     }.items()})
 
     class Char:
@@ -258,12 +267,12 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
         def in_dll(library, symbol):
             assert library is symbols
             shader_symbols.append(symbol)
-            if broken_source and symbol == "ggml_metallib_misc_start":
+            if failure == "source" and symbol == "ggml_metallib_misc_start":
                 raise ValueError("missing embedded shader symbol")
             return 1000 if symbol.endswith("_start") else 1000 + len(shader)
 
     def apple_device():
-        if apple_error:
+        if failure == "apple":
             raise OSError("Metal framework probe failed")
         return 1 if gpu_available else 0
 
@@ -285,9 +294,11 @@ def test_metal_probe_executes_native_checks(llama, monkeypatch, capsys, tmp_path
     monkeypatch.setattr(sys, "argv", ["-c", str(tmp_path)] if relocated else ["-c"])
     exec(llama._METAL_VERIFY_PROBE, {})
     answer = json.loads(capsys.readouterr().out)
-    if broken_source or broken_gpu or apple_error:
+    if failure:
         assert answer["error"]
         assert answer["initialized"] is False
+        if failure in {"registry", "offload", "devices"}:
+            assert initialized == []
     else:
         assert answer["error"] is None
         assert answer["embedded_sources"] is True

@@ -1665,6 +1665,14 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
     nuitka.add_each(cmd, "--include-package-data", [m for m in PACKAGE_DATA if m in present_modules],
                     note="package data files")
     _exclude_shared_libs_from_data(nuitka, cmd)
+    if platform.system() == "Darwin" and not os.environ.get(_PRUNE_SKIP_ENV):
+        # Nuitka signs every collected data file in one codesign invocation.
+        # Torch's 10,000+ headers exceed macOS's argument limit before our
+        # post-build pruning can remove them. Exclude the same unused subtrees
+        # during collection; native libraries and runtime data still ship.
+        nuitka.require("--noinclude-data-files")
+        nuitka.add_each(cmd, "--noinclude-data-files", [f"{path}/*" for path in _TORCH_JUNK_DIRS])
+        print("      macOS: excluding Torch headers and tests before code signing")
     nuitka.add_each(cmd, "--include-package", optional, note="optional packages")
     nuitka.add_each(cmd, "--include-distribution-metadata", present_dist_names,
                     note="distribution metadata")

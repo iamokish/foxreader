@@ -302,6 +302,11 @@ non-system library dependencies must resolve inside the distribution.
 Libraries and executables receive ad-hoc signatures after relocation.
 The user needs neither Python nor Xcode to run the result.
 
+With default pruning enabled, Mac builds exclude Torch's unused C++ headers
+and test data during Nuitka's data collection. Removing them before signing
+keeps Nuitka's `codesign` command below macOS's argument limit; native
+libraries and runtime resources remain included and signed.
+
 The archive is a portable folder with `launcher`, not an `.app` or DMG.
 Extract it to a writable folder and run `./fox-reader/launcher` from
 Terminal. Ad-hoc signatures satisfy local Apple Silicon signing requirements

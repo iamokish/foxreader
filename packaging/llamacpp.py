@@ -3284,6 +3284,7 @@ try:
     string = ctypes.c_char_p
     size = ctypes.c_size_t
     registry = bind("ggml_backend_reg_by_name", ptr, [string])
+    registry_name = bind("ggml_backend_reg_name", string, [ptr])
     count = bind("ggml_backend_reg_dev_count", size, [ptr])
     get_device = bind("ggml_backend_reg_dev_get", ptr, [ptr, size])
     describe = bind("ggml_backend_dev_description", string, [ptr])
@@ -3298,6 +3299,9 @@ try:
     # similarly named symbol in another backend is insufficient.
     for name in ("ggml_backend_metal_reg", "ggml_backend_metal_init"):
         getattr(metal_library, name)
+    metal_registry = metal_library.ggml_backend_metal_reg
+    metal_registry.restype = ptr
+    metal_registry.argtypes = []
     cpu_backend = init_cpu()
     if not cpu_backend:
         raise RuntimeError("could not initialize the CPU backend")
@@ -3307,9 +3311,16 @@ try:
     init_llama()
     try:
         if answer["gpu_available"]:
-            metal = registry(b"Metal")
-            if not metal or not count(metal) or not offload():
-                raise RuntimeError("an Apple GPU is present but the Metal backend is unavailable")
+            # The locked source names this backend "MTL", not "Metal". Get
+            # its identity from the Metal library instead of assuming a name.
+            metal = metal_registry()
+            name = registry_name(metal) if metal else None
+            if not name or registry(name) != metal:
+                raise RuntimeError("an Apple GPU is present but the Metal backend is not registered")
+            if not count(metal):
+                raise RuntimeError("an Apple GPU is present but the Metal registry contains no devices")
+            if not offload():
+                raise RuntimeError("an Apple GPU is present but llama.cpp reports no GPU offload support")
             gpu = get_device(metal, 0)
             if not gpu:
                 raise RuntimeError("the Metal registry returned no device")

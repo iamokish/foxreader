@@ -369,7 +369,9 @@ def test_finalize_does_not_sign_incomplete_bundle(mac, tmp_path, monkeypatch):
 @pytest.mark.parametrize("system,compiler", [
     ("Darwin", "clang"), ("Windows", "msvc"), ("Linux", "gcc"),
 ])
-def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monkeypatch, system, compiler):
+@pytest.mark.parametrize("keep_dup_libs", [False, True])
+def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monkeypatch, system, compiler,
+                                                        keep_dup_libs):
     """Exercise real option probing and command assembly without compiling.
 
     The relevant options are from Nuitka 4.2.1's OptionParsing.py. In
@@ -412,6 +414,10 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(build.platform, "system", lambda: system)
+    if keep_dup_libs:
+        monkeypatch.setenv("FOX_BUILD_KEEP_DUP_LIBS", "1")
+    else:
+        monkeypatch.delenv("FOX_BUILD_KEEP_DUP_LIBS", raising=False)
     monkeypatch.setattr(build, "WORK_DIR", work)
     monkeypatch.setattr(build, "NUITKA_OUT", nuitka_out)
     monkeypatch.setattr(build, "BACKEND_NAME", "fox-reader.exe" if system == "Windows" else "fox-reader")
@@ -436,6 +442,9 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
     assert "--include-module=fox_reader_assets" in cmd
     assert (work / "nuitka-command.txt").read_text(encoding="utf-8").splitlines() == cmd
     mac_flags = [arg for arg in cmd if arg.startswith("--macos-")]
+    early_torch_exclusions = {
+        "--noinclude-data-files=torch/include/*", "--noinclude-data-files=torch/test/*",
+    }
     if system == "Darwin":
         assert "--clang" in cmd
         assert mac_flags == ["--macos-target-arch=arm64"]
@@ -444,6 +453,21 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
         assert mac_flags == []
         assert "--clang" not in cmd
         assert ("--msvc=latest" in cmd) == (system == "Windows")
+    if system == "Darwin" and not keep_dup_libs:
+        assert early_torch_exclusions <= set(cmd)
+        # Match Nuitka's target-path fnmatch semantics, including nested files.
+        # Runtime resources and the shared-memory helper must stay eligible.
+        import fnmatch
+
+        patterns = [arg.split("=", 1)[1] for arg in early_torch_exclusions]
+        for path in ("torch/include/ATen/ops/add.h", "torch/include/torch/csrc/api/include/torch.h",
+                     "torch/test/test_api"):
+            assert any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+        for path in ("torch/lib/libtorch_cpu.dylib", "torch/lib/libtorch_python.dylib",
+                     "torch/bin/torch_shm_manager", "torch/__init__.py", "torch/_inductor/script.ld"):
+            assert not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+    else:
+        assert early_torch_exclusions.isdisjoint(cmd)
 
 
 @pytest.fixture
