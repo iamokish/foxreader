@@ -1,2 +1,2 @@
 #!/bin/bash
-uv run --extra cpu fox-reader
+uv run --no-sync fox-reader
