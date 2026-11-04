@@ -152,10 +152,11 @@ sudo apt install -y git
 **Windows:** install Visual Studio Build Tools from
 <https://visualstudio.microsoft.com/downloads/>. Select the
 **“Desktop development with C++”** workload, including the Windows SDK.
-The production desktop launcher requires MSVC, including for CPU builds.
-MinGW still works for standalone C test fixtures.
+The native-window launcher requires MSVC, including for CPU builds.
+The `--no-window` console launcher and standalone C test fixtures can also
+use MinGW; CUDA builds retain their own compiler requirements.
 
-The build fetches Microsoft.Web.WebView2 SDK `1.0.2903.40` from NuGet and
+Native-window builds fetch Microsoft.Web.WebView2 SDK `1.0.2903.40` from NuGet and
 checks its pinned SHA512 before extracting the header and static loader.
 `FOX_WEBVIEW2_SDK` can point at that unpacked SDK package for an offline build.
 Verified SDK copies are cached under `packaging/.build/webview2` and reused even
@@ -173,10 +174,12 @@ sudo apt install -y build-essential pkg-config libwebkit2gtk-4.1-dev
 gcc --version
 ```
 
-Users running the compiled Linux distribution need `libwebkit2gtk-4.1-0`
-from their distribution. WebKitGTK stays a system dependency; the archive
-contains only the small native window host. Test the window under both
-Wayland and X11 before publishing a release.
+Users running the reader window need `libwebkit2gtk-4.1-0` from their distribution.
+Without WebKitGTK, the launcher uses the browser with a separate GTK 3 controller.
+The archive contains `libfox-window.so` for the WebKitGTK viewer and
+`libfox-browser.so` for the GTK-only controller; keep both beside the launcher.
+GTK and WebKitGTK remain system dependencies. Test the reader and controller
+under both Wayland and X11 before publishing a release.
 
 **macOS (Apple Silicon):**
 
@@ -460,8 +463,39 @@ The finished archive lands in `dist/`, e.g.
 `dist/SHA256SUMS.txt` listing its SHA-256.
 
 Mac builds also accept `--clean`, `--keep-venv`, `--skip-frontend`,
-`--deep-compile`, `--split-bin` and `--no-gguf`. CPU baseline, OpenBLAS,
+`--deep-compile`, `--split-bin`, `--no-gguf` and `--no-window`. CPU baseline, OpenBLAS,
 CUDA and HIP tuning options are for the existing Windows/Linux variants.
+
+### Optional browser and terminal build
+
+Add `--no-window` to any supported local build command:
+
+```bash
+python packaging/build.py --no-window
+python packaging/build.py --device cpu --no-gguf --no-window
+```
+
+This removes every Fox Reader graphical window: the reader, loading banner,
+browser controller, and error dialogs. It builds a console launcher without
+WebView2 or GTK/WebKitGTK, and omits their native assets. The Linux launcher
+therefore needs only the C compiler, without the WebKitGTK development
+packages; the backend and optional GGUF build still need their usual tools
+and libraries. macOS still requires Apple Clang and the SDK to compile and
+sign its ARM64 binaries.
+
+The result opens the system browser with a visible terminal manager. Use
+`launcher --cli` or `FOX_READER_CLI=1` for terminal/headless operation without
+opening a browser. On Windows open `launcher.exe`; on Linux run its installer
+and use the `Terminal=true` menu entry; on macOS open `Fox Reader.command`
+in Terminal instead of a `.app`. Keep the terminal open while reading and
+press Ctrl+C to stop the backend it started. Closing the browser alone leaves
+the manager running. A manager attached to an existing backend only detaches.
+
+Archives gain a distinct suffix, for example
+`fox-reader-v0.2.2-cpu-gguf-linux-x64-no-window.tar.gz`, and `build-info.json`
+records `"no_window": true`. Standard archive names and CI build variants
+are unchanged. Update checks remain available, but this custom variant must
+be rebuilt with `--no-window` for a newer release.
 
 ### If the build stops with an error
 
@@ -573,10 +607,17 @@ then forces it down if necessary. An attached window never stops another
 launcher's backend.
 
 Use `launcher --browser` for the system-browser workflow and debugging,
-or `launcher --no-browser` for backend-only operation. Desktop browser mode
-keeps a small manager window; closing it stops its owned backend. If Linux
-has no WebKitGTK/display at all, browser fallback runs with the original
-terminal lifecycle.
+or `launcher --cli` for a foreground terminal/headless manager without a browser
+or GUI. `FOX_READER_CLI=1` selects the same mode. Desktop browser mode keeps a
+controller window; closing it stops its owned backend. Linux loads this GTK-only
+controller independently of WebKitGTK. It remains visible after the browser
+closes and offers **Open Reader** and **Quit Fox Reader**; an attached controller
+instead offers **Close This Window**.
+
+If GTK cannot open a window, Linux uses an attached terminal or opens a visible
+terminal manager before starting the backend. If neither is available, startup
+fails without leaving a new backend running. Explicit `--cli` operation remains
+available without a display or terminal emulator.
 
 Read `logs/launcher.log` for launcher errors, `logs/backend.log` for Python
 logs, `logs/backend-output.log` for native backend output, and
@@ -599,6 +640,7 @@ verified downloads, the `latest.json` release manifest, and installation steps.
 | `--cuda-arch LIST` / `--hip-arch LIST` | Override GPU architectures (e.g. `75-real;86-real`) |
 | `--split-bin [MB]` | Cut the finished archive into parts of at most MB megabytes (default 1000) if it is larger; see [4a](#4a-splitting-a-big-archive---split-bin) |
 | `--skip-frontend` | Reuse an already built `frontend/static` |
+| `--no-window` | Omit all Fox Reader graphical windows; open the browser with a terminal manager by default, or use `--cli` |
 | `--keep-venv` | Keep the build environment for the next rebuild |
 | `--clean` | Delete all previous build outputs first |
 | `--deep-compile` | Also compile dependencies (hours; release-grade) |

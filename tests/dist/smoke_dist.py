@@ -66,7 +66,7 @@ def get(path, timeout=5):
 def start(label):
     print(f"\n-- starting launcher ({label}) --", flush=True)
     return subprocess.Popen(
-        [str(LAUNCHER), "--no-browser"],
+        [str(LAUNCHER), "--cli"],
         cwd=str(STAGE),
         creationflags=CREATE_NEW_CONSOLE,
     )

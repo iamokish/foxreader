@@ -8,13 +8,60 @@ revealed after the marked health check and successful page navigation.
 | Platform | Viewer | Runtime requirement |
 | --- | --- | --- |
 | Windows x64 | WebView2 | Microsoft Evergreen runtime; falls back to the default browser and offers Microsoft's installer link when missing |
-| Linux x86_64 | WebKitGTK 4.1 / GTK 3 | Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-0`; `libwebkit2gtk-4.1-dev pkg-config` are needed to build |
+| Linux x86_64 | WebKitGTK 4.1 / GTK 3 | Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-0` for the reader window; the browser controller needs only GTK 3. `libwebkit2gtk-4.1-dev pkg-config` are needed to build |
 | macOS arm64, 14+ | WKWebView | Built into macOS |
 
-Run `launcher --browser` to use the existing browser workflow. The manager window
-shows startup progress and stays open to control the backend. `--no-browser`
-and `FOX_READER_NO_BROWSER=1` retain the headless mode. On Linux without GTK/WebKit
-or a display, the executable remains usable and falls back to the browser.
+Run `launcher --browser` to open the system browser with a controller window.
+On Linux the controller is loaded independently of WebKitGTK, so it remains
+available when the reader's web engine is missing. It shows startup and running
+status, offers **Open Reader** to reopen the page, and keeps **Quit Fox Reader**
+available after the browser closes. Closing the browser does not stop Fox Reader.
+
+While the backend starts, the Linux controller offers **Cancel Startup**.
+A controller that started the backend offers **Quit Fox Reader**; an attached
+controller offers **Close This Window** and explains that Fox Reader will remain
+running. Its title-bar close button follows the same ownership rules.
+
+If GTK or the display is unavailable, Linux uses an attached terminal or opens
+an available terminal manager before starting the backend. If no controller or
+terminal can open, it reports an error and does not start a new invisible backend.
+This also applies when launching from the applications menu with `Terminal=false`.
+
+`launcher --cli` and `FOX_READER_CLI=1` explicitly select terminal/headless mode:
+the launcher stays in the foreground without opening a browser or window. Ctrl+C
+stops its owned backend; interrupting an attached manager only detaches it. This
+explicit mode remains available for scripts and environments without a display.
+
+## Optional build without Fox Reader windows
+
+Build locally with `python packaging/build.py --no-window` to remove all Fox
+Reader graphical windows, including the reader, loading banner, browser
+controller, and error dialogs. The browser opens by default once the backend
+is ready; `--browser` selects the same behavior. Status and errors appear in
+the terminal. `--cli` or `FOX_READER_CLI=1` starts the foreground manager
+without opening a browser. This option does not change the regular CI builds.
+
+Open `launcher.exe` on Windows. On Linux, `./install-desktop.sh` installs a
+`Terminal=true` menu entry; direct browser-mode launches reuse a terminal or
+open one before starting the backend. On macOS, open `Fox Reader.command`,
+which starts the launcher in Terminal; this variant has no `.app` bundle.
+A bare Mac launcher or a detached Windows launcher without a usable terminal
+reports an error before starting a new backend in browser mode. Explicit
+`--cli` remains available for scripts.
+
+Keep the terminal manager open while reading. Closing the browser does not
+stop Fox Reader; Ctrl+C in the manager stops its owned backend. Interrupting
+an attached manager leaves the existing backend running. Linux browser-mode
+startup fails before launching a new backend if no terminal can be opened.
+
+The variant omits the WebView2 SDK/loader and both Linux window plugins, so
+its launcher does not require WebView2 or GTK/WebKitGTK. Backend and model
+requirements are unchanged. Archives have a `-no-window` suffix and record
+`"no_window": true` in `build-info.json`. Update checks still report new
+releases, but require rebuilding this variant with `--no-window` instead of
+downloading a regular native-window build.
+
+## Native window behavior
 
 Native-engine initialization and the first page navigation each have a
 30-second deadline. Waiting for backend readiness has no viewer deadline, and
@@ -111,8 +158,12 @@ each OS. The automated tests do not replace these runtime checks:
    Close the first during a backend operation; confirm its processes exit and
    its cache cleanup runs. Test an occupied port and a backend startup failure.
 5. On Linux, repeat file pickers, drag/drop, and fullscreen on both Wayland and
-   X11. Test missing WebKitGTK and `--browser`. On Windows, test missing WebView2
-   and its browser fallback.
+   X11. Launch from the applications menu without WebKitGTK and with `--browser`.
+   Confirm the GTK-only controller stays visible after closing the browser,
+   **Open Reader** reopens the page, and quitting stops only the owned backend.
+   Test missing GTK with and without an available terminal; a failed terminal
+   launch must not leave a new backend running. Check `--cli` opens no browser
+   or GUI. On Windows, test missing WebView2 and its browser fallback.
 6. Check and cancel an update, retry it, and verify the final archive. Test a
    corrupted/missing part and insufficient disk space. The working installation
    must remain usable throughout.

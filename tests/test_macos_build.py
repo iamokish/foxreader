@@ -75,6 +75,120 @@ def test_mac_default_is_metal(build, monkeypatch):
     assert captured == ["macos"]
 
 
+@pytest.mark.parametrize("no_window", [False, True])
+def test_build_launcher_receives_window_variant(build, monkeypatch, tmp_path, no_window):
+    monkeypatch.setattr(build, "WORK_DIR", tmp_path / "work")
+    compiler = SimpleNamespace(kind="fixture")
+    monkeypatch.setattr(build, "find_compiler", lambda **_: compiler)
+    calls = []
+
+    def compile_fixture(output, **kwargs):
+        calls.append(kwargs)
+        return output
+
+    monkeypatch.setattr(build, "build_launcher", compile_fixture)
+    launcher, kind = build.compile_launcher(tmp_path / "python", no_window=no_window)
+    assert launcher == build.WORK_DIR / build.LAUNCHER_NAME
+    assert kind == "fixture"
+    assert calls == [{"compiler": compiler, "no_window": no_window}]
+
+
+@pytest.mark.parametrize("no_window", [False, True])
+def test_mac_staging_always_finalizes_binaries_and_signs_only_present_app(
+    build, monkeypatch, tmp_path, no_window,
+):
+    monkeypatch.setattr(build.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(build, "STAGE_DIR", tmp_path / "stage")
+    dist = tmp_path / "backend.dist"
+    dist.mkdir()
+    (dist / build.BACKEND_NAME).write_bytes(b"backend fixture")
+    launcher = tmp_path / build.LAUNCHER_NAME
+    launcher.write_bytes(b"launcher fixture")
+    finalized = []
+    codesigned = []
+    monkeypatch.setattr(build.macos, "finalize", finalized.append)
+    monkeypatch.setattr(build.macos, "_run", codesigned.append)
+
+    root = build.stage_layout(dist, launcher, no_window=no_window)
+
+    assert finalized == [root]
+    assert (root / "bin" / build.BACKEND_NAME).read_bytes() == b"backend fixture"
+    if no_window:
+        assert codesigned == []
+        assert not (root / "Fox Reader.app").exists()
+        assert (root / "Fox Reader.command").is_file()
+    else:
+        assert codesigned == [
+            ["xcrun", "codesign", "--force", "--sign", "-", str(root / "Fox Reader.app")],
+            ["xcrun", "codesign", "--verify", "--strict", str(root / "Fox Reader.app")],
+        ]
+
+
+@pytest.mark.parametrize("gguf_device", [None, "cpu", "cu130"])
+@pytest.mark.parametrize("platform_tag", ["windows-x64", "linux-x64", "macos-arm64"])
+def test_no_window_archive_has_distinct_suffix(build, gguf_device, platform_tag):
+    native = build.archive_stem("0.2.2", "cpu", gguf_device, platform_tag)
+    terminal = build.archive_stem("0.2.2", "cpu", gguf_device, platform_tag, no_window=True)
+    assert terminal == native + "-no-window"
+
+
+def test_no_window_packaging_preserves_existing_native_archive(build, monkeypatch, tmp_path):
+    monkeypatch.setattr(build, "DIST_DIR", tmp_path / "dist")
+    monkeypatch.setattr(build, "_platform_tag", lambda: "windows-x64")
+    root = tmp_path / "fox-reader"
+    root.mkdir()
+    (root / "fixture.txt").write_text("native contents", encoding="utf-8")
+    native = build.package_output(root, "0.2.2", "cpu", None)
+    original = native.read_bytes()
+    (root / "fixture.txt").write_text("no-window contents", encoding="utf-8")
+
+    terminal = build.package_output(root, "0.2.2", "cpu", None, no_window=True)
+
+    assert terminal.name == "fox-reader-v0.2.2-cpu-windows-x64-no-window.zip"
+    assert native.read_bytes() == original
+    assert terminal.read_bytes() != original
+
+
+@pytest.mark.parametrize("no_window", [False, True])
+def test_window_variant_propagates_through_main_and_metadata(build, monkeypatch, tmp_path, no_window):
+    monkeypatch.setattr(build.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(build.platform, "machine", lambda: "x86_64")
+    argv = ["build.py", "--no-gguf", "--skip-frontend"]
+    monkeypatch.setattr(sys, "argv", argv + (["--no-window"] if no_window else []))
+    monkeypatch.setattr(build, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(build, "DIST_DIR", tmp_path / "dist")
+    root = tmp_path / "staged"
+    root.mkdir()
+    propagated = []
+
+    def compile_fixture(python, **kwargs):
+        propagated.append(("compile", kwargs))
+        return tmp_path / "launcher", "fixture"
+
+    def stage_fixture(dist, launcher, **kwargs):
+        propagated.append(("stage", kwargs))
+        return root
+
+    def package_fixture(root, version, device, gguf_device, **kwargs):
+        propagated.append(("package", kwargs))
+        return tmp_path / "archive.tar.gz"
+
+    monkeypatch.setattr(build, "compile_launcher", compile_fixture)
+    monkeypatch.setattr(build, "stage_layout", stage_fixture)
+    monkeypatch.setattr(build, "package_output", package_fixture)
+    for name in (
+        "create_build_venv", "embed_frontend", "install_llama_cpp", "_warn_if_disk_tight",
+        "run_nuitka", "purge_cuda_libs", "bundle_llama_cpp", "bundle_runtime_dlls",
+        "prune_duplicated_libs", "bundle_metadata", "cleanup",
+    ):
+        monkeypatch.setattr(build, name, lambda *_, **__: None)
+    monkeypatch.setattr(build, "finalize_release_files", lambda archive, split: [archive])
+
+    assert build.main() == 0
+    assert propagated == [(name, {"no_window": no_window}) for name in ("compile", "stage", "package")]
+    assert json.loads((root / "build-info.json").read_text(encoding="utf-8"))["no_window"] is no_window
+
+
 def test_preflight_pins_environment(mac, monkeypatch):
     monkeypatch.setattr(mac.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(mac.platform, "machine", lambda: "arm64")
@@ -498,7 +612,7 @@ def test_mac_smoke_removes_host_library_overrides_but_keeps_validation_policy(ma
     assert "LLAMA_CPP_LIB_PATH" not in env
     assert "FOX_READER_MODELS_DIR" not in env
     assert env["FOX_BUILD_ALLOW_NO_GPU"] == "1"
-    assert env["FOX_READER_NO_BROWSER"] == "1"
+    assert env["FOX_READER_CLI"] == "1"
     assert env["HF_HUB_OFFLINE"] == "1"
 
 

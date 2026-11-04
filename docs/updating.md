@@ -26,6 +26,11 @@ approximately twice its archive size in free space while joining; the app checks
 space before transferring data and removes the numbered parts after a successful
 join. It keeps your existing installation and user files throughout.
 
+Local builds made with `--no-window` can check newer versions and release notes,
+but cannot download an update archive through the app: published CI archives
+include native windows. Rebuild the newer release with `--no-window` to keep Fox
+Reader's graphical windows excluded.
+
 ## Release workflow
 
 The build workflow uploads a checksum manifest for every variant alongside the

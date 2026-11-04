@@ -15,7 +15,9 @@ int fox_window_create(const char *root_utf8, void (*request_stop)(void),
                       void (*open_browser)(const char *url), void (*log)(const char *message),
                       int browser_mode);
 void fox_window_status(const char *message);
-void fox_window_ready(const char *url);
+/* Ownership is explicit so a browser controller can label its close action
+ * accurately; an attached window must not promise to stop another launcher. */
+void fox_window_ready(const char *url, int owns_backend);
 /* Success closes the window; a failure remains visible until dismissed.
  * A close requested by the user always waits for the worker to finish. */
 void fox_window_finish(int exit_code);

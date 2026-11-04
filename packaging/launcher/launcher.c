@@ -5,7 +5,8 @@
  * WebView only displays its existing localhost frontend. The GUI runs on the
  * main thread while a worker preserves lock -> marked health check -> monitor
  * -> token-authenticated shutdown, with a 20-second grace and OS backstop.
- * --browser opens the system browser; --no-browser keeps a headless manager.
+ * --browser opens the system browser; --cli keeps a foreground CLI manager.
+ * FOX_NO_WINDOW omits every native UI and uses a terminal for browser mode.
  * Diagnostics go to logs/, with native child output rotated separately from
  * Python logging. See packaging/toolchain.py for native platform builds.
  */
@@ -64,11 +65,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(FOX_GUI) && defined(FOX_NO_WINDOW)
+#  error "FOX_GUI and FOX_NO_WINDOW are mutually exclusive"
+#endif
 #ifdef FOX_GUI
 #  include "window.h"
 #endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+#  include "terminal_linux.h"
+#endif
 
+#if defined(FOX_GUI) || defined(_WIN32) || (defined(FOX_NO_WINDOW) && defined(__linux__))
 static int g_gui = 0;
+#endif
 static FILE *g_log = NULL;
 static FILE *g_backend_output = NULL;
 #ifdef FOX_GUI
@@ -1657,7 +1666,7 @@ static void show_ui(const char *url)
 {
 #ifdef FOX_GUI
     if (g_gui) {
-        fox_window_ready(url);
+        fox_window_ready(url, g_owner);
         return;
     }
 #endif
@@ -1782,8 +1791,12 @@ static void usage(void)
         "\n"
         "  launcher [options]\n"
         "\n"
+#ifdef FOX_NO_WINDOW
+        "  --browser      open your default browser with a terminal manager (default)\n"
+#else
         "  --browser      use your default browser instead of the native viewer\n"
-        "  --no-browser   start without opening the UI\n"
+#endif
+        "  --cli          run in the terminal without opening a browser or window\n"
         "  --version      print the launcher version\n"
         "  --help, -h     this message\n"
         "\n"
@@ -1792,7 +1805,7 @@ static void usage(void)
         "If Fox Reader is already up, this window watches it instead of starting a\n"
         "second copy, and closing this window leaves it running.\n"
         "\n"
-        "FOX_READER_NO_BROWSER=1 has the same effect as --no-browser.\n",
+        "FOX_READER_CLI=1 has the same effect as --cli.\n",
         FOX_LAUNCHER_VERSION);
 }
 
@@ -1977,10 +1990,37 @@ static void *lifecycle_thread(void *param)
 }
 #endif
 
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+static int terminal_cancelled(void) { return STOP_REQUESTED(); }
+#endif
+
+#if defined(FOX_NO_WINDOW) && (defined(_WIN32) || defined(__APPLE__))
+static int terminal_available(void)
+{
+#ifdef _WIN32
+    DWORD mode;
+    return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) &&
+        (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) ||
+         GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &mode));
+#else
+    int fd, available;
+    if (!isatty(STDIN_FILENO) || (!isatty(STDOUT_FILENO) && !isatty(STDERR_FILENO))) return 0;
+    fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    available = tcgetpgrp(fd) == getpgrp();
+    close(fd);
+    return available;
+#endif
+}
+#endif
+
 int main(int argc, char **argv)
 {
     pchar root[PATH_CAP];
     int want_browser = 1, browser_mode = 0, i, result;
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    const char *terminal_socket = NULL;
+#endif
 #ifdef _WIN32
     /* Preserve command-line output without creating a console on double-click. */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
@@ -1993,10 +2033,16 @@ int main(int argc, char **argv)
     SetConsoleOutputCP(CP_UTF8);
 #endif
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--no-browser") == 0) {
+        if (strcmp(argv[i], "--cli") == 0) {
             want_browser = 0;
         } else if (strcmp(argv[i], "--browser") == 0) {
             browser_mode = 1;
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+        } else if (strcmp(argv[i], "--terminal-manager") == 0 && i + 1 < argc && !terminal_socket) {
+            /* Internal terminal handoff: bypass GTK but keep the browser UI.
+             * A private handshake and real controlling TTY are mandatory. */
+            terminal_socket = argv[++i];
+#endif
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage();
             return 0;
@@ -2011,7 +2057,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (env_truthy("FOX_READER_NO_BROWSER"))
+    if (env_truthy("FOX_READER_CLI"))
         want_browser = 0;
 
     if (!exe_dir(root, PATH_CAP)) {
@@ -2048,12 +2094,79 @@ int main(int argc, char **argv)
 #endif
     init_logs(root);
     install_handlers();
+#if defined(FOX_NO_WINDOW) && (defined(_WIN32) || defined(__APPLE__))
+    if (want_browser && !terminal_available()) {
+#ifdef __APPLE__
+        errline("Browser mode needs an interactive terminal. Open Fox Reader.command, "
+                "or run ./launcher --cli for terminal-free operation.\n");
+#else
+        errline("Browser mode needs an interactive terminal. Open launcher.exe normally, "
+                "or run launcher.exe --cli for terminal-free operation.\n");
+#endif
+        result = 1;
+        goto finished;
+    }
+#endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    if (terminal_socket && (STOP_REQUESTED() || !want_browser || fox_terminal_connect(terminal_socket) != 0)) {
+        if (!STOP_REQUESTED())
+            errline("Cannot establish an interactive terminal manager. Open a terminal in the Fox Reader folder "
+                    "and run ./launcher --cli.\n");
+        result = STOP_REQUESTED() ? 0 : 1;
+        goto finished;
+    }
+    if (terminal_socket && (STOP_REQUESTED() || !fox_terminal_available())) {
+        result = STOP_REQUESTED() ? 0 : 1;
+        goto finished;
+    }
+#endif
 #ifdef FOX_GUI
-    if (want_browser) {
+    if (want_browser
+#ifdef __linux__
+        && !terminal_socket
+#endif
+    ) {
         char *root_utf8 = PRINTABLE(root);
         g_gui = fox_window_create(root_utf8, window_stop, open_browser, window_log, browser_mode);
         PRINTABLE_FREE(root_utf8);
     }
+#endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    if (want_browser && !g_gui && !fox_terminal_available()) {
+        char executable[PATH_CAP];
+        ssize_t length = readlink("/proc/self/exe", executable, sizeof executable - 1);
+#ifdef FOX_NO_WINDOW
+        const char *failure = "Fox Reader could not open an interactive terminal. "
+            "Open a terminal in the Fox Reader folder and run ./launcher, "
+            "or use ./launcher --cli for terminal-free operation.";
+#else
+        const char *failure = "Fox Reader could not open a control window or an interactive terminal. "
+            "Open a terminal in the Fox Reader folder and run ./launcher --cli. "
+            "The graphical controller needs GTK 3 and a desktop session.";
+#endif
+        result = 1;
+        if (terminal_socket || STOP_REQUESTED()) {
+            /* A terminal that disappeared must never trigger a relaunch loop. */
+            result = STOP_REQUESTED() ? 0 : 1;
+            goto finished;
+        }
+        if (length > 0 && length < (ssize_t)sizeof executable - 1) {
+            executable[length] = 0;
+            out("Opening an interactive terminal manager.\n");
+            if (fox_terminal_handoff(executable, terminal_cancelled) == 0 || STOP_REQUESTED()) result = 0;
+        }
+        if (result) {
+            errline("%s\n", failure);
+#ifndef FOX_NO_WINDOW
+            fox_terminal_notify(failure);
+#endif
+        }
+        /* The terminal successor owns startup and shutdown. This process
+         * never starts a backend when no visible controls are available. */
+        goto finished;
+    }
+#endif
+#ifdef FOX_GUI
     if (g_gui) {
         launch_context context;
         context.root = root;
@@ -2094,6 +2207,9 @@ int main(int argc, char **argv)
     (void)browser_mode;
 #endif
         result = run_backend(root, want_browser);
+#if (defined(__linux__) && defined(FOX_GUI)) || defined(FOX_NO_WINDOW)
+finished:
+#endif
     if (g_log)
         fclose(g_log);
     return result;

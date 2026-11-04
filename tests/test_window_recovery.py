@@ -124,15 +124,17 @@ def lines(root, name):
 
 
 @contextmanager
-def running_host(binary, tmp_path, url):
+def running_host(binary, tmp_path, url, *, owns_backend=True):
     root = tmp_path / "native viewer with spaces"
     root.mkdir()
     executable = root / binary.name
     shutil.copy2(binary, executable)
-    plugin = binary.parent / "libfox-window.so"
-    if plugin.is_file():
-        shutil.copy2(plugin, root / plugin.name)
-    process = subprocess.Popen([str(executable)], cwd=root, env={**os.environ, "FOX_TEST_URL": url},
+    for name in ("libfox-window.so", "libfox-browser.so"):
+        plugin = binary.parent / name
+        if plugin.is_file():
+            shutil.copy2(plugin, root / plugin.name)
+    env = {**os.environ, "FOX_TEST_URL": url, "FOX_TEST_OWNS_BACKEND": str(int(owns_backend))}
+    process = subprocess.Popen([str(executable)], cwd=root, env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         yield root, process
@@ -194,10 +196,13 @@ def test_close_during_initial_navigation_does_not_fall_back(native_host, tmp_pat
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="WebKitGTK renderer lifecycle")
-def test_linux_renderer_termination_falls_back_without_closing_manager(native_host, tmp_path, page_server):
+@pytest.mark.parametrize("owns_backend", [True, False], ids=["owned", "attached"])
+def test_linux_renderer_termination_falls_back_without_closing_manager(
+    native_host, tmp_path, page_server, owns_backend,
+):
     url, requested, release, loaded = page_server
     release.set()
-    with running_host(native_host, tmp_path, url) as (root, process):
+    with running_host(native_host, tmp_path, url, owns_backend=owns_backend) as (root, process):
         wait_for_navigation(root, process, requested)
         assert loaded.wait(10), "native page did not execute its ready script"
         (root / "crash-view").touch()
@@ -207,6 +212,11 @@ def test_linux_renderer_termination_falls_back_without_closing_manager(native_ho
         assert lines(root, "log-calls") == ["log"]
         assert not lines(root, "stop-requested")
         assert process.poll() is None
-        (root / "close-view").touch()
+        (root / "inspect-controls").touch()
+        expected = "Quit Fox Reader" if owns_backend else "Close This Window"
+        wait_for(lambda: lines(root, "close-label") == [expected])
+        (root / "open-reader").touch()
+        wait_for(lambda: lines(root, "browser-open") == [url, url])
+        (root / "quit-view").touch()
         assert process.wait(timeout=10) == 0
         assert lines(root, "stop-requested") == ["stop"]

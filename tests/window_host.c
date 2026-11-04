@@ -76,6 +76,19 @@ static void CALLBACK control_tick(HWND hwnd, UINT message, UINT_PTR timer, DWORD
 #endif
 
 #ifdef __linux__
+static GtkWidget *find_named(GtkWidget *widget, const char *name)
+{
+    GList *children, *entry;
+    GtkWidget *result = NULL;
+    if (g_strcmp0(gtk_widget_get_name(widget), name) == 0) return widget;
+    if (!GTK_IS_CONTAINER(widget)) return NULL;
+    children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (entry = children; entry && !result; entry = entry->next)
+        result = find_named(GTK_WIDGET(entry->data), name);
+    g_list_free(children);
+    return result;
+}
+
 static GtkWidget *find_webview(GtkWidget *widget)
 {
     GList *children, *entry;
@@ -93,15 +106,27 @@ static gboolean control_tick(gpointer unused)
 {
     int close = command_pending("close-view");
     int crash = command_pending("crash-view");
+    int reopen = command_pending("open-reader");
+    int quit = command_pending("quit-view");
+    int inspect = command_pending("inspect-controls");
     GList *windows, *entry;
     (void)unused;
-    if (!close && !crash) return G_SOURCE_CONTINUE;
+    if (!close && !crash && !reopen && !quit && !inspect) return G_SOURCE_CONTINUE;
     windows = gtk_window_list_toplevels();
     for (entry = windows; entry; entry = entry->next) {
         GtkWindow *window = GTK_WINDOW(entry->data);
         if (g_strcmp0(gtk_window_get_title(window), "Fox Reader") != 0) continue;
+        if (inspect) {
+            GtkWidget *button = find_named(GTK_WIDGET(window), "fox-browser-close");
+            if (button && GTK_IS_BUTTON(button))
+                record("close-label", gtk_button_get_label(GTK_BUTTON(button)));
+        }
         if (close) gtk_window_close(window);
-        else {
+        else if (reopen || quit) {
+            GtkWidget *button = find_named(GTK_WIDGET(window), reopen ? "fox-browser-open" : "fox-browser-close");
+            if (button && GTK_IS_BUTTON(button) && gtk_widget_get_sensitive(button))
+                gtk_button_clicked(GTK_BUTTON(button));
+        } else if (crash) {
             GtkWidget *view = find_webview(GTK_WIDGET(window));
             if (view) {
                 record("crash-requested", "crash");
@@ -119,6 +144,7 @@ static int run_host(void)
 {
     char root[4096];
     const char *url = getenv("FOX_TEST_URL");
+    const char *owner = getenv("FOX_TEST_OWNS_BACKEND");
     int result;
 #ifdef _WIN32
     wchar_t wide_root[4096];
@@ -142,7 +168,7 @@ static int run_host(void)
 #elif defined(__linux__)
     timer = g_timeout_add(20, control_tick, NULL);
 #endif
-    fox_window_ready(url);
+    fox_window_ready(url, !owner || strcmp(owner, "0") != 0);
     result = fox_window_run();
 #ifdef _WIN32
     if (timer) KillTimer(NULL, timer);

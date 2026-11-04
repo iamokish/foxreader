@@ -6,12 +6,14 @@
 #include <string.h>
 #include <unistd.h>
 
-static GtkWidget *window, *label, *stack, *view;
+static GtkWidget *window, *label, *stack, *view, *status_box;
+static GtkWidget *browser_controls, *browser_open, *browser_close;
 static void (*stop_callback)(void);
 static void (*browser_callback)(const char *);
 static void (*log_callback)(const char *);
 static gboolean browser_mode, closing, finished, fullscreen, navigation_failed;
 static gboolean fallback_active, browser_opened;
+static gboolean owns_backend;
 static guint fullscreen_key;
 static guint startup_timer;
 static int result_code;
@@ -38,12 +40,18 @@ static void cancel_startup_timer(void)
 static void show_browser_status(const char *backend_message)
 {
     const char *status = backend_message ? backend_message :
-        (app_url ? "Fox Reader is running in your browser.\nKeep this window open while reading." :
+        (app_url ? (owns_backend ?
+                    "Fox Reader is running in your browser.\nClosing this window stops Fox Reader." :
+                    "Connected to an existing Fox Reader session.\nClosing this window leaves that session running.") :
                    "Waiting for the backend. Your browser will open when it is ready.");
     char *message = fallback_reason ? g_strdup_printf("%s\n\n%s", fallback_reason, status) : g_strdup(status);
     gtk_label_set_text(GTK_LABEL(label), message);
     g_free(message);
-    gtk_stack_set_visible_child(GTK_STACK(stack), label);
+    gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
+    gtk_widget_show(browser_controls);
+    gtk_widget_set_sensitive(browser_open, app_url && !closing && !finished);
+    gtk_button_set_label(GTK_BUTTON(browser_close), !app_url ? "Cancel Startup" :
+        owns_backend ? "Quit Fox Reader" : "Close This Window");
     if (app_url && !browser_opened && browser_callback) {
         browser_opened = TRUE;
         browser_callback(app_url);
@@ -60,7 +68,13 @@ static void recover_to_browser(const char *reason)
     if (log_callback) log_callback(reason);
     if (view) webkit_web_view_stop_loading(WEBKIT_WEB_VIEW(view));
     cancel_downloads();
+    /* Recovery never returns to the reader view. Keep a compact controller
+     * visible even if the reader was maximized or fullscreen when it failed. */
+    gtk_stack_set_homogeneous(GTK_STACK(stack), FALSE);
+    gtk_window_unfullscreen(GTK_WINDOW(window));
+    gtk_window_unmaximize(GTK_WINDOW(window));
     show_browser_status(NULL);
+    gtk_window_resize(GTK_WINDOW(window), 480, 240);
 }
 static gboolean startup_timed_out(gpointer data)
 {
@@ -84,7 +98,7 @@ static void web_process_terminated(WebKitWebView *web, WebKitWebProcessTerminati
 
 static void toggle_fullscreen(void)
 {
-    if (closing) return;
+    if (closing || browser_mode || fallback_active) return;
     if (fullscreen) gtk_window_unfullscreen(GTK_WINDOW(window));
     else gtk_window_fullscreen(GTK_WINDOW(window));
 }
@@ -143,12 +157,27 @@ static gboolean close_requested(GtkWidget *widget, GdkEvent *event, gpointer dat
         closing = TRUE;
         fox_recovery_stop(&recovery);
         cancel_startup_timer();
-        gtk_label_set_text(GTK_LABEL(label), "Closing Fox Reader...\nWaiting for the backend to finish safely.");
-        gtk_stack_set_visible_child(GTK_STACK(stack), label);
+        gtk_label_set_text(GTK_LABEL(label), !app_url ?
+            "Cancelling this launch...\nWaiting for it to finish safely." : owns_backend ?
+            "Closing Fox Reader...\nWaiting for the backend to finish safely." :
+            "Closing this window...\nThe existing Fox Reader session will keep running.");
+        gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
+        gtk_widget_set_sensitive(browser_open, FALSE);
+        gtk_widget_set_sensitive(browser_close, FALSE);
         cancel_downloads();
         stop_callback();
     }
     return TRUE;
+}
+static void browser_open_clicked(GtkButton *button, gpointer data)
+{
+    (void)button; (void)data;
+    if (!closing && !finished && app_url && browser_callback) browser_callback(app_url);
+}
+static void browser_close_clicked(GtkButton *button, gpointer data)
+{
+    (void)button; (void)data;
+    close_requested(window, NULL, NULL);
 }
 static gboolean context_menu(WebKitWebView *web, WebKitContextMenu *menu, GdkEvent *event,
                              WebKitHitTestResult *hit, gpointer data)
@@ -362,7 +391,7 @@ static gboolean load_failed(WebKitWebView *web, WebKitLoadEvent event, const cha
     navigation_failed = TRUE;
     cancel_startup_timer();
     gtk_label_set_text(GTK_LABEL(label), "The reader could not load. Close and relaunch with --browser.\nSee logs/backend.log for details.");
-    gtk_stack_set_visible_child(GTK_STACK(stack), label);
+    gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
     return TRUE;
 }
 int fox_window_create(const char *root, void (*stop)(void), void (*browser)(const char *),
@@ -394,12 +423,30 @@ int fox_window_create(const char *root, void (*stop)(void), void (*browser)(cons
     g_signal_connect(window, "window-state-event", G_CALLBACK(window_state), NULL);
     stack = gtk_stack_new();
     gtk_container_add(GTK_CONTAINER(window), stack);
+    status_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+    gtk_container_set_border_width(GTK_CONTAINER(status_box), 24);
     label = gtk_label_new("Starting Fox Reader...\nThe backend usually takes 10-15 seconds to become ready.");
     gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(label), 64);
     gtk_label_set_justify(GTK_LABEL(label), GTK_JUSTIFY_CENTER);
-    gtk_widget_set_margin_start(label, 32);
-    gtk_widget_set_margin_end(label, 32);
-    gtk_stack_add_named(GTK_STACK(stack), label, "status");
+    gtk_box_pack_start(GTK_BOX(status_box), label, TRUE, TRUE, 0);
+    browser_controls = gtk_button_box_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_button_box_set_layout(GTK_BUTTON_BOX(browser_controls), GTK_BUTTONBOX_END);
+    gtk_box_set_spacing(GTK_BOX(browser_controls), 8);
+    gtk_widget_set_no_show_all(browser_controls, TRUE);
+    gtk_box_pack_end(GTK_BOX(status_box), browser_controls, FALSE, FALSE, 0);
+    browser_open = gtk_button_new_with_label("Open Reader");
+    gtk_widget_set_name(browser_open, "fox-browser-open");
+    gtk_widget_set_sensitive(browser_open, FALSE);
+    g_signal_connect(browser_open, "clicked", G_CALLBACK(browser_open_clicked), NULL);
+    gtk_container_add(GTK_CONTAINER(browser_controls), browser_open);
+    gtk_widget_show(browser_open);
+    browser_close = gtk_button_new_with_label("Cancel Startup");
+    gtk_widget_set_name(browser_close, "fox-browser-close");
+    g_signal_connect(browser_close, "clicked", G_CALLBACK(browser_close_clicked), NULL);
+    gtk_container_add(GTK_CONTAINER(browser_controls), browser_close);
+    gtk_widget_show(browser_close);
+    gtk_stack_add_named(GTK_STACK(stack), status_box, "status");
     if (!browser_mode) {
         manager = webkit_user_content_manager_new();
         webkit_user_content_manager_register_script_message_handler(manager, "foxFullscreen");
@@ -427,7 +474,7 @@ int fox_window_create(const char *root, void (*stop)(void), void (*browser)(cons
         g_signal_connect(view, "web-process-terminated", G_CALLBACK(web_process_terminated), NULL);
         gtk_stack_add_named(GTK_STACK(stack), view, "reader");
     }
-    gtk_stack_set_visible_child(GTK_STACK(stack), label);
+    gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
     gtk_widget_show_all(window);
     return 1;
 }
@@ -437,7 +484,7 @@ static gboolean status_on_main(gpointer text)
         if (fallback_active) show_browser_status(text);
         else {
             gtk_label_set_text(GTK_LABEL(label), text);
-            gtk_stack_set_visible_child(GTK_STACK(stack), label);
+            gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
         }
     }
     return G_SOURCE_REMOVE;
@@ -446,11 +493,25 @@ void fox_window_status(const char *message)
 {
     g_idle_add_full(G_PRIORITY_DEFAULT, status_on_main, g_strdup(message), g_free);
 }
-static gboolean ready_on_main(gpointer text)
+typedef struct {
+    char *url;
+    int owned;
+} ReadyMessage;
+
+static void free_ready(gpointer value)
 {
+    ReadyMessage *message = value;
+    g_free(message->url);
+    g_free(message);
+}
+
+static gboolean ready_on_main(gpointer value)
+{
+    ReadyMessage *message = value;
     if (closing || finished) return G_SOURCE_REMOVE;
+    owns_backend = message->owned != 0;
     g_free(app_url);
-    app_url = g_strdup(text);
+    app_url = g_strdup(message->url);
     if (browser_mode || fallback_active) show_browser_status(NULL);
     else if (fox_recovery_begin_navigation(&recovery, (uint64_t)(g_get_monotonic_time() / 1000))) {
         /* WebKit starts its rendering process on this first load. Backend
@@ -460,9 +521,12 @@ static gboolean ready_on_main(gpointer text)
     }
     return G_SOURCE_REMOVE;
 }
-void fox_window_ready(const char *url)
+void fox_window_ready(const char *url, int owned)
 {
-    g_idle_add_full(G_PRIORITY_DEFAULT, ready_on_main, g_strdup(url), g_free);
+    ReadyMessage *message = g_new(ReadyMessage, 1);
+    message->url = g_strdup(url);
+    message->owned = owned;
+    g_idle_add_full(G_PRIORITY_DEFAULT, ready_on_main, message, free_ready);
 }
 static gboolean finish_on_main(gpointer code)
 {
@@ -471,8 +535,13 @@ static gboolean finish_on_main(gpointer code)
     cancel_startup_timer();
     result_code = GPOINTER_TO_INT(code);
     cancel_downloads();
+    gtk_widget_set_sensitive(browser_open, FALSE);
     if (closing || !result_code) gtk_main_quit();
-    else gtk_stack_set_visible_child(GTK_STACK(stack), label);
+    else {
+        gtk_button_set_label(GTK_BUTTON(browser_close), "Close");
+        gtk_widget_set_sensitive(browser_close, TRUE);
+        gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
+    }
     return G_SOURCE_REMOVE;
 }
 void fox_window_finish(int code) { g_idle_add(finish_on_main, GINT_TO_POINTER(code)); }

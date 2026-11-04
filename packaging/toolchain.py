@@ -2,8 +2,9 @@
 
 The lifecycle is C, with a thin native viewer on each OS. Windows desktop builds
 require MSVC and the pinned WebView2 SDK (the browser runtime is never bundled).
-Linux builds a separate GTK/WebKitGTK viewer so the base launcher can still run
-when that runtime is absent. macOS links Cocoa and the system WebKit framework.
+Linux builds separate GTK/WebKitGTK and GTK-only windows so browser mode has
+visible controls without WebKit. macOS links Cocoa and the system WebKit framework.
+Optional --no-window builds omit those hosts and keep browser/terminal modes.
 The generic compiler search below also supports small C fixtures and probes.
 
 Search order, most to least preferred:
@@ -706,8 +707,9 @@ def build_launcher(
     compiler: Compiler | None = None,
     python: Path | None = None,
     gui: bool = True,
+    no_window: bool = False,
 ) -> Path:
-    """Compile ``source`` to ``out``. Returns ``out``."""
+    """Compile ``source`` to ``out``; ``no_window`` omits all native GUI hosts."""
     if not source.is_file():
         raise ToolchainError(f"launcher source is missing: {source}")
 
@@ -721,9 +723,16 @@ def build_launcher(
 
     with tempfile.TemporaryDirectory(prefix="fox-launcher-") as tmp:
         scratch = Path(tmp)
-        native = gui and source.resolve() == LAUNCHER_SOURCE.resolve()
+        launcher = source.resolve() == LAUNCHER_SOURCE.resolve()
+        native = gui and launcher and not no_window
         cmd = (_native_command(compiler, source, out, scratch) if native
                else _command(compiler, source, out, scratch))
+        if launcher and no_window:
+            # Keep this distinct from gui=False, which also builds C test
+            # fixtures. Console variants must retain terminal handoff safety.
+            cmd.insert(1, "/DFOX_NO_WINDOW" if compiler.kind == "msvc" else "-DFOX_NO_WINDOW")
+            if platform.system() == "Linux":
+                cmd.append(str(LAUNCHER_SOURCE.parent / "terminal_linux.c"))
 
         print(f"  compiler: {compiler.label}")
         print(f"  {' '.join(cmd)}")
@@ -805,16 +814,22 @@ def _native_command(compiler: Compiler, source: Path, out: Path, scratch: Path) 
         cmd = _command(compiler, source, out, scratch)
         return cmd + ["-DFOX_GUI", "-fobjc-arc", str(directory / "window_macos.m"),
                       "-framework", "Cocoa", "-framework", "WebKit", "-pthread"]
-    try:
-        flags = subprocess.run(["pkg-config", "--cflags", "--libs", "webkit2gtk-4.1"],
-                               capture_output=True, text=True, timeout=30, check=True)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ToolchainError("Install libwebkit2gtk-4.1-dev and pkg-config to build the Linux viewer.") from exc
-    plugin = out.parent / "libfox-window.so"
-    _checked_build([str(compiler.path), "-O2", "-Wall", "-Wextra", "-fPIC", "-shared",
-                    str(directory / "window_linux.c"), "-o", str(plugin),
-                    *shlex.split(flags.stdout)], compiler, scratch)
+    for source_name, library_name, package in (
+        ("window_linux.c", "libfox-window.so", "webkit2gtk-4.1"),
+        ("window_linux_browser.c", "libfox-browser.so", "gtk+-3.0"),
+    ):
+        try:
+            flags = subprocess.run(["pkg-config", "--cflags", "--libs", package],
+                                   capture_output=True, text=True, timeout=30, check=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ToolchainError(
+                "Install libwebkit2gtk-4.1-dev, libgtk-3-dev and pkg-config to build the Linux windows."
+            ) from exc
+        _checked_build([str(compiler.path), "-O2", "-Wall", "-Wextra", "-fPIC", "-shared",
+                        str(directory / source_name), "-o", str(out.parent / library_name),
+                        *shlex.split(flags.stdout)], compiler, scratch)
     return _command(compiler, source, out, scratch) + ["-DFOX_GUI", str(directory / "window_linux_loader.c"),
+                                                      str(directory / "terminal_linux.c"),
                                                       "-pthread", "-ldl"]
 
 
@@ -837,6 +852,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not fall back to downloading Nuitka's MinGW64 (Windows)",
     )
+    parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="omit every Fox Reader graphical window; use browser and terminal modes",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -845,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
             target = f"  [{compiler.target}]" if compiler.target else ""
             print(f"{compiler.label}{target}")
             return 0
-        build_launcher(args.out.resolve(), args.source.resolve(), compiler)
+        build_launcher(args.out.resolve(), args.source.resolve(), compiler, no_window=args.no_window)
     except ToolchainError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

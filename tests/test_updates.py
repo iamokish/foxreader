@@ -90,6 +90,52 @@ def test_status_does_not_check_network_and_source_build_does_not_guess(tmp_path,
     assert result["available"] and not result["compatible"] and chosen is None
 
 
+@pytest.mark.parametrize("platform", ["windows", "linux", "macos"])
+def test_no_window_build_checks_release_but_cannot_download_native_windows(service, network, platform):
+    build = {**service.build, "no_window": True, "platform": platform,
+             "architecture": "arm64" if platform == "macos" else "x86_64"}
+    (service.root / "build-info.json").write_text(json.dumps(build), encoding="utf-8")
+    service = updates.UpdateService(service.root)
+    value = prepare(service, network)
+    client = client_for(service)
+    headers = {"X-Fox-Reader-Update": "1", "Origin": "http://127.0.0.1"}
+
+    status = client.get("/api/updates/status").json()
+    assert status["current_version"] == "1.2.2"
+    assert status["download_supported"] is False
+    assert "--no-window" in status["reason"]
+    assert network[1] == []
+
+    response = client.get("/api/updates/check", headers=headers)
+    assert response.status_code == 200
+    release = response.json()
+    assert release["available"] is True and release["compatible"] is False
+    assert release["version"] == value["version"] and release["notes"] == value["notes"]
+    assert release["variant"] is None and release["download_size"] == 0
+    assert "--no-window" in release["reason"]
+    assert client.post("/api/updates/download", headers=headers).status_code == 409
+    assert network[1] == [updates.MANIFEST_URL]
+    assert not (service.root / "updates").exists()
+
+
+def test_explicit_native_window_build_keeps_update_support(service, network):
+    build = {**service.build, "no_window": False}
+    (service.root / "build-info.json").write_text(json.dumps(build), encoding="utf-8")
+    service = updates.UpdateService(service.root)
+    prepare(service, network)
+    assert service.status()["download_supported"] is True
+    assert service.check()["compatible"] is True
+
+
+@pytest.mark.parametrize("no_window", [None, 0, 1, "false", "true", {}, []])
+def test_invalid_no_window_metadata_cannot_select_update_archives(service, no_window):
+    build = {**service.build, "no_window": no_window}
+    (service.root / "build-info.json").write_text(json.dumps(build), encoding="utf-8")
+    service = updates.UpdateService(service.root)
+    assert service.build is None
+    assert service.status()["download_supported"] is False
+
+
 def test_checks_and_downloads_matching_variant_with_join_verification(service, network):
     value = prepare(service, network)
     result = service.check()

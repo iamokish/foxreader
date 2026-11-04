@@ -6,8 +6,6 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 
 *This is an early release. Expect bugs, rough edges, and ongoing changes as Fox Reader continues to develop.*
 
-**Version:** `0.2.0` (`pyproject.toml`). The C launcher reports its own `FOX_LAUNCHER_VERSION "1.0.0"` (`packaging/launcher/launcher.c`).
-
 ![Fox Reader translating a manga page](docs/examples/workspace.png)
 
 **Before:** the original Japanese page. **After:** the English typeset copy -- side by side in the reader Compare view:
@@ -452,6 +450,8 @@ Result layout:
 fox-reader/
   launcher(.exe)   desktop window and backend lifecycle
   Fox Reader.app/  Finder entry point (macOS only)
+  libfox-window.so WebKitGTK viewer (Linux only)
+  libfox-browser.so GTK-only browser controller (Linux only)
   bin/             compiled backend + linked libs (+ MSVC runtime DLLs + .dist-info metadata)
   cache/           scratch (empty, created at build)
   config/          fox_config.yaml
@@ -462,19 +462,25 @@ fox-reader/
   build-info.json  installed version and CPU/CUDA/GGUF variant
 ```
 
-Windows uses the installed [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); if it is missing, the launcher opens your browser and offers Microsoft's runtime installer link. Linux uses the distribution's WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` on Ubuntu/Debian). macOS uses built-in WKWebView. No Chromium runtime is bundled.
+Windows uses the installed [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); if it is missing, the launcher opens your browser and offers Microsoft's runtime installer link. Linux uses the distribution's WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` on Ubuntu/Debian). Without WebKitGTK, Linux opens the browser and keeps a separate GTK-only controller visible. macOS uses built-in WKWebView. No Chromium runtime is bundled.
 
 Double-click `launcher.exe` on Windows or `Fox Reader.app` on macOS. On Linux, put the extracted folder in its final location, run `./install-desktop.sh`, then open **Fox Reader** from your applications menu; the entry uses `Terminal=false`. Keep the whole portable folder together, including `config`, `fonts`, and `models` beside the Mac app.
 
-`launcher --browser` keeps the current system-browser workflow; `--no-browser` starts only the backend. Closing the desktop window stops the backend it started, with a 20-second graceful shutdown period. A window attached to an already-running backend leaves that backend running. Diagnostics are in `logs/launcher.log`, `logs/backend.log`, `logs/backend-output.log`, and `logs/frontend.log`.
+`launcher --browser` opens the system browser and keeps a controller window available. `launcher --cli` (or `FOX_READER_CLI=1`) runs the backend with a foreground terminal manager, without opening a browser or window; Ctrl+C stops the backend it started. Closing the desktop controller also stops its owned backend, with a 20-second graceful shutdown period. A controller attached to an already-running backend leaves that backend running.
+
+The Linux browser controller shows the running state and provides **Open Reader** and **Quit Fox Reader**. Closing the browser leaves this controller visible. If GTK cannot open a window, the launcher uses an attached terminal or opens a terminal manager before starting the backend. If neither is available, it reports the failure without starting an invisible backend. Diagnostics are in `logs/launcher.log`, `logs/backend.log`, `logs/backend-output.log`, and `logs/frontend.log`.
 
 For verified update downloads and preserving your existing installation, see [Updating Fox Reader](docs/updating.md). Desktop testing notes are in [docs/desktop.md](docs/desktop.md).
+
+For a build without any Fox Reader graphical windows, use `python packaging/build.py --no-window`. It opens the system browser and keeps a terminal manager visible; Ctrl+C stops the backend it started. `launcher --cli` (or `FOX_READER_CLI=1`) skips the browser for terminal/headless use. There are no native reader, loading, controller, or error windows in this variant. On Windows open `launcher.exe`; on Linux install its menu entry with `./install-desktop.sh` (it uses `Terminal=true`); on macOS open `Fox Reader.command` in Terminal. Keep the terminal open while reading: closing the browser alone does not stop the backend. A second manager attached to an existing backend only detaches when stopped.
+
+This optional local build omits WebView2 and the Linux GTK/WebKitGTK plugins, and does not create a Mac `.app`. Its archive has a `-no-window` suffix and `build-info.json` records the variant. The regular CI builds remain native-window builds; updating this custom variant requires another `--no-window` build.
 
 ### Prerequisites
 
 - `uv`, `pnpm`, Node.js `22+` (CI pins 24 + pnpm 11), Python `3.12`
 - Native compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
-  - Windows: VS Build Tools with “Desktop development with C++” and the Windows SDK are required for the WebView2 host. The build downloads a pinned, SHA512-verified WebView2 SDK header and static loader; it does not download a browser runtime. For an offline build, set `FOX_WEBVIEW2_SDK` to the unpacked Microsoft.Web.WebView2 `1.0.2903.40` NuGet package. MinGW remains usable for the standalone C test fixtures.
+  - Windows: VS Build Tools with “Desktop development with C++” and the Windows SDK are required for the WebView2 host. Native-window builds download a pinned, SHA512-verified WebView2 SDK header and static loader; they do not download a browser runtime. For an offline native-window build, set `FOX_WEBVIEW2_SDK` to the unpacked Microsoft.Web.WebView2 `1.0.2903.40` NuGet package. MinGW can also compile the `--no-window` launcher and standalone C test fixtures; CUDA builds retain their own compiler requirements.
   - Linux: `gcc`/`clang`, `pkg-config`, and WebKitGTK headers (`sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
   - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+. Local verification requires a working GPU by default; [GitHub-hosted builds](packaging/build.md#build-macos-releases-on-github) handle runners without GPU access.
 - GPU builds: matching CUDA toolkit (`nvcc`) or ROCm 6.1+; CPU GGUF builds want OpenBLAS (`apt install libopenblas-dev` on Linux, or `--openblas download`).
@@ -485,6 +491,7 @@ For verified update downloads and preserving your existing installation, see [Up
 python packaging/build.py
 python packaging/build.py --clean            # wipe previous artifacts first
 python packaging/build.py --skip-frontend    # reuse prebuilt static/app.js
+python packaging/build.py --no-window       # browser + terminal, no Fox Reader GUI
 python packaging/build.py --keep-venv        # reuse build venv next time
 python packaging/build.py --deep-compile     # compile deps too (hours)
 python packaging/build.py --device cpu       # cpu|macos|cu118|cu126|cu129|cu130|rocm71|rocm72

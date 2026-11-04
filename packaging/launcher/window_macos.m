@@ -595,8 +595,9 @@ void fox_window_status(const char *message)
     }
 }
 
-void fox_window_ready(const char *url)
+void fox_window_ready(const char *url, int owns_backend)
 {
+    (void)owns_backend;
     @autoreleasepool {
         NSString *text = url ? [NSString stringWithUTF8String:url] : @"";
         dispatch_async(dispatch_get_main_queue(), ^{ [activeHost showReadyURL:text]; });

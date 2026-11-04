@@ -7,17 +7,30 @@ import struct
 from pathlib import Path
 
 
-def stage_desktop(root: Path, launcher: Path, system: str, version: str) -> None:
+def stage_desktop(root: Path, launcher: Path, system: str, version: str,
+                  *, no_window: bool = False) -> None:
     assets = Path(__file__).resolve().parent.parent / "frontend" / "static"
     icons = root / "icons"
     icons.mkdir(exist_ok=True)
     shutil.copy2(assets / "android-chrome-512x512.png", icons / "fox-reader.png")
-    if system == "Windows":
+    if system == "Windows" and not no_window:
         license = launcher.parent / "WebView2-LICENSE.txt"
         if not license.is_file() or not license.stat().st_size:
             raise RuntimeError("WebView2 SDK license is missing beside the compiled launcher")
         shutil.copy2(license, root / license.name)
     elif system == "Darwin":
+        if no_window:
+            # Finder opens .command files in Terminal. Keep arguments literal and
+            # resolve the portable folder independently of Terminal's directory.
+            command = root / "Fox Reader.command"
+            command.write_text(
+                '#!/bin/sh\nset -eu\n'
+                'root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)\n'
+                'exec "$root/launcher" "$@"\n',
+                encoding="utf-8", newline="\n",
+            )
+            command.chmod(0o755)
+            return
         contents = root / "Fox Reader.app" / "Contents"
         executable = contents / "MacOS"
         resources = contents / "Resources"
@@ -39,10 +52,17 @@ def stage_desktop(root: Path, launcher: Path, system: str, version: str) -> None
             "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
         }))
     elif system == "Linux":
-        plugin = launcher.parent / "libfox-window.so"
-        if not plugin.is_file():
-            raise RuntimeError("native Linux viewer library is missing")
-        shutil.copy2(plugin, root / plugin.name)
+        plugins = [] if no_window else [
+            launcher.parent / name for name in ("libfox-window.so", "libfox-browser.so")
+        ]
+        for plugin in plugins:
+            if not plugin.is_file() or not plugin.stat().st_size:
+                raise RuntimeError(f"Linux window library is missing or empty: {plugin.name}")
+        for plugin in plugins:
+            shutil.copy2(plugin, root / plugin.name)
         installer = root / "install-desktop.sh"
-        installer.write_text((Path(__file__).parent / "launcher" / "install-desktop.sh").read_text(), encoding="utf-8")
+        script = (Path(__file__).parent / "launcher" / "install-desktop.sh").read_text(encoding="utf-8")
+        if no_window:
+            script = script.replace("Terminal=false\n", "Terminal=true\n")
+        installer.write_text(script, encoding="utf-8", newline="\n")
         installer.chmod(0o755)

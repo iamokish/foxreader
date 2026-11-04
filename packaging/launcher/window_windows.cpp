@@ -688,8 +688,9 @@ extern "C" void fox_window_status(const char *message)
     }
 }
 
-extern "C" void fox_window_ready(const char *url)
+extern "C" void fox_window_ready(const char *url, int owns_backend)
 {
+    (void)owns_backend;
     if (auto window = std::atomic_load(&active)) {
         { std::lock_guard<std::mutex> guard(window->pending_mutex);
           window->pending_url = url ? url : ""; window->has_url = true; }

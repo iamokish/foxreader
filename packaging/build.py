@@ -1178,7 +1178,7 @@ def create_build_venv(device: str) -> Path:
     return python
 
 
-def compile_launcher(python: Path) -> tuple[Path, str]:
+def compile_launcher(python: Path, *, no_window: bool = False) -> tuple[Path, str]:
     """Build the C launcher. Returns the binary and the compiler's kind.
 
     Deliberately before Nuitka: a machine with no C compiler should find that out
@@ -1195,7 +1195,7 @@ def compile_launcher(python: Path) -> tuple[Path, str]:
     out = WORK_DIR / LAUNCHER_NAME
     try:
         compiler = find_compiler(python=python)
-        built = build_launcher(out, compiler=compiler)
+        built = build_launcher(out, compiler=compiler, no_window=no_window)
     except ToolchainError as exc:
         raise BuildError(str(exc)) from exc
     print()
@@ -2384,7 +2384,7 @@ def bundle_metadata(dist: Path, python: Path) -> None:
     print(f"      {len(lookups)} runtime lookups resolve.\n")
 
 
-def stage_layout(dist: Path, launcher: Path) -> Path:
+def stage_layout(dist: Path, launcher: Path, *, no_window: bool = False) -> Path:
     """Assemble the tree the user unzips."""
     step("Staging the distribution...")
     root = _fresh(STAGE_DIR) / STAGE_NAME
@@ -2466,13 +2466,14 @@ def stage_layout(dist: Path, launcher: Path) -> Path:
     (root / "logs").mkdir()
 
     from desktop import stage_desktop
-    stage_desktop(root, launcher, platform.system(), _read_version())
+    stage_desktop(root, launcher, platform.system(), _read_version(), no_window=no_window)
 
     if platform.system() == "Darwin":
         try:
             macos.finalize(root)
-            macos._run(["xcrun", "codesign", "--force", "--sign", "-", str(root / "Fox Reader.app")])
-            macos._run(["xcrun", "codesign", "--verify", "--strict", str(root / "Fox Reader.app")])
+            if not no_window:
+                macos._run(["xcrun", "codesign", "--force", "--sign", "-", str(root / "Fox Reader.app")])
+                macos._run(["xcrun", "codesign", "--verify", "--strict", str(root / "Fox Reader.app")])
         except macos.MacOSBuildError as exc:
             raise BuildError(str(exc)) from exc
 
@@ -2485,7 +2486,8 @@ def stage_layout(dist: Path, launcher: Path) -> Path:
     return root
 
 
-def archive_stem(version: str, device: str, gguf_device: str | None, platform_tag: str) -> str:
+def archive_stem(version: str, device: str, gguf_device: str | None, platform_tag: str,
+                 *, no_window: bool = False) -> str:
     """The archive's name, without the extension.
 
     Every build of this project produces a tree with the same layout and a wildly
@@ -2512,18 +2514,21 @@ def archive_stem(version: str, device: str, gguf_device: str | None, platform_ta
         if gguf_device != device:
             parts.append(gguf_device)
     parts.append(platform_tag)
+    if no_window:
+        parts.append("no-window")
     # A version can be `0.1.0rc1+local.1`, and `+` is not a filename anywhere
     # worth having. Everything outside the safe set becomes a dash.
     return re.sub(r"[^A-Za-z0-9._-]+", "-", "-".join(parts))
 
 
-def package_output(root: Path, version: str, device: str, gguf_device: str | None) -> Path:
+def package_output(root: Path, version: str, device: str, gguf_device: str | None,
+                   *, no_window: bool = False) -> Path:
     """Archive the staged tree."""
     platform_tag = _platform_tag()
     step(f"Packaging {platform_tag}...")
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
-    base = DIST_DIR / archive_stem(version, device, gguf_device, platform_tag)
+    base = DIST_DIR / archive_stem(version, device, gguf_device, platform_tag, no_window=no_window)
     fmt = "zip" if platform_tag == "windows-x64" else "gztar"
     # `make_archive` appends to a zip that is already there, so a rebuild would
     # accumulate the union of every tree ever staged under this name.
@@ -2775,6 +2780,8 @@ def main() -> int:
     parser.add_argument("--clean", action="store_true", help="discard previous build artifacts first")
     parser.add_argument("--skip-frontend", action="store_true",
                         help="skip the pnpm build and embed the existing frontend/static")
+    parser.add_argument("--no-window", action="store_true",
+                        help="omit all Fox Reader graphical windows; use the browser and a terminal manager")
     parser.add_argument("--keep-venv", action="store_true",
                         help="keep the build venv, so the next build skips dependency resolution")
     parser.add_argument(
@@ -2899,7 +2906,8 @@ def main() -> int:
     print(f"GGUF:      {'left out (--no-gguf)' if args.no_gguf else gguf_device}")
     print(f"BLAS:      {blas_mode}")
     print(f"Scope:     {'everything (--deep-compile)' if args.deep_compile else 'fox_reader + entry'}")
-    print(f"Archive:   {archive_stem(version, args.device, gguf_device, platform_tag)}")
+    print(f"Interface: {'browser and terminal (--no-window)' if args.no_window else 'native windows'}")
+    print(f"Archive:   {archive_stem(version, args.device, gguf_device, platform_tag, no_window=args.no_window)}")
     print(f"Split:     {'off (one archive)' if args.split_bin is None else f'parts of {args.split_bin} MB'}")
     print()
 
@@ -2915,7 +2923,7 @@ def main() -> int:
         build_frontend()
 
     python = create_build_venv(args.device)
-    launcher, compiler_kind = compile_launcher(python)
+    launcher, compiler_kind = compile_launcher(python, no_window=args.no_window)
     entry = embed_frontend(python)
     gguf_build = install_llama_cpp(python, args, compiler_kind)
     _warn_if_disk_tight(args.device)
@@ -2937,14 +2945,15 @@ def main() -> int:
     prune_duplicated_libs(dist)
     bundle_metadata(dist, python)
 
-    root = stage_layout(dist, launcher)
+    root = stage_layout(dist, launcher, no_window=args.no_window)
     (root / "build-info.json").write_text(json.dumps({
         "version": version, "device": args.device, "gguf": gguf_device,
         "platform": {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}[platform.system()],
         "architecture": "arm64" if platform.system() == "Darwin" else "x86_64",
         "repository": os.environ.get("GITHUB_REPOSITORY", "iamokish/foxreader"),
+        "no_window": args.no_window,
     }, indent=2) + "\n", encoding="utf-8")
-    archive = package_output(root, version, args.device, gguf_device)
+    archive = package_output(root, version, args.device, gguf_device, no_window=args.no_window)
     release_files = finalize_release_files(archive, args.split_bin)
     cleanup(args.keep_venv)
 

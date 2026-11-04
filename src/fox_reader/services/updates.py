@@ -34,6 +34,10 @@ INSTALL_MESSAGE = (
     "config, fonts, and models folders from the old installation before starting the new launcher. "
     "Keep the old installation until the new version works."
 )
+NO_WINDOW_UPDATE_MESSAGE = (
+    "Published update archives include native windows. To keep this build without Fox Reader "
+    "graphical windows, rebuild the newer release with --no-window."
+)
 
 
 class UpdateError(ValueError):
@@ -128,6 +132,9 @@ def validate_manifest(manifest: object, build: dict | None, current_version: str
     if build is None:
         result["reason"] = "This is a source checkout or an older build without update metadata. Use the release page."
         return result, None
+    if build.get("no_window", False):
+        result["reason"] = NO_WINDOW_UPDATE_MESSAGE
+        return result, None
     try:
         variants = manifest["platform"][build["platform"]][build["architecture"]]["variants"]
         if not isinstance(variants, dict) or len(variants) > 100:
@@ -203,6 +210,7 @@ class UpdateService:
                     or not isinstance(build.get("version"), str)
                     or not re.fullmatch(r"[0-9][A-Za-z0-9.+_-]*", build["version"])
                     or not isinstance(build.get("device"), str)
+                    or type(build.get("no_window", False)) is not bool
                     or "gguf" not in build or not (build["gguf"] is None or isinstance(build["gguf"], str))):
                 return None
             return build
@@ -212,9 +220,11 @@ class UpdateService:
     def status(self) -> dict:
         with self._lock:
             result = {**self._status, "current_version": self.current_version,
-                      "download_supported": self.build is not None}
+                      "download_supported": self.build is not None and not self.build.get("no_window", False)}
             if not self.build:
                 result["reason"] = "Source checkouts and older builds use the release page for updates."
+            elif self.build.get("no_window", False):
+                result["reason"] = NO_WINDOW_UPDATE_MESSAGE
             return result
 
     def _set(self, **fields) -> None:
