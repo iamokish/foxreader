@@ -50,6 +50,8 @@ import { Splitter, useWorkspace } from "../workspace";
 import { refitViewer } from "../viewer";
 import { Reader, ReaderViewProvider } from "../reader";
 import { useVulpesPanels, VulpesPanelsProvider, type VxPanelId } from "../vulpes/VulpesPanelsContext";
+import { useEditorWidthLimit } from "../vulpes/useEditorWidthLimit";
+import { useVerticalPanelLimits } from "../vulpes/useVerticalPanelLimits";
 import { VulpesTopBar } from "../vulpes/VulpesTopBar";
 import { VulpesStatusBar } from "../vulpes/VulpesStatusBar";
 
@@ -91,14 +93,14 @@ interface SectionProps {
 }
 
 function Section({ id, title, note, actions, sized = false, collapsible = true, children }: SectionProps) {
-    const { getPanel, togglePanel, registerPanel } = useVulpesPanels();
+    const { getPanel, getPanelSize, togglePanel, registerPanel } = useVulpesPanels();
     const panel = getPanel(id);
     return (
         <section
             class={`vx-section${panel.visible ? "" : " is-collapsed"}`}
             data-section={id}
             ref={sized ? (el) => registerPanel(id, el as HTMLElement | null) : undefined}
-            style={sized && panel.visible ? { height: `${panel.size}px` } : undefined}
+            style={sized && panel.visible ? { height: `${getPanelSize(id)}px` } : undefined}
         >
             <header class={collapsible ? "vx-section__head" : "vx-section__head vx-section__head--static"}>
                 {collapsible ? (
@@ -127,13 +129,26 @@ function Section({ id, title, note, actions, sized = false, collapsible = true, 
 
 function VulpesShell() {
     const { mode } = useWorkspace();
-    const { getPanel, resizePanel, commitResize, resetPanels, registerPanel } = useVulpesPanels();
+    const {
+        getPanel,
+        getPanelSize,
+        resizePanel,
+        commitResize,
+        resetPanels,
+        registerPanel,
+        setEditorWidthLimit,
+        setVerticalGeometry,
+    } = useVulpesPanels();
+    const bodyRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
 
     const pages = getPanel("pages");
     const editor = getPanel("editor");
     const ocr = getPanel("ocr");
     const entries = getPanel("entries");
+
+    useEditorWidthLimit(bodyRef, mode !== "reader" && editor.visible, setEditorWidthLimit);
+    useVerticalPanelLimits(bodyRef, mode !== "reader", setVerticalGeometry);
 
     /**
      * Re-fit the page whenever the stage changes size, once per frame at most.
@@ -177,7 +192,7 @@ function VulpesShell() {
             <div class={`vx-root${mode === "reader" ? " is-reader" : ""}`}>
                 <VulpesTopBar onResetSections={resetPanels} />
 
-                <div class="vx-body">
+                <div class="vx-body" ref={bodyRef}>
                     <aside
                         class={`vx-rail${pages.visible ? "" : " is-collapsed"}`}
                         aria-label="Pages"
@@ -224,7 +239,7 @@ function VulpesShell() {
                         <div
                             class={`vx-capture${ocr.visible ? "" : " is-collapsed"}`}
                             ref={(el) => registerPanel("ocr", el as HTMLElement | null)}
-                            style={ocr.visible ? { height: `${ocr.size}px` } : undefined}
+                            style={ocr.visible ? { height: `${getPanelSize("ocr")}px` } : undefined}
                         >
                             <Section id="ocr" title="Captured text" note="OCR">
                                 <div class="vx-capture__body">

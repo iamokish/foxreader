@@ -184,9 +184,9 @@ describe("VulpesLayout sections", () => {
     }
 
     it("remembers the stored width of a column", () => {
-        localStorage.setItem("fox-reader-vulpes-panels", JSON.stringify({ pages: { visible: true, size: 200 } }));
+        localStorage.setItem("fox-reader-vulpes-panels", JSON.stringify({ pages: { visible: true, size: 140 } }));
         const { container } = renderVulpes();
-        expect(sizeOf(container, "pages")).toBe("200px");
+        expect(sizeOf(container, "pages")).toBe("140px");
     });
 
     it("sizes every section, not only the ones that were stored", () => {
@@ -209,7 +209,7 @@ describe("VulpesLayout sections", () => {
         // 9000px wide would leave no stage and no splitter to drag back.
         localStorage.setItem("fox-reader-vulpes-panels", JSON.stringify({ pages: { visible: true, size: 9000 } }));
         const { container } = renderVulpes();
-        expect(sizeOf(container, "pages")).toBe("420px");
+        expect(sizeOf(container, "pages")).toBe("160px");
     });
 
     it("survives unparseable stored panel sizes", () => {
@@ -225,12 +225,12 @@ describe("VulpesLayout sections", () => {
         window.dispatchEvent(new PointerEvent("pointermove", { clientX: 20, clientY: 0, buttons: 1 }));
         await nextFrame();
 
-        expect(sizeOf(container, "pages")).toBe("184px");
+        expect(sizeOf(container, "pages")).toBe("120px");
         // Nothing written yet: the whole point of deferring it.
         expect(localStorage.getItem("fox-reader-vulpes-panels")).toBeNull();
 
         window.dispatchEvent(new PointerEvent("pointerup", { clientX: 20, clientY: 0 }));
-        expect(JSON.parse(localStorage.getItem("fox-reader-vulpes-panels")!).pages.size).toBe(184);
+        expect(JSON.parse(localStorage.getItem("fox-reader-vulpes-panels")!).pages.size).toBe(120);
     });
 
     it("coalesces many moves in one frame into a single write", async () => {
@@ -268,17 +268,18 @@ describe("VulpesLayout sections", () => {
         splitter.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 0, clientY: 0 }));
         window.dispatchEvent(new PointerEvent("pointermove", { clientX: 30, clientY: 0, buttons: 1 }));
         window.dispatchEvent(new PointerEvent("pointerup", { clientX: 30, clientY: 0 }));
-        expect(sizeOf(container, "pages")).toBe("194px");
+        expect(sizeOf(container, "pages")).toBe("130px");
     });
 
     it("refuses to drag a section past its limit", async () => {
+        localStorage.setItem("fox-reader-vulpes-panels", JSON.stringify({ pages: { visible: true, size: 120 } }));
         const { container } = renderVulpes();
         const splitter = container.querySelector(".ws-splitter--vertical")!;
         splitter.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 0, clientY: 0 }));
         window.dispatchEvent(new PointerEvent("pointermove", { clientX: 5000, clientY: 0, buttons: 1 }));
         await nextFrame();
         window.dispatchEvent(new PointerEvent("pointerup", { clientX: 5000, clientY: 0 }));
-        expect(sizeOf(container, "pages")).toBe("420px");
+        expect(sizeOf(container, "pages")).toBe("160px");
     });
 
     it("collapses a section without unmounting what is inside it", () => {

@@ -1,10 +1,10 @@
 """Finds a C compiler and builds the launcher.
 
-The launcher is one C file with no dependencies beyond libc and the OS, so this
-does not need a build system -- it needs a compiler and four flags. What it does
-need is to find one on a machine nobody prepared, which on Windows means Visual
-Studio's environment batch file, and to fall back to the MinGW that Nuitka
-downloads for itself rather than telling the user to go and install something.
+The lifecycle is C, with a thin native viewer on each OS. Windows desktop builds
+require MSVC and the pinned WebView2 SDK (the browser runtime is never bundled).
+Linux builds a separate GTK/WebKitGTK viewer so the base launcher can still run
+when that runtime is absent. macOS links Cocoa and the system WebKit framework.
+The generic compiler search below also supports small C fixtures and probes.
 
 Search order, most to least preferred:
 
@@ -36,6 +36,7 @@ import argparse
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -694,6 +695,8 @@ def _command(compiler: Compiler, source: Path, out: Path, scratch: Path) -> list
         # -static so the launcher does not need libgcc or the MinGW runtime DLLs
         # sitting next to it. ws2_32 for the sockets.
         cmd += ["-static", "-lws2_32"]
+    else:
+        cmd += ["-pthread"]
     return cmd
 
 
@@ -702,6 +705,7 @@ def build_launcher(
     source: Path = LAUNCHER_SOURCE,
     compiler: Compiler | None = None,
     python: Path | None = None,
+    gui: bool = True,
 ) -> Path:
     """Compile ``source`` to ``out``. Returns ``out``."""
     if not source.is_file():
@@ -717,7 +721,9 @@ def build_launcher(
 
     with tempfile.TemporaryDirectory(prefix="fox-launcher-") as tmp:
         scratch = Path(tmp)
-        cmd = _command(compiler, source, out, scratch)
+        native = gui and source.resolve() == LAUNCHER_SOURCE.resolve()
+        cmd = (_native_command(compiler, source, out, scratch) if native
+               else _command(compiler, source, out, scratch))
 
         print(f"  compiler: {compiler.label}")
         print(f"  {' '.join(cmd)}")
@@ -754,6 +760,62 @@ def build_launcher(
 
     print(f"  built {out.name}  ({out.stat().st_size:,} bytes)")
     return out
+
+
+def _checked_build(cmd: list[str], compiler: Compiler, scratch: Path) -> None:
+    try:
+        result = subprocess.run(cmd, cwd=scratch, env=compiler.env,
+                                capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolchainError(f"could not build native window: {exc}") from exc
+    if result.returncode:
+        raise ToolchainError(f"native window build failed:\n{result.stdout}\n{result.stderr}")
+
+
+def _native_command(compiler: Compiler, source: Path, out: Path, scratch: Path) -> list[str]:
+    """Build a small OS viewer. Browser engines remain system dependencies."""
+    directory = LAUNCHER_SOURCE.parent
+    if IS_WINDOWS:
+        if compiler.kind != "msvc":
+            raise ToolchainError("The native Windows viewer needs MSVC Build Tools (Desktop development with C++).")
+        from webview_sdk import WebViewSDKError, prepare_sdk
+
+        try:
+            sdk = prepare_sdk(PACKAGING_DIR / ".build" / "webview2")
+        except WebViewSDKError as exc:
+            raise ToolchainError(str(exc)) from exc
+        shutil.copy2(sdk.license, out.parent / "WebView2-LICENSE.txt")
+        resource = scratch / "launcher.rc"
+        icon = PACKAGING_DIR / "launcher" / "fox-reader.ico"
+        resource.write_text('101 ICON "' + icon.as_posix() + '"\n', encoding="utf-8")
+        compiled_resource = scratch / "launcher.res"
+        environment = compiler.env or os.environ
+        resource_compiler = shutil.which("rc.exe", path=environment.get("PATH", environment.get("Path", "")))
+        if not resource_compiler:
+            raise ToolchainError("The Windows SDK resource compiler rc.exe is missing from the MSVC environment")
+        _checked_build([resource_compiler, "/nologo", "/c", "65001", f"/fo{compiled_resource}", str(resource)],
+                       compiler, scratch)
+        return [str(compiler.path), "/nologo", "/O2", "/MT", "/W3", "/utf-8", "/EHsc", "/std:c++17",
+                "/DNDEBUG", "/DFOX_GUI", "/DUNICODE", "/D_UNICODE", f"/I{sdk.include}",
+                str(source), str(directory / "window_windows.cpp"), f"/Fo{scratch}\\", f"/Fe{out}",
+                "/link", "/INCREMENTAL:NO", "/SUBSYSTEM:WINDOWS", "/ENTRY:WinMainCRTStartup",
+                str(compiled_resource), str(sdk.static_library), "ws2_32.lib", "user32.lib", "gdi32.lib",
+                "ole32.lib", "oleaut32.lib", "shell32.lib", "shlwapi.lib", "advapi32.lib", "version.lib"]
+    if platform.system() == "Darwin":
+        cmd = _command(compiler, source, out, scratch)
+        return cmd + ["-DFOX_GUI", "-fobjc-arc", str(directory / "window_macos.m"),
+                      "-framework", "Cocoa", "-framework", "WebKit", "-pthread"]
+    try:
+        flags = subprocess.run(["pkg-config", "--cflags", "--libs", "webkit2gtk-4.1"],
+                               capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolchainError("Install libwebkit2gtk-4.1-dev and pkg-config to build the Linux viewer.") from exc
+    plugin = out.parent / "libfox-window.so"
+    _checked_build([str(compiler.path), "-O2", "-Wall", "-Wextra", "-fPIC", "-shared",
+                    str(directory / "window_linux.c"), "-o", str(plugin),
+                    *shlex.split(flags.stdout)], compiler, scratch)
+    return _command(compiler, source, out, scratch) + ["-DFOX_GUI", str(directory / "window_linux_loader.c"),
+                                                      "-pthread", "-ldl"]
 
 
 def main(argv: list[str] | None = None) -> int:

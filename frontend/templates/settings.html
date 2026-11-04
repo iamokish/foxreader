@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script type="module" src="/static/desktop-entry.js"></script>
+  <script type="module" src="/static/updates-entry.js"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fox Reader — Settings</title>
@@ -597,6 +599,13 @@
     .glyph-navigation { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
     .glyph-status { color: var(--muted); font-size: .74rem; }
     [hidden] { display: none !important; }
+    .update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .update-progress { display: block; width: 100%; height: 12px; margin-top: 16px; accent-color: var(--accent); }
+    .update-status { margin: 12px 0 0; font-size: .83rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .update-details { margin-top: 14px; font-size: .83rem; }
+    .update-details summary { cursor: pointer; color: var(--muted); }
+    .update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.55; max-height: 300px; overflow: auto; }
+    .update-path { display: block; margin: 8px 0; overflow-wrap: anywhere; }
     @media (max-width: 520px) { .font-card { padding: 11px; } .font-character-actions { flex-wrap: wrap; } .font-character-actions input { flex-basis: 100%; } }
   </style>
 </head>
@@ -711,6 +720,32 @@
     </section>
 
     <div id="settings"></div>
+    <section class="api-section" aria-labelledby="updatesTitle" id="updatesPanel">
+      <div class="section-title" id="updatesTitle">Fox Reader Updates</div>
+      <div class="section-description">
+        Check for a new release and download the version matching this installation.
+        Every download is verified before it is ready to install.
+      </div>
+      <div id="updateVersion" class="update-status">Reading installed version…</div>
+      <div class="update-actions">
+        <button type="button" class="save-tokens" id="checkUpdateBtn">Check for updates</button>
+        <button type="button" class="save-tokens" id="downloadUpdateBtn" hidden>Download update</button>
+        <button type="button" class="save-tokens" id="cancelUpdateBtn" hidden>Cancel download</button>
+      </div>
+      <progress class="update-progress" id="updateProgress" max="1" value="0" aria-label="Update download progress" hidden></progress>
+      <p id="updateStatus" class="update-status" role="status" aria-live="polite">Updates are checked when you choose.</p>
+      <details id="updateDetails" class="update-details" hidden>
+        <summary>Release notes</summary>
+        <pre class="update-notes" id="updateNotes"></pre>
+        <a id="updateReleaseLink" class="section-link" target="_blank" rel="noopener noreferrer" hidden>View release on GitHub</a>
+      </details>
+      <div id="updateReady" class="update-status" hidden>
+        <strong>Verified download ready</strong>
+        <code id="updateArchive" class="update-path"></code>
+        Close Fox Reader, extract the archive into a new folder, and copy your config, fonts and models into it.
+        Keep the previous folder until the new version starts correctly.
+      </div>
+    </section>
     <div id="message"></div>
   </main>
 

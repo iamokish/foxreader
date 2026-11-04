@@ -378,13 +378,18 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
     particular, it has no --macos-target-version: accepting every requested
     option in the fake would conceal a failure before compilation even starts.
     """
+    # Exercise the actual hub dependency: filelock exposes this class lazily,
+    # so a working import in the venv alone does not put it in a frozen build.
+    from huggingface_hub.utils._fixes import SoftFileLock
+
+    soft_lock_module = SoftFileLock.__module__
     supported = {
         "--mode", "--assume-yes-for-downloads", "--output-dir", "--output-filename",
         "--include-package", "--include-module", "--include-package-data",
         "--include-distribution-metadata", "--noinclude-data-files", "--jobs", "--report",
         "--clang", "--macos-target-arch", "--msvc", "--mingw64", "--enable-plugins",
         "--module-parameter", "--company-name", "--product-name", "--file-description",
-        "--file-version", "--product-version", "--windows-icon-from-ico",
+        "--file-version", "--product-version", "--windows-icon-from-ico", "--windows-console-mode",
     }
     probes = []
 
@@ -423,7 +428,7 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
     monkeypatch.setattr(build, "BACKEND_NAME", "fox-reader.exe" if system == "Windows" else "fox-reader")
     monkeypatch.setattr(build, "_capture", capture)
     monkeypatch.setattr(build, "_probe", lambda *a, **k: {
-        "sites": [str(tmp_path / "site-packages")], "modules": ["torch"], "dists": [],
+        "sites": [str(tmp_path / "site-packages")], "modules": ["torch", soft_lock_module], "dists": [],
     })
     monkeypatch.setattr(build, "_bytecode_flags", lambda *a: [])
     monkeypatch.setattr(build, "_trigger_cache_workaround", lambda *a: [])
@@ -440,6 +445,8 @@ def test_nuitka_command_uses_supported_standalone_options(build, tmp_path, monke
     assert all(arg.split("=", 1)[0] in supported for arg in cmd if arg.startswith("--"))
     assert "--include-package=fox_reader" in cmd
     assert "--include-module=fox_reader_assets" in cmd
+    assert f"--include-module={soft_lock_module}" in cmd
+    assert ("--windows-console-mode=disable" in cmd) == (system == "Windows")
     assert (work / "nuitka-command.txt").read_text(encoding="utf-8").splitlines() == cmd
     mac_flags = [arg for arg in cmd if arg.startswith("--macos-")]
     early_torch_exclusions = {

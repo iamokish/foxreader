@@ -25,6 +25,8 @@ venv/
 
 # Log
 log/
+/logs/
+/updates/
 *.log
 stdout.log
 stderr.log

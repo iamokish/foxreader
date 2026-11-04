@@ -2,7 +2,9 @@
 <html lang="en">
 
 <head>
+  <script type="module" src="/static/desktop-entry.js"></script>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fox Reader</title>
   <style>
     /* Same palette as settings.html, so the wizard and the settings page do
@@ -36,12 +38,10 @@
       justify-content: center;
     }
 
-    /* `margin: auto` rather than `align-items: center`: the card grows with the
-       model list, and a centred flex item taller than the viewport has its top
-       cut off with no way to scroll to it. */
+    /* Keep the tabs in the same place when panels have different heights. */
     .setup-shell {
       width: min(980px, 100%);
-      margin: auto;
+      margin: 0 auto;
     }
 
     .crumbs {
@@ -101,7 +101,7 @@
       margin-bottom: 20px;
     }
 
-    label.section-label {
+    .section-label {
       display: block;
       font-weight: 600;
       margin-bottom: 10px;
@@ -112,6 +112,40 @@
       margin-bottom: 18px;
     }
 
+    .setup-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      padding: 5px;
+      margin-bottom: 18px;
+      background: var(--sunken);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+    }
+
+    .setup-tab {
+      min-width: 0;
+      padding: 10px 6px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .setup-tab:hover { color: var(--text); background: var(--surface); }
+    .setup-tab[aria-selected="true"] { color: var(--text); background: var(--surface-selected); border-color: var(--accent); }
+    .setup-tab:focus-visible, .setup-panel:focus-visible, .tab-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .setup-tab-state { display: block; margin-top: 4px; font-size: 0.7rem; font-weight: 400; overflow-wrap: anywhere; }
+    .setup-tab-state[data-state="ready"] { color: var(--success); }
+    .setup-tab-state[data-state="active"] { color: #ff9eae; }
+    .setup-panel[hidden], #primaryAction[hidden], #tabPrerequisite[hidden] { display: none !important; }
+    .tab-link { padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-decoration: underline; cursor: pointer; }
+    #primaryAction:not([hidden]) + #skipMtlBtn { margin-top: 10px; }
+
     .path-row {
       display: flex;
       gap: 8px;
@@ -120,6 +154,7 @@
 
     .path-row input {
       flex: 1;
+      min-width: 0;
       padding: 10px 12px;
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -139,6 +174,77 @@
       border-color: var(--border);
       color: var(--muted);
       cursor: not-allowed;
+    }
+
+    .storage-card {
+      padding: 18px;
+      background: var(--sunken);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .storage-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 14px 0;
+      border: 0;
+    }
+
+    .storage-options label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .storage-options label:has(input:checked) { border-color: var(--accent); }
+    .storage-options input { accent-color: var(--accent); }
+    .storage-options input:disabled { cursor: not-allowed; }
+    .storage-options legend, .storage-path-label { font-size: 0.8rem; color: var(--muted); }
+    .storage-path-label { display: block; margin-bottom: 6px; }
+    .storage-options legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .storage-card .path-row input { background: var(--surface); }
+    .storage-card .path-row input[aria-invalid="true"] { border-color: var(--accent); }
+    .storage-card .path-row input[readonly] { color: var(--muted); }
+
+    .storage-apply {
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .storage-apply:hover:not(:disabled) { background: var(--accent-hover); }
+    .storage-apply:disabled { opacity: 0.5; cursor: not-allowed; }
+    .storage-apply:focus-visible, .storage-options input:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+    .storage-feedback { min-height: 1.5em; margin-top: 10px; font-size: 0.8rem; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+    .storage-feedback[data-tone="error"] { color: #ff9aac; }
+    .storage-feedback[data-tone="success"] { color: var(--success); }
+    .storage-location { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 0.78rem; }
+    .storage-location dt { color: var(--muted); margin-bottom: 4px; }
+    .storage-location dd { min-width: 0; }
+    .storage-location output { overflow-wrap: anywhere; font-family: 'Consolas', 'Fira Code', monospace; line-height: 1.5; }
+    .storage-hint { margin: 8px 0 0; }
+    .storage-notice { padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--sunken); }
+
+    @media (max-width: 560px) {
+      body { padding: 18px 12px; }
+      .setup-card { padding: 18px; }
+      .storage-card { padding: 14px; }
+      .storage-card .path-row { flex-direction: column; }
+      .storage-apply { width: 100%; }
     }
 
     /* Model cards speak the same language as settings.html: a card, a pill
@@ -354,6 +460,7 @@
 
     .model-progress .bar-label {
       display: flex;
+      flex-wrap: wrap;
       justify-content: space-between;
       gap: 10px;
       font-size: 0.76rem;
@@ -364,6 +471,16 @@
     .model-progress .bar-label b {
       color: var(--text);
       font-weight: 650;
+    }
+
+    .progress-detail { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; margin-top: 6px; color: var(--muted); font-size: 0.75rem; }
+    .progress-file { overflow-wrap: anywhere; }
+    .model-progress [hidden] { display: none !important; }
+    .progress-bar-bg.indeterminate .progress-bar { width: 35%; animation: download-pulse 1.6s ease-in-out infinite alternate; }
+    @keyframes download-pulse { from { transform: translateX(0); } to { transform: translateX(185%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .progress-bar-bg.indeterminate .progress-bar { animation: none; }
+      .model-progress .progress-bar { transition: none; }
     }
 
     .note-box {
@@ -1140,56 +1257,98 @@
     <h1>Fox Reader</h1>
     <p class="subtitle">First-time Setup — Download Models to get Started</p>
 
-    <div class="section">
-      <label class="section-label" for="mtlDir">MTL Storage Location</label>
-      <div class="path-row">
-        <input type="text" id="mtlDir" value="{{ mtl_dir }}" placeholder="models">
-      </div>
-    </div>
-
-    <div class="section">
-      <label class="section-label">Required Models</label>
-      <p class="section-text">
-        These models are required by Fox Reader and are always downloaded first.
-        You cannot continue to the optional models until they finish successfully.
-      </p>
-
-      <div id="requiredModels" class="models"></div>
-    </div>
-
-    <div class="section hidden" id="optionalSection">
-      <label class="section-label">Optional Models</label>
-      <p class="section-text">
-        Each of these switches on one feature and nothing else — Fox Reader
-        works without all of them. They download beside the required models, so
-        none of them blocks anything. Every model shows its licence before it
-        downloads, and you have to accept it.
-      </p>
-      <div id="optionalModels" class="models"></div>
-      <button class="btn btn-secondary hidden" id="optionalBtn" onclick="downloadOptional()">
-        Download Selected
+    <div class="setup-tabs" id="setupTabs" role="tablist" aria-label="Model categories">
+      <button class="setup-tab" id="requiredTab" type="button" role="tab" aria-controls="requiredPanel" aria-selected="true" tabindex="0">
+        Required Models <span class="setup-tab-state" id="requiredTabState">Checking…</span>
+      </button>
+      <button class="setup-tab" id="optionalTab" type="button" role="tab" aria-controls="optionalPanel" aria-selected="false" tabindex="-1">
+        Optional Models <span class="setup-tab-state" id="optionalTabState">Optional</span>
+      </button>
+      <button class="setup-tab" id="mtlTab" type="button" role="tab" aria-controls="mtlPanel" aria-selected="false" tabindex="-1">
+        MTL <span class="setup-tab-state" id="mtlTabState">Optional</span>
       </button>
     </div>
 
-    <div class="section hidden" id="mtlSection">
-      <label class="section-label">MTL Models (Optional)</label>
+    <p id="tabPrerequisite" class="section-text storage-notice" hidden>
+      Download the required models before starting optional downloads.
+      <button type="button" class="tab-link" id="showRequiredTab">Go to Required Models</button>
+    </p>
+
+    <section class="setup-panel" id="requiredPanel" role="tabpanel" aria-labelledby="requiredTab" tabindex="0">
+      <div class="section">
+        <h2 class="section-label">Required Models</h2>
+        <p class="section-text">
+          These models are required by Fox Reader and are always downloaded first.
+          Once they are ready, you can explore Optional Models and MTL or finish setup.
+        </p>
+        <div id="requiredModels" class="models"></div>
+      </div>
+    </section>
+
+    <section class="setup-panel" id="optionalPanel" role="tabpanel" aria-labelledby="optionalTab" tabindex="0" hidden>
+      <div class="section" id="optionalSection">
+        <h2 class="section-label">Optional Models</h2>
+        <p class="section-text">
+          Each of these enables an extra feature — Fox Reader works without all of them.
+          Once required models are ready, these downloads can run alongside MTL downloads.
+          You must accept each model's licence before downloading.
+        </p>
+        <div id="optionalModels" class="models"></div>
+        <button class="btn btn-secondary hidden" id="optionalBtn" onclick="downloadOptional()">
+          Download Selected
+        </button>
+      </div>
+    </section>
+
+    <section class="setup-panel" id="mtlPanel" role="tabpanel" aria-labelledby="mtlTab" tabindex="0" hidden>
+    <div class="section storage-card" id="mtlStorage"
+         data-default-path="{{ mtl_default_dir }}" data-applied-path="{{ mtl_resolved_dir }}">
+      <label class="section-label" for="mtlDir">MTL Storage Location</label>
+      <p class="section-text">Choose a folder for local translation models. These models can take several gigabytes.</p>
+      <fieldset class="storage-options">
+        <legend>Storage folder</legend>
+        <label><input type="radio" name="storageMode" id="storageDefault" value="default"> Default folder</label>
+        <label><input type="radio" name="storageMode" id="storageCustom" value="custom"> Custom folder</label>
+      </fieldset>
+      <label class="storage-path-label" for="mtlDir">Folder path</label>
+      <div class="path-row">
+        <input type="text" id="mtlDir" value="{{ mtl_dir }}" placeholder="Paste a folder path"
+               spellcheck="false" autocomplete="off" autocapitalize="off" dir="ltr"
+               aria-describedby="storageHint storageFeedback">
+        <button type="button" class="storage-apply" id="storageApplyBtn" disabled>Use this folder</button>
+      </div>
+      <p id="storageHint" class="section-text storage-hint">Paths refer to the computer running Fox Reader. A new folder is created when downloading starts.</p>
+      <p id="storageFeedback" class="storage-feedback" role="status" aria-live="polite">Current storage folder.</p>
+      <dl class="storage-location">
+        <dt id="storageLocationLabel">Full location</dt>
+        <dd><output id="storageResolvedPath" dir="ltr">{{ mtl_resolved_dir }}</output></dd>
+      </dl>
+    </div>
+
+    <div class="section" id="mtlSection">
+      <h2 class="section-label">MTL Models (Optional)</h2>
       <p class="section-text">
         MTL models are optional. Select any models you want after the required
         models have finished downloading. Selecting an MTL model does not change
         the MTL setting in your application configuration.
       </p>
+      <p id="storageNotice" class="section-text storage-notice hidden">Use the folder above to save your change and refresh the model list.</p>
       <div id="mtlModels" class="models"></div>
     </div>
+    </section>
 
-    <button class="btn btn-primary" id="downloadBtn" onclick="handlePrimaryAction()">
-      Download Required Models
+    <div id="primaryAction">
+    <button class="btn btn-primary" id="downloadBtn" onclick="handlePrimaryAction()" disabled>
+      Loading setup…
     </button>
+    </div>
 
     <button class="btn btn-secondary hidden" id="skipMtlBtn" onclick="closeWithoutMtl()">
       Skip & Close
     </button>
 
     <div class="error-msg" id="errorMsg" style="display:none"></div>
+    <div class="error-msg" id="connectionMsg" role="status" aria-live="polite" style="display:none"></div>
     <div class="done-msg" id="doneMsg" style="display:none"></div>
     <div class="closed-msg" id="closedMsg" style="display:none"></div>
 
@@ -1207,7 +1366,14 @@
     // and sidecar endpoint only as fallbacks for a status that predates the
     // generalisation.
     let currentStage = 'non_mtl';
+    let activeSetupTab = 'required';
+    const setupTabNames = ['required', 'optional', 'mtl'];
     let pollTimer = null;
+    let polling = false;
+    let pollQueued = false;
+    const SETUP_POLL_MS = 2000;
+    const modelRenderKeys = new WeakMap();
+    let statusUnavailable = true;
     let mtlModels = [];
     //: Required models still to fetch, newest status wins. The licence queue
     //: needs the ids the next download will actually touch.
@@ -1220,7 +1386,28 @@
     const seenOptionalIds = new Set();
 
     const els = {
+      setupTabs: document.getElementById('setupTabs'),
+      requiredTab: document.getElementById('requiredTab'),
+      optionalTab: document.getElementById('optionalTab'),
+      mtlTab: document.getElementById('mtlTab'),
+      requiredPanel: document.getElementById('requiredPanel'),
+      optionalPanel: document.getElementById('optionalPanel'),
+      mtlPanel: document.getElementById('mtlPanel'),
+      requiredTabState: document.getElementById('requiredTabState'),
+      optionalTabState: document.getElementById('optionalTabState'),
+      mtlTabState: document.getElementById('mtlTabState'),
+      tabPrerequisite: document.getElementById('tabPrerequisite'),
+      showRequiredTab: document.getElementById('showRequiredTab'),
+      primaryAction: document.getElementById('primaryAction'),
       mtlDir: document.getElementById('mtlDir'),
+      storage: document.getElementById('mtlStorage'),
+      storageDefault: document.getElementById('storageDefault'),
+      storageCustom: document.getElementById('storageCustom'),
+      storageApply: document.getElementById('storageApplyBtn'),
+      storageFeedback: document.getElementById('storageFeedback'),
+      storageResolved: document.getElementById('storageResolvedPath'),
+      storageLabel: document.getElementById('storageLocationLabel'),
+      storageNotice: document.getElementById('storageNotice'),
       requiredModels: document.getElementById('requiredModels'),
       optionalSection: document.getElementById('optionalSection'),
       optionalModels: document.getElementById('optionalModels'),
@@ -1230,6 +1417,7 @@
       downloadBtn: document.getElementById('downloadBtn'),
       skipMtlBtn: document.getElementById('skipMtlBtn'),
       errorMsg: document.getElementById('errorMsg'),
+      connectionMsg: document.getElementById('connectionMsg'),
       doneMsg: document.getElementById('doneMsg'),
       closedMsg: document.getElementById('closedMsg'),
       closeBtn: document.getElementById('closeBtn'),
@@ -1251,6 +1439,341 @@
       termsAcceptBtn: document.getElementById('termsAcceptBtn'),
       termsDeclineBtn: document.getElementById('termsDeclineBtn'),
     };
+
+    function updateSetupTabs() {
+      for (const name of setupTabNames) {
+        const selected = name === activeSetupTab;
+        els[name + 'Tab'].setAttribute('aria-selected', String(selected));
+        els[name + 'Tab'].tabIndex = selected ? 0 : -1;
+        els[name + 'Panel'].hidden = !selected;
+      }
+      const actionTab = currentStage === 'non_mtl' ? 'required' : 'mtl';
+      els.primaryAction.hidden = activeSetupTab !== actionTab || currentStage === 'complete';
+      els.tabPrerequisite.hidden = activeSetupTab === 'required' || currentStage !== 'non_mtl';
+    }
+
+    function selectSetupTab(name, focus = false) {
+      if (!setupTabNames.includes(name)) return;
+      activeSetupTab = name;
+      // Switching only changes visibility. Inputs, requests and selections keep
+      // their identity, and background status never chooses a tab for the user.
+      updateSetupTabs();
+      updateMtlButtons();
+      if (focus) els[name + 'Tab'].focus();
+    }
+
+    function initSetupTabs() {
+      setupTabNames.forEach((name, index) => {
+        const tab = els[name + 'Tab'];
+        tab.addEventListener('click', () => selectSetupTab(name, true));
+        tab.addEventListener('keydown', event => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          let next;
+          if (event.key === 'ArrowRight') next = (index + 1) % setupTabNames.length;
+          else if (event.key === 'ArrowLeft') next = (index + setupTabNames.length - 1) % setupTabNames.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = setupTabNames.length - 1;
+          else return;
+          event.preventDefault();
+          selectSetupTab(setupTabNames[next], true);
+        });
+      });
+      els.showRequiredTab.addEventListener('click', () => selectSetupTab('required', true));
+      updateSetupTabs();
+    }
+
+    function updateSetupTabStatus(data) {
+      const state = (name, label, tone = '') => {
+        const badge = els[name + 'TabState'];
+        badge.textContent = label;
+        badge.dataset.state = tone;
+      };
+      state('required', currentStage === 'non_mtl' ? (data.active ? 'Downloading' : 'Needed') : 'Ready',
+        currentStage === 'non_mtl' ? (data.active ? 'active' : '') : 'ready');
+      for (const name of ['optional', 'mtl']) {
+        const active = name === 'mtl' ? currentStage === 'mtl' && data.active : data.optional?.active;
+        const models = name === 'mtl' ? data.mtl_models : data.optional?.models;
+        const ready = models?.length > 0 && models.every(model => model.downloaded);
+        state(name, active ? 'Downloading' : ready ? 'Ready' : 'Optional', active ? 'active' : ready ? 'ready' : '');
+      }
+    }
+
+    // Only local control requests are bounded; model transfers run separately
+    // on the server. Cover the response body too, and cancel timed-out reads.
+    async function requestSetup(url, options = {}, readBody = true) {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (options.signal?.aborted) controller.abort();
+      options.signal?.addEventListener('abort', abort, { once: true });
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('Fox Reader took too long to respond. Please try again.');
+          error.name = 'TimeoutError';
+          reject(error);
+          controller.abort();
+        }, 15000);
+      });
+      try {
+        return await Promise.race([
+          (async () => {
+            const response = await fetch(url, { ...options, signal: controller.signal });
+            if (!readBody) {
+              // Headers suffice for shutdown liveness; release the unused body.
+              controller.abort();
+              return { ok: response.ok };
+            }
+            return { ok: response.ok, data: await response.json() };
+          })(),
+          timeout,
+        ]);
+      } finally {
+        clearTimeout(timer);
+        options.signal?.removeEventListener('abort', abort);
+      }
+    }
+
+    let storageAppliedValue = els.mtlDir.value;
+    let storageAppliedPath = els.storage.dataset.appliedPath;
+    let storageCustomValue = storageAppliedValue;
+    let storageReport = null;
+    let storageChecking = false;
+    let storageApplying = false;
+    let storageUnconfirmed = null;
+    let storageDownloadPending = false;
+    let storageStageLocked = true;
+    let storageRevision = 0;
+    let storageGeneration = 0;
+    let storageTimer = null;
+    let storageController = null;
+
+    function storageHasChanges() {
+      return els.mtlDir.value !== storageAppliedValue;
+    }
+
+    function storageBlocksMtl() {
+      return storageHasChanges() || storageChecking || storageApplying ||
+        storageUnconfirmed !== null || storageDownloadPending || !storageReport?.ok;
+    }
+
+    function storageUncertaintyMessage() {
+      return `The save to “${storageUnconfirmed.value}” has not been confirmed. Retry that folder or wait for confirmation before choosing another.`;
+    }
+
+    function storageFeedback(message, tone = '') {
+      els.storageFeedback.textContent = message;
+      els.storageFeedback.dataset.tone = tone;
+      els.mtlDir.setAttribute('aria-invalid', String(tone === 'error'));
+    }
+
+    function updateStorageControls() {
+      const locked = storageStageLocked || storageApplying || storageDownloadPending ||
+        currentStage === 'mtl' || currentStage === 'complete' || window.__setupClosing;
+      els.mtlDir.disabled = Boolean(locked);
+      els.mtlDir.readOnly = els.storageDefault.checked;
+      els.storageDefault.disabled = Boolean(locked);
+      els.storageCustom.disabled = Boolean(locked);
+      els.storageApply.disabled = Boolean(locked || storageChecking || !els.mtlDir.value.trim() ||
+        (storageUnconfirmed && storageReport?.path !== storageUnconfirmed.path) ||
+        (storageReport?.ok && !storageHasChanges() && !storageUnconfirmed));
+      els.storageApply.textContent = storageApplying ? 'Saving…' : storageChecking ? 'Checking…' :
+        storageUnconfirmed ? (storageReport?.path === storageUnconfirmed.path
+          ? (storageReport.ok ? 'Retry saving folder' : 'Check folder') : 'Awaiting confirmation') :
+        storageReport?.ok ? (storageHasChanges() ? 'Use this folder' : 'Folder selected') : 'Check folder';
+      els.storageLabel.textContent = storageHasChanges() || storageUnconfirmed ? 'Folder preview' : 'Full location';
+      els.storageNotice.textContent = storageUnconfirmed
+        ? 'Confirm the previous save above before downloading models or choosing another folder.'
+        : 'Use the folder above to save your change and refresh the model list.';
+      els.storageNotice.classList.toggle('hidden', !storageHasChanges() && !storageApplying && !storageUnconfirmed);
+      for (const checkbox of els.mtlModels.querySelectorAll('input[type="checkbox"]')) {
+        checkbox.disabled = checkbox.dataset.downloaded === 'true' || storageBlocksMtl() || currentStage !== 'mtl_selection';
+      }
+      updateMtlButtons();
+    }
+
+    function setStorageStageLocked(locked) {
+      storageStageLocked = Boolean(locked);
+      updateStorageControls();
+    }
+
+    async function inspectStorage() {
+      clearTimeout(storageTimer);
+      storageController?.abort();
+      const revision = ++storageRevision;
+      const path = els.mtlDir.value;
+      storageReport = null;
+      if (!path.trim()) {
+        storageChecking = false;
+        els.storageResolved.textContent = 'Enter a folder path to see its full location.';
+        storageFeedback('Enter a folder path, or choose Default folder.', 'error');
+        updateStorageControls();
+        return null;
+      }
+      const controller = new AbortController();
+      storageController = controller;
+      storageChecking = true;
+      storageFeedback('Checking this folder…');
+      updateStorageControls();
+      try {
+        const { ok, data } = await requestSetup('/api/setup/storage/inspect', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }), signal: controller.signal,
+        });
+        if (revision !== storageRevision || path !== els.mtlDir.value) return null;
+        if (!ok) throw new Error(data.error || 'Could not check this folder.');
+        storageReport = data;
+        els.storageResolved.textContent = data.path || 'Enter a valid folder path.';
+        if (!data.ok) {
+          storageFeedback(data.error || 'This folder cannot be used.', 'error');
+        } else {
+          const free = Number.isFinite(data.free_bytes)
+            ? ` ${(data.free_bytes / 1073741824).toLocaleString(undefined, { maximumFractionDigits: 1 })} GiB free.` : '';
+          const message = storageUnconfirmed ? storageUncertaintyMessage() : storageHasChanges()
+            ? (data.exists ? 'Folder is writable. Use this folder to save your choice.' : 'This folder will be created when downloading starts. Use this folder to save your choice.')
+            : (data.exists ? 'Downloads will be saved in this folder.' : 'This folder will be created when downloading starts.');
+          storageFeedback(message + free, storageUnconfirmed ? '' : 'success');
+        }
+        return data;
+      } catch (error) {
+        if (revision !== storageRevision || controller.signal.aborted) return null;
+        storageFeedback(error.message || 'Could not check this folder. Please try again.', 'error');
+        return null;
+      } finally {
+        if (revision === storageRevision) {
+          storageChecking = false;
+          storageController = null;
+          updateStorageControls();
+        }
+      }
+    }
+
+    function storageEdited() {
+      ++storageRevision;
+      storageController?.abort();
+      clearTimeout(storageTimer);
+      storageReport = null;
+      storageChecking = true;
+      els.storageResolved.textContent = 'Waiting to check the folder…';
+      storageFeedback('Checking this folder…');
+      updateStorageControls();
+      if (!els.mtlDir.value.trim()) inspectStorage();
+      else storageTimer = setTimeout(inspectStorage, 350);
+    }
+
+    function restoreStorageFocus(previous) {
+      if (document.activeElement !== document.body && document.activeElement !== previous) return;
+      if (previous && !previous.disabled && previous !== document.body) previous.focus();
+      else if (!els.mtlDir.disabled) els.mtlDir.focus();
+    }
+
+    async function applyStorage() {
+      if (els.storageApply.disabled) return;
+      const previousFocus = document.activeElement;
+      if (!storageReport?.ok) {
+        await inspectStorage();
+        restoreStorageFocus(previousFocus);
+        return;
+      }
+      if (!storageHasChanges() && !storageUnconfirmed) return;
+      const path = els.mtlDir.value;
+      const attempted = { value: path, path: storageReport.path };
+      let responseRead = false;
+      storageApplying = true;
+      ++storageGeneration;
+      storageFeedback('Saving the storage folder…');
+      updateStorageControls();
+      try {
+        const { ok, data } = await requestSetup('/api/setup/storage', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+        if (ok && (typeof data?.path !== 'string' || !data.path.trim() ||
+            typeof data.mtl_dir !== 'string' || !data.mtl_dir.trim())) {
+          throw new Error('Fox Reader returned an incomplete storage confirmation.');
+        }
+        responseRead = true;
+        if (!ok) throw new Error(data.error || 'Could not save this folder.');
+        ++storageGeneration;
+        storageUnconfirmed = null;
+        storageAppliedValue = data.mtl_dir;
+        storageAppliedPath = data.path;
+        els.storage.dataset.appliedPath = storageAppliedPath;
+        els.mtlDir.value = storageAppliedValue;
+        els.storageResolved.textContent = storageAppliedPath;
+        const defaultSelected = storageAppliedPath === els.storage.dataset.defaultPath;
+        els.storageDefault.checked = defaultSelected;
+        els.storageCustom.checked = !defaultSelected;
+        if (!defaultSelected) storageCustomValue = storageAppliedValue;
+        selectedMtlIds.clear();
+        renderMtlModels(data.mtl_models || [], { progress: {} });
+        storageFeedback('Storage folder saved. New downloads use it; models load from it on the next app launch.', 'success');
+        pollOnce();
+      } catch (error) {
+        ++storageGeneration;
+        // A lost response can hide a committed save or a still-running request.
+        // Only the attempted destination (or a successful retry) confirms it.
+        if (!responseRead) storageUnconfirmed = attempted;
+        const message = error.message || 'Could not save this folder. Please try again.';
+        storageFeedback(storageUnconfirmed ? `${message} ${storageUncertaintyMessage()}` : message, 'error');
+        pollOnce();
+      } finally {
+        storageApplying = false;
+        updateStorageControls();
+        restoreStorageFocus(previousFocus);
+      }
+    }
+
+    function reconcileStorageStatus(data) {
+      if (!storageUnconfirmed || storageApplying || data.mtl_dir !== storageUnconfirmed.path) return false;
+      // Keep the draft and its spelling intact, including edits made while the
+      // request was uncertain. A different draft still needs explicit Apply.
+      storageAppliedValue = storageUnconfirmed.value;
+      storageAppliedPath = data.mtl_dir;
+      els.storage.dataset.appliedPath = storageAppliedPath;
+      storageUnconfirmed = null;
+      if (!storageChecking && storageReport?.ok) {
+        storageFeedback(storageHasChanges()
+          ? 'The previous folder was saved. Use this folder to apply your current edit.'
+          : 'Storage folder confirmed. New downloads use it; models load from it on the next app launch.', 'success');
+      }
+      return true;
+    }
+
+    function initStorage() {
+      const useDefault = storageAppliedValue === 'models' || storageAppliedPath === els.storage.dataset.defaultPath;
+      els.storageDefault.checked = useDefault;
+      els.storageCustom.checked = !useDefault;
+      els.mtlDir.addEventListener('input', storageEdited);
+      els.mtlDir.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); els.storageApply.click(); }
+      });
+      els.storageDefault.addEventListener('change', () => {
+        if (!els.storageDefault.checked) return;
+        storageCustomValue = els.mtlDir.value;
+        els.mtlDir.value = 'models';
+        storageEdited();
+      });
+      els.storageCustom.addEventListener('change', () => {
+        if (!els.storageCustom.checked) return;
+        els.mtlDir.value = storageCustomValue;
+        storageEdited();
+        els.mtlDir.focus();
+        els.mtlDir.select();
+      });
+      els.storageApply.addEventListener('click', applyStorage);
+      window.addEventListener('pagehide', () => {
+        ++storageRevision;
+        ++storageGeneration;
+        clearTimeout(storageTimer);
+        storageController?.abort();
+      });
+      window.addEventListener('pageshow', event => {
+        if (!event.persisted || window.__setupClosing) return;
+        inspectStorage();
+        pollOnce();
+      });
+      inspectStorage();
+    }
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -1276,10 +1799,11 @@
         .join(', ') || 'Not specified';
     }
 
-    function fmtMiB(bytes) {
+    function fmtBytes(bytes) {
       const n = Number(bytes);
       if (!Number.isFinite(n) || n <= 0) return '0 MiB';
       if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KiB`;
+      if (n >= 1024 ** 3) return `${(n / (1024 ** 3)).toFixed(2)} GiB`;
       return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
     }
 
@@ -1287,35 +1811,97 @@
       return Boolean(model.downloaded || progress.downloaded || progress.done);
     }
 
-    // Byte bar for one progress entry, with file counts as the fallback for
-    // servers that reply without a length. Returns "" for finished entries,
-    // whose card already carries the Downloaded badge.
+    function progressView(progress = {}) {
+      const count = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+      // Xet transfers compressed/deduplicated bytes before assembling the file.
+      // Show its live network counters without mixing them with saved-file size.
+      const transferring = progress.transfer_bytes != null;
+      // Only the current file has a known denominator. Older servers may lack
+      // current_* entirely; zero on a new server explicitly means unknown.
+      const total = count(transferring ? progress.transfer_total : progress.current_total ?? progress.bytes_total);
+      const done = count(transferring ? progress.transfer_bytes : progress.current_bytes ?? progress.bytes_done);
+      const filesDone = count(progress.files_done);
+      const filesTotal = count(progress.files_total);
+      const phase = progress.phase || (total || done ? 'downloading' : 'preparing');
+      const phaseText = phase === 'finalizing' ? 'Finalizing file…' :
+        phase === 'preparing' ? 'Preparing download…' : 'Downloading';
+      const percent = total > 0 ? Math.floor(Math.min(done / total, 1) * 1000) / 10 : null;
+      const amount = total > 0 ? `${fmtBytes(done)} / ${fmtBytes(total)}` : `${fmtBytes(done)} received · total size unknown`;
+      const bytes = transferring ? `Transferred ${amount}` : amount;
+      const files = filesTotal ? (filesDone < filesTotal
+        ? `File ${filesDone + 1}/${filesTotal}` : `Files ${filesDone}/${filesTotal}`) : '';
+      const label = percent === null ? (phase === 'preparing' ? 'Preparing…' : phase === 'finalizing' ? 'Finalizing…' : 'Downloading…') : `${percent}%`;
+      return { percent, bytes, files, label, phaseText,
+        file: typeof progress.current_file === 'string' ? progress.current_file : '',
+        valueText: [phaseText, files, percent === null ? '' : label, bytes].filter(Boolean).join(' · ') };
+    }
+
+    // File counts are context, never a substitute for the current file's bytes.
     function progressHtml(progress) {
       if (!progress || progress.done) return '';
-      const total = Number(progress.bytes_total) || 0;
-      const done = Number(progress.bytes_done) || 0;
-      const filesDone = Number(progress.files_done) || 0;
-      const filesTotal = Number(progress.files_total) || 0;
-      const fileBit = filesTotal
-        ? ` · file ${Math.min(filesDone + 1, filesTotal)}/${filesTotal}`
-        : '';
-      if (total > 0) {
-        const pct = Math.min(100, Math.round((Math.min(done, total) / total) * 100));
-        return `
-          <div class="model-progress">
-            <div class="bar-label"><b>${pct}%</b><span>${escapeHtml(fmtMiB(done))} / ${escapeHtml(fmtMiB(total))}${escapeHtml(fileBit)}</span></div>
-            <div class="progress-bar-bg"><div class="progress-bar" style="width:${pct}%"></div></div>
-          </div>`;
+      const view = progressView(progress);
+      return `<div class="model-progress">
+        <div class="desc progress-file" ${view.file ? '' : 'hidden'}>${escapeHtml(view.file)}</div>
+        <div class="bar-label"><b class="progress-percent">${escapeHtml(view.label)}</b><span class="progress-bytes">${escapeHtml(view.bytes)}</span></div>
+        <div class="progress-bar-bg ${view.percent === null ? 'indeterminate' : ''}" role="progressbar" aria-label="Current file download"
+             aria-valuemin="0" aria-valuemax="100" ${view.percent === null ? '' : `aria-valuenow="${view.percent}"`} aria-valuetext="${escapeHtml(view.valueText)}">
+          <div class="progress-bar" ${view.percent === null ? '' : `style="width:${view.percent}%"`}></div>
+        </div>
+        <div class="progress-detail"><span class="progress-phase">${escapeHtml(view.phaseText)}</span><span class="progress-files">${escapeHtml(view.files)}</span></div>
+      </div>`;
+    }
+
+    function modelProgressHtml(id, progress, show) {
+      return show ? `<div data-model-progress="${escapeHtml(id)}">${progressHtml(progress)}</div>` : '';
+    }
+
+    function refreshModelProgress(container, progressMap) {
+      for (const region of container.querySelectorAll('[data-model-progress]')) {
+        const view = progressView(progressMap[region.dataset.modelProgress] || {});
+        const text = (selector, value) => {
+          const node = region.querySelector(selector);
+          if (node && node.textContent !== value) node.textContent = value;
+          return node;
+        };
+        const file = text('.progress-file', view.file);
+        if (file) file.hidden = !view.file;
+        text('.progress-percent', view.label);
+        text('.progress-bytes', view.bytes);
+        text('.progress-phase', view.phaseText);
+        text('.progress-files', view.files);
+        const bar = region.querySelector('[role="progressbar"]');
+        if (!bar) continue;
+        bar.classList.toggle('indeterminate', view.percent === null);
+        if (view.percent === null) bar.removeAttribute('aria-valuenow');
+        else bar.setAttribute('aria-valuenow', String(view.percent));
+        bar.setAttribute('aria-valuetext', view.valueText);
+        bar.querySelector('.progress-bar').style.width = view.percent === null ? '' : `${view.percent}%`;
       }
-      if (filesTotal) {
-        const pct = Math.round((filesDone / filesTotal) * 100);
-        return `
-          <div class="model-progress">
-            <div class="bar-label"><b>${pct}%</b><span>file ${filesDone}/${filesTotal}</span></div>
-            <div class="progress-bar-bg"><div class="progress-bar" style="width:${pct}%"></div></div>
-          </div>`;
+    }
+
+    function reuseModelCards(container, identity, progressMap) {
+      const key = JSON.stringify(identity);
+      if (modelRenderKeys.get(container) !== key) {
+        modelRenderKeys.set(container, key);
+        return false;
       }
-      return '<div class="status">Downloading…</div>';
+      refreshModelProgress(container, progressMap);
+      return true;
+    }
+
+    function syncSelectedCards(container, prefix, selectedIds, waitingLabel) {
+      for (const checkbox of container.querySelectorAll('input[type="checkbox"]')) {
+        if (checkbox.dataset.downloaded === 'true') continue;
+        const selected = selectedIds.has(checkbox.id.slice(prefix.length));
+        checkbox.checked = selected;
+        const card = checkbox.closest('.model');
+        card?.classList.toggle('selected', selected);
+        const badge = card?.querySelector('.badge');
+        if (badge && !badge.classList.contains('active') && !badge.classList.contains('downloaded')) {
+          badge.className = selected ? 'badge selected' : 'badge unavailable';
+          badge.textContent = selected ? 'Selected' : waitingLabel;
+        }
+      }
     }
 
     function stateBadge({ downloaded, active, selected, waitingLabel }) {
@@ -1325,16 +1911,12 @@
       return `<span class="badge unavailable">${escapeHtml(waitingLabel || 'Waiting')}</span>`;
     }
 
-    function currentFileHtml(progress, show) {
-      const file = show ? (progress.current_file || '') : '';
-      return file ? `<div class="desc">${escapeHtml(file)}</div>` : '';
-    }
-
     // ── required models ───────────────────────────────────────────────────
 
     function renderRequiredModels(data) {
       const groups = data.required_models || [];
       if (!groups.length) {
+        modelRenderKeys.delete(els.requiredModels);
         els.requiredModels.innerHTML = '<p class="section-text">No required models are configured.</p>';
         requiredPendingIds = [];
         return;
@@ -1347,6 +1929,11 @@
         .flatMap(group => group.items)
         .filter(item => !isDownloaded(item, (data.progress || {})[item.id] || {}))
         .map(item => item.id);
+
+      const progressMap = data.progress || {};
+      if (reuseModelCards(els.requiredModels,
+          [groups, Boolean(data.active), data.current_model, groups.flatMap(group => group.items)
+            .map(item => isDownloaded(item, progressMap[item.id] || {}))], progressMap)) return;
 
       els.requiredModels.innerHTML = groups.map(group => {
         const children = group.items.map(item => {
@@ -1365,8 +1952,7 @@
                   ${stateBadge({ downloaded, active: current && !downloaded })}
                 </div>
                 ${downloaded ? '' : licence}
-                ${currentFileHtml(progress, current && !downloaded)}
-                ${current && !downloaded ? progressHtml(progress) : ''}
+                ${modelProgressHtml(item.id, progress, current && !downloaded)}
               </div>
             </div>`;
         }).join('');
@@ -1390,8 +1976,9 @@
         });
     }
 
-    function renderMtlModels(models, data) {
-      captureMtlSelections();
+    function renderMtlModels(models, data, resetSelection = false) {
+      if (resetSelection) selectedMtlIds.clear();
+      else if (!storageApplying) captureMtlSelections();
       mtlModels = models;
 
       // Downloaded models can no longer be selected.
@@ -1402,6 +1989,7 @@
       });
 
       if (!models.length) {
+        modelRenderKeys.delete(els.mtlModels);
         els.mtlModels.innerHTML =
           '<p class="section-text">No MTL models are configured.</p>';
         updateMtlButtons();
@@ -1409,6 +1997,14 @@
       }
 
       const progressMap = (data && data.progress) || {};
+
+      if (reuseModelCards(els.mtlModels,
+          [models, currentStage, Boolean(data.active), data.current_model, Boolean(storageBlocksMtl()),
+            models.map(model => isDownloaded(model, progressMap[model.id] || {}))], progressMap)) {
+        syncSelectedCards(els.mtlModels, 'mtl-', selectedMtlIds, 'Waiting');
+        updateMtlButtons();
+        return;
+      }
 
       els.mtlModels.innerHTML = models.map(model => {
         const progress = progressMap[model.id] || {};
@@ -1427,7 +2023,9 @@
             <input
               type="checkbox"
               id="mtl-${escapeHtml(model.id)}"
+              data-downloaded="${downloaded}"
               ${downloaded ? 'disabled checked' : ''}
+              ${storageBlocksMtl() || currentStage !== 'mtl_selection' ? 'disabled' : ''}
               ${selected ? 'checked' : ''}
               onclick="event.stopPropagation()"
               onchange="handleMtlCheckboxChange('${escapeHtml(model.id)}', this.checked)">
@@ -1449,8 +2047,7 @@
                   : `<button type="button" class="terms-peek" onclick="event.stopPropagation(); reviewTerms('${escapeHtml(model.id)}', this)">Read before downloading</button>`}</div>
                 <div class="note"><strong>Note:</strong> ${escapeHtml(model.note)}</div>
               </div>
-              ${currentFileHtml(progress, isCurrent)}
-              ${isCurrent ? progressHtml(progress) : ''}
+              ${modelProgressHtml(model.id, progress, isCurrent)}
             </div>
           </div>
         `;
@@ -1498,12 +2095,15 @@
       const models = data.models || [];
 
       if (!models.length) {
-        els.optionalSection.classList.add('hidden');
+        modelRenderKeys.delete(els.optionalModels);
+        els.optionalModels.innerHTML = '<p class="section-text">No optional models are configured.</p>';
+        els.optionalBtn.classList.add('hidden');
         return;
       }
 
       const progressMap = data.progress || {};
       const busy = Boolean(data.active);
+      const locked = currentStage === 'non_mtl' || currentStage === 'complete' || window.__setupClosing;
 
       // Read the boxes back before the re-render throws them away, so a poll
       // landing mid-decision does not reset what the user just ticked.
@@ -1523,26 +2123,30 @@
         }
       });
 
-      els.optionalModels.innerHTML = models.map(model => {
-        const progress = progressMap[model.id] || {};
-        const downloaded = isDownloaded(model, progress);
-        const current = data.current_model === model.id && busy && !downloaded;
-        const selected = !downloaded && selectedOptionalIds.has(model.id);
-        const blurb = OPTIONAL_BLURB[model.id] || model.note || 'Optional feature.';
-        const statusText = downloaded
-          ? 'Downloaded — the feature is on'
-          : current ? 'Downloading'
-          : busy ? 'Waiting'
-          : blurb;
-        const lockable = !downloaded && !busy;
+      if (!reuseModelCards(els.optionalModels,
+          [models, busy, Boolean(locked), data.current_model,
+            models.map(model => isDownloaded(model, progressMap[model.id] || {}))], progressMap)) {
+        els.optionalModels.innerHTML = models.map(model => {
+          const progress = progressMap[model.id] || {};
+          const downloaded = isDownloaded(model, progress);
+          const current = data.current_model === model.id && busy && !downloaded;
+          const selected = !downloaded && selectedOptionalIds.has(model.id);
+          const blurb = OPTIONAL_BLURB[model.id] || model.note || 'Optional feature.';
+          const statusText = downloaded
+            ? 'Downloaded — the feature is on'
+            : current ? 'Downloading'
+            : busy ? 'Waiting'
+            : blurb;
+          const lockable = !downloaded && !busy && !locked;
 
-        return `
+          return `
           <div class="model ${downloaded ? 'downloaded' : (lockable ? 'selectable' : '')} ${selected ? 'selected' : ''} ${current ? 'downloading' : ''}"
                ${lockable ? `onclick="toggleOptionalModel('${escapeHtml(model.id)}')"` : ''}>
             <input
               type="checkbox"
               id="opt-${escapeHtml(model.id)}"
-              ${downloaded ? 'checked disabled' : (busy ? 'disabled' : '')}
+              data-downloaded="${downloaded}"
+              ${downloaded ? 'checked disabled' : (busy || locked ? 'disabled' : '')}
               ${selected ? 'checked' : ''}
               onclick="event.stopPropagation()"
               onchange="handleOptionalCheckboxChange('${escapeHtml(model.id)}', this.checked)">
@@ -1560,11 +2164,13 @@
                   : `<button type="button" class="terms-peek" onclick="event.stopPropagation(); reviewTerms('${escapeHtml(model.id)}', this)">Read before downloading</button>`}</div>
                 ${model.note && OPTIONAL_BLURB[model.id] ? `<div class="note"><strong>Note:</strong> ${escapeHtml(model.note)}</div>` : ''}
               </div>
-              ${currentFileHtml(progress, current)}
-              ${current ? progressHtml(progress) : ''}
+              ${modelProgressHtml(model.id, progress, current)}
             </div>
           </div>`;
-      }).join('');
+        }).join('');
+      } else {
+        syncSelectedCards(els.optionalModels, 'opt-', selectedOptionalIds, 'Not downloaded');
+      }
 
       const pending = models.filter(
         model => !isDownloaded(model, progressMap[model.id] || {})
@@ -1572,7 +2178,7 @@
       const selectedCount = pending.filter(model => selectedOptionalIds.has(model.id)).length;
 
       els.optionalBtn.classList.toggle('hidden', pending.length === 0);
-      els.optionalBtn.disabled = busy || selectedCount === 0;
+      els.optionalBtn.disabled = Boolean(locked || statusUnavailable || busy || selectedCount === 0);
       els.optionalBtn.textContent = busy
         ? 'Downloading…'
         : selectedCount
@@ -1604,14 +2210,16 @@
       const boxes = Array.from(els.optionalModels.querySelectorAll('input[type=checkbox]:not([disabled])'));
       const count = boxes.filter(box => box.checked).length;
 
-      els.optionalBtn.disabled = count === 0;
+      els.optionalBtn.disabled = Boolean(statusUnavailable || currentStage === 'non_mtl' ||
+        currentStage === 'complete' || window.__setupClosing || count === 0);
       els.optionalBtn.textContent = count
         ? `Download ${count} Optional Model${count === 1 ? '' : 's'}`
         : 'Select a model to download';
     }
 
     async function downloadOptional() {
-      if (!els.optionalBtn || els.optionalBtn.disabled) return;
+      if (activeSetupTab !== 'optional' || statusUnavailable || currentStage === 'non_mtl' ||
+          !els.optionalBtn || els.optionalBtn.disabled) return;
 
       const ids = Array.from(
         els.optionalModels.querySelectorAll('input[type=checkbox]:not([disabled]):checked'),
@@ -1632,15 +2240,18 @@
         pollOnce();
         return;
       }
+      if (statusUnavailable) {
+        pollOnce();
+        return;
+      }
 
       try {
-        const resp = await fetch('/api/setup/optional/download', {
+        const { ok, data } = await requestSetup('/api/setup/optional/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ids }),
         });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) throw new Error(data.error || 'Failed to start download');
+        if (!ok) throw new Error(data.error || 'Failed to start download');
       } catch (e) {
         showError(e.message || 'Failed to start download');
       }
@@ -1658,6 +2269,7 @@
     }
 
     function toggleMtlModel(id) {
+      if (storageBlocksMtl()) return;
       const cb = document.getElementById('mtl-' + id);
       if (!cb || cb.disabled) return;
 
@@ -1675,6 +2287,29 @@
 
     function updateMtlButtons() {
       if (currentStage !== 'mtl_selection') return;
+      els.skipMtlBtn.textContent = activeSetupTab === 'mtl' ? 'Skip & Close' : 'Finish & Close';
+      if (statusUnavailable || window.__setupClosing) {
+        els.downloadBtn.disabled = true;
+        els.skipMtlBtn.disabled = true;
+        return;
+      }
+
+      if (storageDownloadPending) {
+        els.downloadBtn.disabled = true;
+        els.downloadBtn.textContent = 'Starting MTL download…';
+        els.skipMtlBtn.disabled = true;
+        els.skipMtlBtn.classList.add('hidden');
+        return;
+      }
+
+      if (storageBlocksMtl()) {
+        els.downloadBtn.disabled = true;
+        els.downloadBtn.textContent = storageUnconfirmed ? 'Confirm the storage folder above' :
+          storageHasChanges() ? 'Apply the storage folder above' : 'Check the storage folder above';
+        els.skipMtlBtn.disabled = Boolean(storageApplying || storageUnconfirmed || storageDownloadPending);
+        els.skipMtlBtn.classList.remove('hidden');
+        return;
+      }
 
       const selectable = mtlModels.filter(model => !model.downloaded);
       const selected = getSelectedMtlIds();
@@ -1683,7 +2318,8 @@
       if (allDownloaded) {
         els.downloadBtn.textContent = 'Finish & Close';
         els.downloadBtn.disabled = false;
-        els.skipMtlBtn.classList.add('hidden');
+        els.skipMtlBtn.disabled = false;
+        els.skipMtlBtn.classList.toggle('hidden', activeSetupTab === 'mtl');
         return;
       }
 
@@ -1692,7 +2328,6 @@
         : 'Download Selected MTL Models';
 
       els.downloadBtn.disabled = selected.length === 0;
-      els.skipMtlBtn.textContent = 'Skip & Close';
       els.skipMtlBtn.disabled = false;
       els.skipMtlBtn.classList.remove('hidden');
     }
@@ -1701,9 +2336,8 @@
     // One status fetch drives every section; each card carries its own bar,
     // so there is no separate progress panel to keep in sync.
     async function fetchStatusData() {
-      const resp = await fetch('/api/setup/status', { cache: 'no-store' });
-      if (!resp.ok) throw new Error('Failed to get setup status');
-      const data = await resp.json();
+      const { ok, data } = await requestSetup('/api/setup/status', { cache: 'no-store' });
+      if (!ok) throw new Error('Failed to get setup status');
       // The optional block rides the main payload now. `ocr_vl` is the same
       // block narrowed to one model, and the sidecar endpoint is the last
       // resort: both only matter against a backend that predates the fold.
@@ -1712,8 +2346,8 @@
           data.optional = data.ocr_vl;
         } else {
           try {
-            const alt = await fetch('/api/setup/optional', { cache: 'no-store' });
-            if (alt.ok) data.optional = await alt.json();
+            const alt = await requestSetup('/api/setup/optional', { cache: 'no-store' });
+            if (alt.ok) data.optional = alt.data;
           } catch { /* optional block must never break the wizard */ }
         }
       }
@@ -1724,40 +2358,31 @@
       return Boolean(data.active || (data.optional && data.optional.active));
     }
 
-    function renderStage(data) {
+    function renderStage(data, resetMtlSelection = false) {
+      updateSetupTabs();
+      updateSetupTabStatus(data);
       renderRequiredModels(data);
-
-      const showOptional = currentStage === 'mtl_selection' || currentStage === 'mtl' || currentStage === 'complete';
-      els.mtlSection.classList.toggle('hidden', !showOptional);
-      if (els.optionalSection) els.optionalSection.classList.toggle('hidden', !showOptional);
-
-      if (showOptional) {
-        renderMtlModels(data.mtl_models || [], data);
-        renderOptional(data.optional);
-      }
+      renderMtlModels(data.mtl_models || [], data, resetMtlSelection);
+      renderOptional(data.optional);
 
       if (currentStage === 'non_mtl') {
         els.downloadBtn.classList.remove('hidden');
         els.downloadBtn.textContent = data.active ? 'Downloading Required Models…' : 'Download Required Models';
         els.downloadBtn.disabled = Boolean(data.active);
         els.skipMtlBtn.classList.add('hidden');
-        els.mtlDir.disabled = Boolean(data.active);
+        setStorageStageLocked(data.active);
+        // Worker failures arrive through status after the start request succeeds.
+        // Keep request/licence errors until retry clears them as well.
+        if (data.error) showError(data.error);
         return;
       }
 
       if (currentStage === 'mtl_selection') {
         els.downloadBtn.classList.remove('hidden');
-        els.mtlDir.disabled = false;
-        renderRequiredModels(data);
+        setStorageStageLocked(false);
         updateMtlButtons();
 
-        if (data.all_mtl_downloaded) {
-          els.downloadBtn.textContent = 'Finish & Close';
-          els.downloadBtn.disabled = false;
-          els.skipMtlBtn.classList.add('hidden');
-        }
-
-        showError(data.error || '');
+        if (data.error) showError(data.error);
         const optionalError = data.optional && data.optional.error;
         if (optionalError && !data.error) showError(`Optional models: ${optionalError}`);
         return;
@@ -1765,7 +2390,7 @@
 
       if (currentStage === 'mtl') {
         els.downloadBtn.classList.remove('hidden');
-        els.mtlDir.disabled = true;
+        setStorageStageLocked(true);
         els.downloadBtn.disabled = true;
         els.skipMtlBtn.disabled = true;
         els.skipMtlBtn.classList.add('hidden');
@@ -1774,7 +2399,7 @@
       }
 
       if (currentStage === 'complete') {
-        els.mtlDir.disabled = true;
+        setStorageStageLocked(true);
         els.downloadBtn.classList.add('hidden');
         els.skipMtlBtn.classList.add('hidden');
         els.doneMsg.textContent =
@@ -1787,24 +2412,49 @@
     async function pollOnce() {
       clearTimeout(pollTimer);
       pollTimer = null;
-      let data;
-      try {
-        data = await fetchStatusData();
-      } catch (e) {
-        // The backend may be closing (or the network hiccuped): retry rather
-        // than blanking the page. waitForBackendToClose owns the closed
-        // detection once a close was requested.
-        if (!window.__setupClosing) pollTimer = setTimeout(pollOnce, 2000);
+      if (polling) {
+        pollQueued = true;
         return;
       }
-      if (window.__setupClosing) return;
-      currentStage = data.stage || currentStage;
-      renderStage(data);
-      if (data.stage === 'complete' || window.__setupClosing) return;
-      if (anyActive(data)) pollTimer = setTimeout(pollOnce, 1000);
+      polling = true;
+      const storageAtRequest = storageGeneration;
+      try {
+        const data = await fetchStatusData();
+        if (window.__setupClosing) return;
+        if (storageAtRequest !== storageGeneration) { pollQueued = true; return; }
+        statusUnavailable = false;
+        els.connectionMsg.textContent = '';
+        els.connectionMsg.style.display = 'none';
+        currentStage = data.stage || currentStage;
+        renderStage(data, reconcileStorageStatus(data));
+        if (data.stage === 'complete') return;
+        if (anyActive(data) || storageUnconfirmed) pollTimer = setTimeout(pollOnce, SETUP_POLL_MS);
+      } catch (e) {
+        if (!window.__setupClosing) {
+          statusUnavailable = true;
+          // Keep the last progress visible, but do not offer another download
+          // until we know whether the previous request started its worker.
+          els.connectionMsg.textContent = 'Could not refresh setup status. Retrying automatically…';
+          els.connectionMsg.style.display = 'block';
+          els.downloadBtn.disabled = true;
+          els.skipMtlBtn.disabled = true;
+          if (els.optionalBtn) els.optionalBtn.disabled = true;
+          pollTimer = setTimeout(pollOnce, SETUP_POLL_MS);
+        }
+        return;
+      } finally {
+        polling = false;
+        // A download may have started after the in-flight status snapshot.
+        // Coalesce overlapping refreshes, but never drop that newer request.
+        if (pollQueued) {
+          pollQueued = false;
+          if (!window.__setupClosing) pollOnce();
+        }
+      }
     }
 
     async function handlePrimaryAction() {
+      if (els.primaryAction.hidden || statusUnavailable || els.downloadBtn.disabled) return;
       clearTimeout(pollTimer);
       pollTimer = null;
 
@@ -1817,22 +2467,24 @@
         // notice is unaccepted, so this is how the click gets through -- not a
         // courtesy ahead of it.
         if (!await requireTerms(requiredPendingIds, els.downloadBtn)) {
-          els.downloadBtn.disabled = false;
+          els.downloadBtn.disabled = statusUnavailable;
           els.downloadBtn.textContent = 'Download Required Models';
+          pollOnce();
+          return;
+        }
+        if (statusUnavailable) {
           pollOnce();
           return;
         }
 
         try {
-          const resp = await fetch('/api/setup/download', {
+          const { ok, data } = await requestSetup('/api/setup/download', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({}),
           });
 
-          const data = await resp.json().catch(() => ({}));
-
-          if (!resp.ok) {
+          if (!ok) {
             throw new Error(data.error || 'Failed to start download');
           }
 
@@ -1847,6 +2499,8 @@
           showError(e.message || 'Failed to start download');
           els.downloadBtn.disabled = false;
           els.downloadBtn.textContent = 'Download Required Models';
+          // A lost response does not mean the server failed to start the job.
+          pollOnce();
         }
         return;
       }
@@ -1873,34 +2527,27 @@
       els.downloadBtn.disabled = true;
       els.skipMtlBtn.disabled = true;
       els.skipMtlBtn.classList.add('hidden');
-      els.mtlDir.disabled = true;
+      const downloadFolder = storageAppliedPath;
+      storageDownloadPending = true;
+      updateStorageControls();
       showError('');
 
-      // Same gate as the required models, and for the same reason: the MTL
-      // weights carry the custom licences (Gemma's terms of use, the Llama 3
-      // community licence), which are exactly the ones a user needs to read.
-      if (!await requireTerms(selected, els.downloadBtn)) {
-        els.mtlDir.disabled = false;
-        els.skipMtlBtn.classList.remove('hidden');
-        els.skipMtlBtn.disabled = false;
-        updateMtlButtons();
-        pollOnce();
-        return;
-      }
-
       try {
-        const resp = await fetch('/api/setup/download', {
+        // Keep the applied destination fixed while its model licences are read.
+        if (!await requireTerms(selected, els.downloadBtn) || statusUnavailable) {
+          pollOnce();
+          return;
+        }
+        const { ok, data } = await requestSetup('/api/setup/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mtl_dir: els.mtlDir.value || 'models',
+            mtl_dir: downloadFolder,
             selected_mtl: selected,
           }),
         });
 
-        const data = await resp.json().catch(() => ({}));
-
-        if (!resp.ok) {
+        if (!ok) {
           throw new Error(data.error || 'Failed to start MTL download');
         }
 
@@ -1909,11 +2556,12 @@
         pollOnce();
       } catch (e) {
         showError(e.message || 'Failed to start MTL download');
-        els.mtlDir.disabled = false;
         els.skipMtlBtn.classList.remove('hidden');
         els.skipMtlBtn.disabled = false;
-        updateMtlButtons();
         pollOnce();
+      } finally {
+        storageDownloadPending = false;
+        updateStorageControls();
       }
     }
 
@@ -1922,6 +2570,7 @@
     }
 
     async function closeSetup() {
+      if (statusUnavailable) return;
       clearTimeout(pollTimer);
       pollTimer = null;
 
@@ -1934,22 +2583,20 @@
       els.skipMtlBtn.disabled = true;
       els.downloadBtn.textContent = 'Closing...';
       els.skipMtlBtn.classList.add('hidden');
-      els.mtlDir.disabled = true;
+      setStorageStageLocked(true);
       els.errorMsg.style.display = 'none';
       els.closedMsg.style.display = 'none';
       els.doneMsg.textContent = 'Fox Reader is closing...';
       els.doneMsg.style.display = 'block';
 
       try {
-        const resp = await fetch('/api/setup/close', {
+        const { ok, data } = await requestSetup('/api/setup/close', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           cache: 'no-store',
         });
 
-        const data = await resp.json();
-
-        if (!resp.ok) {
+        if (!ok) {
           throw new Error(data.error || 'Failed to close Fox Reader');
         }
 
@@ -1957,10 +2604,13 @@
         // endpoint disappears, then show the final state.
         waitForBackendToClose(0);
       } catch (e) {
+        window.__setupClosing = false;
+        els.doneMsg.style.display = 'none';
         showError(e.message);
         els.downloadBtn.disabled = false;
         els.skipMtlBtn.disabled = false;
         updateMtlButtons();
+        pollOnce();
       }
     }
 
@@ -1977,9 +2627,9 @@
 
       setTimeout(async () => {
         try {
-          const resp = await fetch('/api/setup/status', {
+          const resp = await requestSetup('/api/setup/status', {
             cache: 'no-store',
-          });
+          }, false);
 
           if (resp.ok) {
             waitForBackendToClose(attempt + 1);
@@ -1988,6 +2638,10 @@
 
           showBackendClosed();
         } catch (e) {
+          if (e.name === 'TimeoutError') {
+            waitForBackendToClose(attempt + 1);
+            return;
+          }
           // Connection failure means the backend process is gone.
           showBackendClosed();
         }
@@ -2197,9 +2851,8 @@
     let termsReadToEnd = false;
 
     async function fetchTermsState() {
-      const resp = await fetch('/api/setup/terms', { cache: 'no-store' });
-      if (!resp.ok) throw new Error('Could not read the licence state.');
-      const data = await resp.json().catch(() => ({}));
+      const { ok, data } = await requestSetup('/api/setup/terms', { cache: 'no-store' });
+      if (!ok) throw new Error('Could not read the licence state.');
       return data.terms || {};
     }
 
@@ -2207,10 +2860,9 @@
       const cached = termsDocs.get(id);
       if (cached) return cached;
 
-      const resp = await fetch(`/api/setup/terms?id=${encodeURIComponent(id)}`, { cache: 'no-store' });
-      const data = await resp.json().catch(() => ({}));
+      const { ok, data } = await requestSetup(`/api/setup/terms?id=${encodeURIComponent(id)}`, { cache: 'no-store' });
 
-      if (!resp.ok || !data.document) {
+      if (!ok || !data.document) {
         throw new Error(data.error || `No licence notice for ${id}.`);
       }
 
@@ -2219,14 +2871,12 @@
     }
 
     async function recordTermsAcceptance(id) {
-      const resp = await fetch('/api/setup/terms/accept', {
+      const { ok, data } = await requestSetup('/api/setup/terms/accept', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [id] }),
       });
-      const data = await resp.json().catch(() => ({}));
-
-      if (!resp.ok) throw new Error(data.error || 'Could not save your acceptance.');
+      if (!ok) throw new Error(data.error || 'Could not save your acceptance.');
 
       // The route answers with what actually stuck, so an id that does not come
       // back is one the server declined to record. Saying so beats enabling a
@@ -2462,8 +3112,10 @@
       // Server status is authoritative. pollOnce renders it and keeps polling
       // while any job is active, so a reload mid-download resumes the bars
       // instead of idling on a stale screen.
+      initSetupTabs();
       initCopyrightGate();
       initTermsGate();
+      initStorage();
       pollOnce();
     }
 

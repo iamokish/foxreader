@@ -218,6 +218,19 @@ https://github.com/huggingface/transformers.
 The §3 model WEIGHTS are unaffected by this: they are still downloaded from
 the same PaddlePaddle repositories under their own terms.
 
+1D. NATIVE DESKTOP VIEWER
+--------------------------------------------------------------------------------
+Windows launchers link Microsoft's WebView2LoaderStatic.lib from
+Microsoft.Web.WebView2 SDK 1.0.2903.40. Copyright Microsoft Corporation.
+The SDK's BSD 3-Clause license is included unchanged as
+WebView2-LICENSE.txt beside the Windows launcher.
+https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.2903.40
+
+The WebView2 Evergreen browser runtime is installed and updated separately
+by Microsoft; Fox Reader does not redistribute it. Linux uses the system's
+WebKitGTK and GTK libraries, and macOS uses Apple's system WKWebView/Cocoa
+frameworks. Those system browser engines are not included in the archive.
+
 2. BUNDLED FONTS AND ICONS (shipped in git and in binaries)
 --------------------------------------------------------------------------------
 * ComicMono / ComicMono-Bold (fonts/ComicMono*.ttf) — MIT License.

@@ -1,4 +1,5 @@
 import { render } from "preact";
+import { installDesktopIntegration, toggleFullscreen as toggleReaderFullscreen } from "../static/desktop.js";
 import "./themes/dark.css";
 import "./themes/light.css";
 import { App } from "./App";
@@ -43,13 +44,7 @@ import { syncMLStateFromBackend } from "./mlStatus";
 import { clearCharacters } from "./characters";
 import { handleReaderKey } from "./reader";
 
-function toggleReaderFullscreen() {
-    if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-    } else {
-        document.documentElement.requestFullscreen().catch(() => {});
-    }
-}
+installDesktopIntegration();
 
 /**
  * Mirror the Characters option switch onto the roster button.

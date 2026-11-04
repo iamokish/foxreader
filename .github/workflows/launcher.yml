@@ -1,0 +1,45 @@
+name: Native launcher checks
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install Linux viewer headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y libwebkit2gtk-4.1-dev pkg-config xvfb
+      - name: Install test dependencies
+        run: python -m pip install pytest pillow
+      - name: Compile native viewer
+        run: python packaging/toolchain.py --out native/launcher${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Compile isolated backend fixture
+        run: python packaging/toolchain.py --source tests/launcher_backend.c --out native/backend${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Check ownership, shutdown and file logs
+        env:
+          FOX_TEST_LAUNCHER: ${{ github.workspace }}/native/launcher${{ runner.os == 'Windows' && '.exe' || '' }}
+          FOX_TEST_BACKEND: ${{ github.workspace }}/native/backend${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: python -m pytest tests/test_launcher.py tests/test_release_manifest.py tests/test_webview_sdk.py tests/test_desktop_packaging.py tests/test_window_recovery_policy.py -q
+      - name: Check WebView2 startup recovery
+        if: runner.os == 'Windows'
+        run: python -m pytest tests/test_window_recovery.py -q
+      - name: Check WebKit startup and renderer recovery
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest tests/test_window_recovery.py -q

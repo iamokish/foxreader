@@ -123,6 +123,8 @@ run.bat
 
 Then open `http://127.0.0.1:7954`. First launch redirects to `/setup`, which downloads the required models (bubble detector, OCR, MTL) from Hugging Face and marks each with a `_completed` file.
 
+Setup refreshes download progress every two seconds while a download is active. Each bar tracks the current file, with a separate file count. Xet downloads show transferred bytes, which can be smaller than the saved file because of compression and caching; files may still need finalizing after transfer reaches 100%. If the transfer size is unknown, setup shows received bytes and an activity indicator.
+
 ### GGUF support (local GGUF MTL)
 
 `llama-cpp-python` ships no wheels — every install compiles llama.cpp, and the `CMAKE_ARGS` decide whether the result has a GPU backend. It is therefore installed on its own via `packaging/llamacpp.py`, never through `uv sync --extra gguf`:
@@ -342,7 +344,7 @@ Off unless a key is given. When on, the selection is sealed before it leaves thi
 
 ## Hotkeys
 
-Typing in inputs/textareas (or the editable translation panel) disables hotkeys. Loading overlay, backend-status overlay, and folder modal also suppress them.
+Typing in inputs/textareas (or the editable translation panel) disables editing hotkeys. Loading overlay, backend-status overlay, and folder modal also suppress them. `F11` or `Alt+Enter` toggles fullscreen throughout the app, including the desktop loading window. On Mac keyboards, `F11` may require `Fn` if macOS reserves the key.
 
 **Work mode** (default):
 
@@ -398,6 +400,7 @@ Pages:
 | Variable | Default | Effect |
 |---|---|---|
 | `FOX_READER_LOG_LEVEL` | `INFO` | Log verbosity |
+| `FOX_IMAGE_RENDER_QUALITY` | `1` | Image improvements: `1` native app windows on every OS, `2` native windows and browsers, `3` existing rendering. Invalid values disable the improvements. Set before starting the backend. |
 | `FOX_READER_ROOT` | exe dir / source root | Override project root (models/fonts/config resolution) |
 | `FOX_READER_DISK_ASSETS` | off | Read embedded frontend/fonts from disk (dev) |
 | `FOX_READER_MTL_THREADS` | settings heuristic | Override MTL thread count |
@@ -441,26 +444,38 @@ Windows `pnpm install` may fail with `UNKNOWN ... symlink`: enable Developer Mod
 > copy-paste guide (what to download, which `--device` for your GPU, build,
 > run) for Windows, Linux, and Apple Silicon macOS.
 
-Standalone builds compile the backend with [Nuitka](https://nuitka.net/), embed the frontend, and ship a small C launcher (the user-visible entry point).
+Standalone builds compile the backend with [Nuitka](https://nuitka.net/), embed the frontend, and ship a small native launcher. The launcher shows a loading banner immediately, then opens the reader in the system WebView after the backend is ready. FastAPI still serves the same Preact frontend over localhost; OCR and translation remain in the detached backend process.
 
 Result layout:
 
 ```
 fox-reader/
-  launcher(.exe)   starts backend, opens UI, closes both on exit
+  launcher(.exe)   desktop window and backend lifecycle
+  Fox Reader.app/  Finder entry point (macOS only)
   bin/             compiled backend + linked libs (+ MSVC runtime DLLs + .dist-info metadata)
   cache/           scratch (empty, created at build)
   config/          fox_config.yaml
   fonts/           your fonts
   models/          weights (downloaded on first run)
+  icons/           desktop icons
+  logs/            launcher, backend, and frontend diagnostics
+  build-info.json  installed version and CPU/CUDA/GGUF variant
 ```
+
+Windows uses the installed [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); if it is missing, the launcher opens your browser and offers Microsoft's runtime installer link. Linux uses the distribution's WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` on Ubuntu/Debian). macOS uses built-in WKWebView. No Chromium runtime is bundled.
+
+Double-click `launcher.exe` on Windows or `Fox Reader.app` on macOS. On Linux, put the extracted folder in its final location, run `./install-desktop.sh`, then open **Fox Reader** from your applications menu; the entry uses `Terminal=false`. Keep the whole portable folder together, including `config`, `fonts`, and `models` beside the Mac app.
+
+`launcher --browser` keeps the current system-browser workflow; `--no-browser` starts only the backend. Closing the desktop window stops the backend it started, with a 20-second graceful shutdown period. A window attached to an already-running backend leaves that backend running. Diagnostics are in `logs/launcher.log`, `logs/backend.log`, `logs/backend-output.log`, and `logs/frontend.log`.
+
+For verified update downloads and preserving your existing installation, see [Updating Fox Reader](docs/updating.md). Desktop testing notes are in [docs/desktop.md](docs/desktop.md).
 
 ### Prerequisites
 
 - `uv`, `pnpm`, Node.js `22+` (CI pins 24 + pnpm 11), Python `3.12`
-- C compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
-  - Windows: VS Build Tools (“Desktop development with C++”) or MinGW-w64 (`gcc` on `PATH`; use winlibs/MSYS2 `mingw-w64-x86_64-gcc`, not MinGW.org bare `gcc`). With no compiler, the build asks Nuitka to fetch its MinGW64.
-  - Linux: `gcc`/`clang` (`apt install build-essential`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
+- Native compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
+  - Windows: VS Build Tools with “Desktop development with C++” and the Windows SDK are required for the WebView2 host. The build downloads a pinned, SHA512-verified WebView2 SDK header and static loader; it does not download a browser runtime. For an offline build, set `FOX_WEBVIEW2_SDK` to the unpacked Microsoft.Web.WebView2 `1.0.2903.40` NuGet package. MinGW remains usable for the standalone C test fixtures.
+  - Linux: `gcc`/`clang`, `pkg-config`, and WebKitGTK headers (`sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
   - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+. Local verification requires a working GPU by default; [GitHub-hosted builds](packaging/build.md#build-macos-releases-on-github) handle runners without GPU access.
 - GPU builds: matching CUDA toolkit (`nvcc`) or ROCm 6.1+; CPU GGUF builds want OpenBLAS (`apt install libopenblas-dev` on Linux, or `--openblas download`).
 

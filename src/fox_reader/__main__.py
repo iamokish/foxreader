@@ -1,38 +1,10 @@
-import logging
-import os
-import sys
+from fox_reader.logging_setup import LOG_LEVEL_ENV as LOG_LEVEL_ENV
+from fox_reader.logging_setup import configure_logging
 
-#: Overrides the reader's own log level. INFO by default: the lines that matter
-#: most when a local model will not load are logged there — the memory check, and
-#: the line the GGUF translator writes immediately before a call that can end the
-#: process without raising anything Python can catch.
-LOG_LEVEL_ENV = "FOX_READER_LOG_LEVEL"
 
 def _configure_logging() -> None:
-    """Give the reader's own loggers somewhere to go.
-
-    uvicorn configures handlers for its own three loggers and nothing else, so
-    without this everything under ``fox_reader`` falls through to logging's
-    lastResort handler — which prints WARNING and above, and drops exactly the
-    lines that explain a failed model load.
-
-    The level is raised on ``fox_reader`` alone rather than on the root: at INFO
-    the root logger would also let through every library in the process, and
-    huggingface_hub and PIL between them have plenty to say.
-    """
-    wanted = os.environ.get(LOG_LEVEL_ENV, "").strip().upper() or "INFO"
-    level = logging.getLevelNamesMapping().get(wanted, logging.INFO)
-
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
-
-    root = logging.getLogger()
-    root.addHandler(handler)
-
-    if root.level == logging.NOTSET:
-        root.setLevel(logging.WARNING)
-
-    logging.getLogger("fox_reader").setLevel(level)
+    """Configure bounded files before importing models or starting the server."""
+    configure_logging()
 
 
 def main():
@@ -66,6 +38,8 @@ def main():
             host=config.host,
             port=config.port,
             reload=False,
+            log_config=None,
+            access_log=False,
         )
     )
     runtime.register_server(server)

@@ -241,6 +241,11 @@ METADATA_LOOKUPS = (
 #: scipy was a paddlex dependency and is no longer in the tree at all.
 HIDDEN_MODULES = (
     "fox_reader.app",
+    # Hugging Face imports SoftFileLock even when native locking is available.
+    # filelock resolves it through __getattr__/import_module, which Nuitka
+    # cannot follow; omitting it breaks the first model download on Windows.
+    # Include just this portable fallback and its static dependencies.
+    "filelock._soft",
     "uvicorn.loops",
     "uvicorn.loops.auto",
     "uvicorn.protocols.http",
@@ -1470,6 +1475,7 @@ def _version_info(nuitka: Nuitka, cmd: list[str], version: str) -> None:
     nuitka.add(cmd, "--product-version", _file_version(version))
 
     for candidate in (
+        BUILD_DIR / "launcher" / "fox-reader.ico",
         BUILD_DIR / "launcher" / "fox.ico",
         FRONTEND_DIR / "static" / "favicon.ico",
         FRONTEND_DIR / "static" / "icon.ico",
@@ -1689,6 +1695,9 @@ def run_nuitka(python: Path, entry: Path, deep: bool, extra: list[str], compiler
     cmd += _trigger_cache_workaround(nuitka, python, extra)
 
     _version_info(nuitka, cmd, _read_version())
+    if platform.system() == "Windows":
+        if not nuitka.add(cmd, "--windows-console-mode", "disable"):
+            raise BuildError("Nuitka must support --windows-console-mode=disable for the desktop backend")
 
     cmd += extra
     cmd.append(str(entry))
@@ -2116,7 +2125,8 @@ _ELF_SYSTEM = ("libc.so", "libm.so", "libdl.so", "libpthread.so", "librt.so",
                "libutil.so", "libresolv.so", "ld-linux", "libgcc_s.so",
                "libstdc++.so", "libcuda.so", "libGL.so", "libGLX.so", "libEGL.so",
                "libX11", "libxcb", "libdrm", "libnvidia", "libgomp.so",
-               "libcrypt.so", "libz.so")
+               "libcrypt.so", "libz.so", "libwebkit2gtk", "libjavascriptcoregtk",
+               "libgtk-3", "libgdk-3")
 
 
 def _report_elf_dependencies(dist: Path) -> None:
@@ -2453,10 +2463,16 @@ def stage_layout(dist: Path, launcher: Path) -> Path:
     # not in the binary.
     (root / "cache").mkdir()
     (root / "models").mkdir()
+    (root / "logs").mkdir()
+
+    from desktop import stage_desktop
+    stage_desktop(root, launcher, platform.system(), _read_version())
 
     if platform.system() == "Darwin":
         try:
             macos.finalize(root)
+            macos._run(["xcrun", "codesign", "--force", "--sign", "-", str(root / "Fox Reader.app")])
+            macos._run(["xcrun", "codesign", "--verify", "--strict", str(root / "Fox Reader.app")])
         except macos.MacOSBuildError as exc:
             raise BuildError(str(exc)) from exc
 
@@ -2922,6 +2938,12 @@ def main() -> int:
     bundle_metadata(dist, python)
 
     root = stage_layout(dist, launcher)
+    (root / "build-info.json").write_text(json.dumps({
+        "version": version, "device": args.device, "gguf": gguf_device,
+        "platform": {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}[platform.system()],
+        "architecture": "arm64" if platform.system() == "Darwin" else "x86_64",
+        "repository": os.environ.get("GITHUB_REPOSITORY", "iamokish/foxreader"),
+    }, indent=2) + "\n", encoding="utf-8")
     archive = package_output(root, version, args.device, gguf_device)
     release_files = finalize_release_files(archive, args.split_bin)
     cleanup(args.keep_venv)

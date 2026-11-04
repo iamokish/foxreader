@@ -1,0 +1,122 @@
+# Desktop launcher
+
+The launcher starts the existing detached backend and displays the same FastAPI
+frontend in the system WebView. It does not ship Chromium or duplicate the reader
+UI. The startup window appears before the backend begins loading. The reader is
+revealed after the marked health check and successful page navigation.
+
+| Platform | Viewer | Runtime requirement |
+| --- | --- | --- |
+| Windows x64 | WebView2 | Microsoft Evergreen runtime; falls back to the default browser and offers Microsoft's installer link when missing |
+| Linux x86_64 | WebKitGTK 4.1 / GTK 3 | Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-0`; `libwebkit2gtk-4.1-dev pkg-config` are needed to build |
+| macOS arm64, 14+ | WKWebView | Built into macOS |
+
+Run `launcher --browser` to use the existing browser workflow. The manager window
+shows startup progress and stays open to control the backend. `--no-browser`
+and `FOX_READER_NO_BROWSER=1` retain the headless mode. On Linux without GTK/WebKit
+or a display, the executable remains usable and falls back to the browser.
+
+Native-engine initialization and the first page navigation each have a
+30-second deadline. Waiting for backend readiness has no viewer deadline, and
+later page navigation and model transfers are not timed by this watchdog.
+If native startup stalls, the manager explains the failure and opens the same
+running backend in the browser once. Linux also uses this recovery path if the
+WebKit rendering process crashes or exceeds its memory limit. Recovery is
+recorded in `logs/launcher.log`; it does not restart the backend. Closing the
+manager still follows the normal owned/attached shutdown rules below.
+
+F11 and Alt+Enter toggle fullscreen, including on the setup and settings pages.
+The reader's existing F shortcut and fullscreen button use the same native
+window action. Window chrome follows the system theme. Icons come from the
+existing Fox Reader artwork, with multiple Windows icon sizes.
+
+On macOS, open `Fox Reader.app` in the extracted distribution; keep `bin`,
+`config`, `fonts`, `models`, and `cache` beside it. The root `launcher` also
+remains available. After choosing a permanent location on Linux, run
+`./install-desktop.sh` to install a per-user menu entry with `Terminal=false`.
+
+Closing a window that started the backend sends its shutdown token, waits up to
+20 seconds for cleanup, then uses the existing process/job backstop. Closing a
+second, attached window leaves the owner running. Errors remain visible until
+dismissed. An unwritable installation lock is an error, not permission to start
+another backend.
+
+Diagnostics are stored under the installation's `logs/` directory:
+
+- `backend.log`: Python and server diagnostics, rotating at 5 MiB with three backups.
+- `frontend.log`: bounded frontend errors/warnings, rotating at 1 MiB with two backups.
+- `backend-output.log`: early/native library stdout and stderr, rotating at 8 MiB with one backup.
+- `launcher.log`: startup, ownership, and shutdown diagnostics, rolled on the next launch after 8 MiB.
+
+Browser diagnostics accept only local same-origin requests, with payload and
+rate limits. Credential-like strings and URL query strings are redacted from
+Python/frontend diagnostics. Native library output is kept as received.
+Runtime profiles stay outside the backend's disposable `cache/` directory.
+
+See [updating.md](updating.md) for explicit update checks, verified downloads,
+the release manifest, and preserving data during installation.
+
+## Image rendering
+
+`FOX_IMAGE_RENDER_QUALITY` controls the main-image and gallery improvements:
+
+| Value | Native window (Windows, Linux, macOS) | Regular browser |
+| --- | --- | --- |
+| `1` (default) | Enabled | Existing rendering |
+| `2` | Enabled | Enabled |
+| `3` | Existing rendering | Existing rendering |
+
+Set the environment variable before starting Fox Reader's backend, then reopen
+the reader page. An already running backend keeps its inherited environment;
+restart it when changing the setting. Invalid values disable the improvements
+and produce a backend warning. The native viewer's injected capability identifies
+each window, so a browser fallback or a browser beside the native app retains
+the browser policy.
+
+For example, in PowerShell, `$env:FOX_IMAGE_RENDER_QUALITY = '2'` followed by
+`.\launcher.exe` enables both viewers. On Linux or macOS,
+`FOX_IMAGE_RENDER_QUALITY=2 ./launcher` does the same.
+
+When enabled, the main image keeps GPU transforms during movement and releases
+the forced layer after movement settles. Gallery previews use lossless Lanczos
+resizing at the current display density. Previews are generated on demand with
+one worker and a bounded memory cache; changes to the source page invalidate
+them. Full-resolution pages remain the source for reading, captures and OCR.
+Unsupported or failed previews fall back to the original image.
+
+## Validation and rollout
+
+`.github/workflows/launcher.yml` compiles all native hosts on Windows,
+Ubuntu 22.04/24.04 and Apple Silicon. Its isolated backend fixture checks
+ownership, authenticated shutdown, and file logging; Windows additionally
+exercises the window close button and fullscreen restoration. The regular
+release builds compile the same hosts before compiling the heavy backend.
+The shared recovery-policy tests exercise deadlines and late events with a
+controlled clock. Native host tests hold a local page response open to exercise
+the real watchdog without opening a browser or loading models.
+
+Before shipping a release, run this interactive pass against a staged build on
+each OS. The automated tests do not replace these runtime checks:
+
+1. Start from a path containing spaces and non-ASCII characters. Confirm the
+   banner appears immediately, then the setup wizard or reader loads without a
+   blank page. Close during startup, then relaunch.
+2. Complete setup, open settings, load a folder, import/export characters, open
+   an image and run OCR/translation. Confirm websocket progress and image URLs
+   work. Confirm export cancellation does not overwrite an existing file.
+3. Toggle F11 and Alt+Enter in the reader, settings, and text inputs. Restore the
+   window's size and position. Change the system theme, move between monitors,
+   and check title bars and icons.
+4. Open a second launcher and close it. Confirm reading continues in the first.
+   Close the first during a backend operation; confirm its processes exit and
+   its cache cleanup runs. Test an occupied port and a backend startup failure.
+5. On Linux, repeat file pickers, drag/drop, and fullscreen on both Wayland and
+   X11. Test missing WebKitGTK and `--browser`. On Windows, test missing WebView2
+   and its browser fallback.
+6. Check and cancel an update, retry it, and verify the final archive. Test a
+   corrupted/missing part and insufficient disk space. The working installation
+   must remain usable throughout.
+
+macOS distributions remain ad-hoc signed. Public Gatekeeper-friendly releases
+still require the maintainer's Developer ID signing and notarization credentials;
+these are not substituted with a bundled runtime or a security-setting change.

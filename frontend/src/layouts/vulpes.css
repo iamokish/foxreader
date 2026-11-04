@@ -246,7 +246,7 @@ body.layout-vulpes .ws-splitter:active {
  */
 body.layout-vulpes .vx-rail {
     flex: 0 0 auto;
-    width: 164px;
+    width: 100px;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -405,10 +405,13 @@ body.layout-vulpes .vx-tools {
     border-bottom: 1px solid var(--border-default);
     overflow-x: auto;
     scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 body.layout-vulpes .vx-tools .buttons {
-    width: auto;
+    /* Keep the toolbar's required width measurable even when it must scroll. */
+    flex: 0 0 auto;
+    width: max-content;
     margin: 0;
     padding: 0;
     gap: 6px;
@@ -542,6 +545,7 @@ body.layout-vulpes .vx-section.is-collapsed .vx-section__body {
 body.layout-vulpes .vx-capture {
     flex: 0 0 auto;
     height: 150px;
+    box-sizing: border-box;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -587,6 +591,7 @@ body.layout-vulpes .vx-capture__body #textArea {
     border-radius: var(--radius-md);
     color: var(--text-primary);
     font-family: inherit;
+    line-height: 1.5;
 }
 
 /* Focus stays readable through the border alone: no glow ring. The ring used to
