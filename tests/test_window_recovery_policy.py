@@ -13,14 +13,19 @@ def recovery_policy(tmp_path_factory):
     root = Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location("fox_recovery_toolchain", root / "packaging/toolchain.py")
     toolchain = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = toolchain
-    spec.loader.exec_module(toolchain)
-    try:
-        compiler = toolchain.find_compiler(allow_download=False)
-    except toolchain.ToolchainError as exc:
-        pytest.skip(f"native recovery checks need a C compiler: {exc}")
-    output = tmp_path_factory.mktemp("recovery-policy") / ("policy.exe" if os.name == "nt" else "policy")
-    toolchain.build_launcher(output, root / "tests/window_recovery_policy.c", compiler, gui=False)
+    # Loading a script by path does not expose its sibling modules. Keep the
+    # packaging helpers importable through discovery and compilation (macOS
+    # imports macos.py in both), then restore our temporary path/module binding.
+    with pytest.MonkeyPatch.context() as imports:
+        imports.syspath_prepend(str(root / "packaging"))
+        imports.setitem(sys.modules, spec.name, toolchain)
+        spec.loader.exec_module(toolchain)
+        try:
+            compiler = toolchain.find_compiler(allow_download=False)
+        except toolchain.ToolchainError as exc:
+            pytest.skip(f"native recovery checks need a C compiler: {exc}")
+        output = tmp_path_factory.mktemp("recovery-policy") / ("policy.exe" if os.name == "nt" else "policy")
+        toolchain.build_launcher(output, root / "tests/window_recovery_policy.c", compiler, gui=False)
     return output
 
 
