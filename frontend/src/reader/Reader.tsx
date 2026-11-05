@@ -23,6 +23,7 @@
 import "./reader.css";
 import "../workspace/strip.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { toggleFullscreen } from "../../static/desktop.js";
 import { state } from "../state";
 import { useWorkspace } from "../workspace";
 import { refitViewer, setViewVariant, zoomViewerBy } from "../viewer";
@@ -55,14 +56,6 @@ const FIT_OPTIONS: { fit: FitMode; label: string; hint: string }[] = [
     { fit: "height", label: "Height", hint: "Fit the height" },
     { fit: "actual", label: "1:1", hint: "Actual pixel size" },
 ];
-
-function toggleFullscreen(): void {
-    if (document.fullscreenElement) {
-        document.exitFullscreen().catch(() => {});
-    } else {
-        document.documentElement.requestFullscreen().catch(() => {});
-    }
-}
 
 /**
  * The page index one step away, in pages.
@@ -487,7 +480,7 @@ export function Reader() {
 
                     <span class="vx-reader__sep" />
 
-                    <button type="button" class="vx-icon-btn" title="Toggle fullscreen (F)" onClick={toggleFullscreen}>
+                    <button type="button" class="vx-icon-btn" title="Toggle fullscreen (F, F11 or Alt+Enter)" onClick={toggleFullscreen}>
                         <span class="material-icons">fullscreen</span>
                     </button>
                     <button

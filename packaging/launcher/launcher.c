@@ -1,48 +1,14 @@
 /*
- * Fox Reader launcher
- * ===================
+ * Fox Reader desktop launcher.
  *
- * A standalone console program. It sits at the root of the distribution, starts
- * bin/fox-reader if it is not already running, opens the UI, and stays in the
- * foreground as the window you close to stop the whole thing.
- *
- * No dependencies beyond libc and the OS: winsock and kernel32 on Windows,
- * nothing extra on Linux. Everything it needs to know it reads from
- * config/fox_config.yaml.
- *
- * Four decisions worth explaining, because none of them is the obvious one.
- *
- * 1. The child is detached from this console (Windows) or put in its own process
- *    group (Linux). It is tempting to let it share the console so its logs
- *    appear for free -- but then clicking the X sends CTRL_CLOSE_EVENT to the
- *    child as well as to us, Python has no handler for it, and the backend dies
- *    on the spot without running its shutdown path. No shutdown path means the
- *    cache is never cleared, which is exactly what we were asked to guarantee.
- *    So the child gets no console, we take its output over a pipe and relay it,
- *    and every signal that reaches it comes from us.
- *
- * 2. Shutdown is an HTTP request, not a signal. POST /api/shutdown flips
- *    uvicorn's should_exit, which unwinds the ASGI lifespan -- releasing the
- *    models and clearing cache/ on the way. A signal cannot do this on Windows:
- *    os.kill there is TerminateProcess, which runs no Python at all.
- *
- * 3. A Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (PR_SET_PDEATHSIG on
- *    Linux) is the backstop under all of it. Windows gives a console program
- *    about five seconds after the X is clicked before killing it; if a slow
- *    shutdown runs past that, the OS closes our last job handle as we die and
- *    the child goes with it. The backend cannot be orphaned even if this program
- *    is killed outright.
- *
- * 4. One TCP connect answers two questions. uvicorn creates its listening socket
- *    only after the lifespan startup finishes, so a successful connect means the
- *    models are loaded and the app is ready -- the same probe is both the
- *    "is it already running" test at startup and the readiness wait afterwards.
- *
- * Build: see packaging/toolchain.py, which finds a compiler and invokes it. By
- * hand it is a single translation unit:
- *
- *     cl /O2 /MT launcher.c /Fe:launcher.exe ws2_32.lib
- *     gcc -O2 -o launcher launcher.c
+ * The backend stays detached and owns all application work. A native system
+ * WebView only displays its existing localhost frontend. The GUI runs on the
+ * main thread while a worker preserves lock -> marked health check -> monitor
+ * -> token-authenticated shutdown, with a 20-second grace and OS backstop.
+ * --browser opens the system browser; --cli keeps a foreground CLI manager.
+ * FOX_NO_WINDOW omits every native UI and uses a terminal for browser mode.
+ * Diagnostics go to logs/, with native child output rotated separately from
+ * Python logging. See packaging/toolchain.py for native platform builds.
  */
 
 #ifdef _WIN32
@@ -84,6 +50,7 @@
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
+#  include <pthread.h>
 #  ifdef __linux__
 #    include <sys/prctl.h>
 #  endif
@@ -97,6 +64,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(FOX_GUI) && defined(FOX_NO_WINDOW)
+#  error "FOX_GUI and FOX_NO_WINDOW are mutually exclusive"
+#endif
+#ifdef FOX_GUI
+#  include "window.h"
+#endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+#  include "terminal_linux.h"
+#endif
+
+#if defined(FOX_GUI) || defined(_WIN32) || (defined(FOX_NO_WINDOW) && defined(__linux__))
+static int g_gui = 0;
+#endif
+static FILE *g_log = NULL;
+static FILE *g_backend_output = NULL;
+#ifdef FOX_GUI
+static char g_error[4096];
+#endif
 
 #define FOX_LAUNCHER_VERSION "1.0.0"
 
@@ -159,6 +145,8 @@ typedef char pchar;
 
 #define PATH_CAP 4096
 
+static pchar g_log_root[PATH_CAP];
+
 #ifndef FOX_BIN_DIR
 #  define FOX_BIN_DIR PL("bin")
 #endif
@@ -190,7 +178,20 @@ static void out(const char *fmt, ...)
     vfprintf(stdout, fmt, ap);
     va_end(ap);
     fflush(stdout);
+    if (g_log) {
+        va_start(ap, fmt);
+        vfprintf(g_log, fmt, ap);
+        va_end(ap);
+        fflush(g_log);
+    }
 }
+
+#ifdef FOX_GUI
+static void window_log(const char *message)
+{
+    out("Native window: %s\n", message);
+}
+#endif
 
 static void errline(const char *fmt, ...)
 {
@@ -200,6 +201,21 @@ static void errline(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fflush(stderr);
+    if (g_log) {
+        va_start(ap, fmt);
+        vfprintf(g_log, fmt, ap);
+        va_end(ap);
+        fflush(g_log);
+    }
+#ifdef FOX_GUI
+    if (g_gui) {
+        size_t used = strlen(g_error);
+        va_start(ap, fmt);
+        vsnprintf(g_error + used, sizeof g_error - used, fmt, ap);
+        va_end(ap);
+        fox_window_status(g_error);
+    }
+#endif
 }
 
 static void sleep_ms(int ms)
@@ -228,7 +244,7 @@ static int owns_console(void)
 static void maybe_pause(void)
 {
 #ifdef _WIN32
-    if (owns_console()) {
+    if (!g_gui && owns_console()) {
         out("\nPress Enter to close this window.\n");
         (void)getchar();
     }
@@ -322,6 +338,70 @@ static int path_exists(const pchar *path)
     struct stat st;
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 #endif
+}
+
+/* Raw native diagnostics are separate from Python's rotating backend.log. */
+static FILE *open_log(const pchar *root, const pchar *name)
+{
+    pchar dir[PATH_CAP], path[PATH_CAP], backup[PATH_CAP];
+    FILE *file;
+    if (!p_join(dir, PATH_CAP, root, PL("logs")))
+        return NULL;
+#ifdef _WIN32
+    CreateDirectoryW(dir, NULL);
+#else
+    mkdir(dir, 0700);
+#endif
+    if (!p_join(path, PATH_CAP, dir, name))
+        return NULL;
+    file = p_fopen(path, PL("rb"));
+    if (file) {
+        long size;
+        fseek(file, 0, SEEK_END);
+        size = ftell(file);
+        fclose(file);
+        if (size > 8 * 1024 * 1024 && p_strlen(path) + 3 < PATH_CAP) {
+            memcpy(backup, path, (p_strlen(path) + 1) * sizeof(pchar));
+#ifdef _WIN32
+            wcscat(backup, L".1");
+            MoveFileExW(path, backup, MOVEFILE_REPLACE_EXISTING);
+#else
+            strcat(backup, ".1");
+            rename(path, backup);
+#endif
+        }
+    }
+    file = p_fopen(path, PL("ab"));
+    if (file) {
+#ifdef _WIN32
+        SetHandleInformation((HANDLE)_get_osfhandle(_fileno(file)), HANDLE_FLAG_INHERIT, 0);
+#else
+        fcntl(fileno(file), F_SETFD, FD_CLOEXEC);
+#endif
+    }
+    return file;
+}
+
+static void init_logs(const pchar *root)
+{
+    memcpy(g_log_root, root, (p_strlen(root) + 1) * sizeof(pchar));
+    g_log = open_log(root, PL("launcher.log"));
+}
+
+static void open_backend_output(const pchar *root)
+{
+    g_backend_output = open_log(root, PL("backend-output.log"));
+}
+
+static void write_backend_output(const char *data, size_t count)
+{
+    if (!g_backend_output) return;
+    fwrite(data, 1, count, g_backend_output);
+    fflush(g_backend_output);
+    if (ftell(g_backend_output) > 8 * 1024 * 1024) {
+        fclose(g_backend_output);
+        g_backend_output = open_log(g_log_root, PL("backend-output.log"));
+    }
 }
 
 /* The directory holding this executable. That is the distribution root: the
@@ -1026,6 +1106,10 @@ typedef struct {
     DWORD pid;
 #else
     pid_t pid;
+    pthread_t relay;
+    int pipe_read;
+    int relay_started;
+    int relay_stop;
 #endif
 } child_t;
 
@@ -1041,11 +1125,36 @@ static DWORD WINAPI relay_thread(LPVOID param)
     for (;;) {
         if (!ReadFile(pipe, buf, sizeof buf, &n, NULL) || n == 0)
             break;
-        fwrite(buf, 1, n, stdout);
-        fflush(stdout);
+        write_backend_output(buf, (size_t)n);
     }
     CloseHandle(pipe);
     return 0;
+}
+#else
+static void *relay_thread(void *param)
+{
+    child_t *child = (child_t *)param;
+    char buf[4096];
+    size_t drained = 0;
+    for (;;) {
+        int stopping = __atomic_load_n(&child->relay_stop, __ATOMIC_ACQUIRE);
+        ssize_t count;
+        /* A descendant may keep writing after its parent exits. Drain a
+         * bounded tail instead of letting that writer hold shutdown forever. */
+        if (stopping && drained >= 256 * 1024) break;
+        count = read(child->pipe_read, buf, sizeof buf);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (__atomic_load_n(&child->relay_stop, __ATOMIC_ACQUIRE)) break;
+            sleep_ms(25);
+            continue;
+        }
+        if (count <= 0) break;
+        write_backend_output(buf, (size_t)count);
+        if (stopping) drained += (size_t)count;
+    }
+    close(child->pipe_read);
+    return NULL;
 }
 #endif
 
@@ -1077,6 +1186,7 @@ static int child_start(child_t *c, const pchar *exe, const pchar *root, const ch
 {
     memset(c, 0, sizeof *c);
     set_child_env(root, token);
+    open_backend_output(root);
 
 #ifdef _WIN32
     {
@@ -1166,23 +1276,54 @@ static int child_start(child_t *c, const pchar *exe, const pchar *root, const ch
         c->pipe_read = rd;
         c->relay = CreateThread(NULL, 0, relay_thread, rd, 0, NULL);
         if (!c->relay) {
+            /* Logging is part of startup, not an optional background task.
+             * Do not leave a detached backend writing into a broken pipe. */
+            if (c->job == INVALID_HANDLE_VALUE || !TerminateJobObject(c->job, 1))
+                TerminateProcess(c->proc, 1);
+            WaitForSingleObject(c->proc, 5000);
             CloseHandle(rd);
             c->pipe_read = NULL;
+            CloseHandle(c->proc);
+            c->proc = INVALID_HANDLE_VALUE;
+            if (c->job != INVALID_HANDLE_VALUE) {
+                CloseHandle(c->job);
+                c->job = INVALID_HANDLE_VALUE;
+            }
+            return 0;
         }
         c->started = 1;
         return 1;
     }
 #else
     {
-        pid_t pid = fork();
-        if (pid < 0)
+        int output_pipe[2], flags;
+        pid_t pid;
+        if (pipe(output_pipe) != 0)
             return 0;
+        flags = fcntl(output_pipe[0], F_GETFL);
+        if (flags < 0 || fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0 ||
+            fcntl(output_pipe[0], F_SETFD, FD_CLOEXEC) < 0 ||
+            fcntl(output_pipe[1], F_SETFD, FD_CLOEXEC) < 0) {
+            close(output_pipe[0]);
+            close(output_pipe[1]);
+            return 0;
+        }
+        pid = fork();
+        if (pid < 0) {
+            close(output_pipe[0]);
+            close(output_pipe[1]);
+            return 0;
+        }
 
         if (pid == 0) {
             /* Its own process group, so Ctrl+C and a terminal hangup -- both of
              * which go to the foreground group only -- never reach it. Every
              * signal it gets is one we sent deliberately. */
             setpgid(0, 0);
+            close(output_pipe[0]);
+            dup2(output_pipe[1], STDOUT_FILENO);
+            dup2(output_pipe[1], STDERR_FILENO);
+            close(output_pipe[1]);
 #ifdef __linux__
             /* And if this launcher is killed outright, the kernel takes the
              * backend with it. The Windows equivalent is the job object. */
@@ -1203,6 +1344,19 @@ static int child_start(child_t *c, const pchar *exe, const pchar *root, const ch
         }
 
         c->pid = pid;
+        /* Set it from both sides, so even an immediate startup failure can
+         * terminate the child's whole group before it gets to exec. */
+        setpgid(pid, pid);
+        close(output_pipe[1]);
+        c->pipe_read = output_pipe[0];
+        c->relay_started = pthread_create(&c->relay, NULL, relay_thread, c) == 0;
+        if (!c->relay_started) {
+            close(output_pipe[0]);
+            kill(-pid, SIGKILL);
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) { }
+            return 0;
+        }
         c->started = 1;
         return 1;
     }
@@ -1292,7 +1446,16 @@ static void child_close(child_t *c)
         c->job = INVALID_HANDLE_VALUE;
     }
 #else
-    (void)c;
+    /* The backend may have exited while a helper still holds stdout or a GPU.
+     * Mirror closing the Windows Job even after the main child was reaped. */
+    if (c->started && c->pid > 0)
+        kill(-c->pid, SIGKILL);
+    if (c->relay_started) {
+        /* Drain buffered output, but do not wait on a descendant's open pipe. */
+        __atomic_store_n(&c->relay_stop, 1, __ATOMIC_RELEASE);
+        pthread_join(c->relay, NULL);
+        c->relay_started = 0;
+    }
 #endif
 }
 
@@ -1309,12 +1472,20 @@ static int g_owner; /* did we start the backend? */
 /* Ctrl+C / close / SIGTERM seen. sig_atomic_t because on POSIX a handler writes
  * it, and that is the only type the standard promises is safe to touch there. */
 #ifdef _WIN32
-static volatile int g_stop_asked;
+static volatile LONG g_stop_asked;
 static volatile LONG g_stopping;
 static HANDLE g_stopped_event;
 #else
 static volatile sig_atomic_t g_stop_asked;
 static volatile sig_atomic_t g_stopping;
+#endif
+
+#ifdef _WIN32
+#  define STOP_REQUESTED() (InterlockedCompareExchange(&g_stop_asked, 0, 0) != 0)
+#  define ASK_STOP() ((void)InterlockedExchange(&g_stop_asked, 1))
+#else
+#  define STOP_REQUESTED() (__atomic_load_n(&g_stop_asked, __ATOMIC_ACQUIRE) != 0)
+#  define ASK_STOP() __atomic_store_n(&g_stop_asked, 1, __ATOMIC_RELEASE)
 #endif
 
 /* Idempotent. Called from the main loop on Linux, and from the console handler
@@ -1391,7 +1562,7 @@ static BOOL WINAPI console_handler(DWORD type)
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
     case CTRL_SHUTDOWN_EVENT:
-        g_stop_asked = 1;
+        ASK_STOP();
         if (g_owner) {
             /* Ctrl+C and Ctrl+Break leave this process alive, so the teardown can
              * take as long as a clean stop needs. The other three are on the
@@ -1416,7 +1587,7 @@ static void signal_handler(int sig)
     /* Flag only: nothing here is async-signal-safe enough to open a socket.
      * Unlike Windows there is no grace-period guillotine, so the main loop gets
      * to do the work. */
-    g_stop_asked = 1;
+    ASK_STOP();
 }
 #endif
 
@@ -1491,6 +1662,17 @@ static void open_browser(const char *url)
 #endif
 }
 
+static void show_ui(const char *url)
+{
+#ifdef FOX_GUI
+    if (g_gui) {
+        fox_window_ready(url, g_owner);
+        return;
+    }
+#endif
+    open_browser(url);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Modes.                                                                    */
 /* ------------------------------------------------------------------------- */
@@ -1504,14 +1686,14 @@ static int monitor_attached(const char *url, int want_browser)
     out("\nFox Reader is already running at %s\n", url);
     if (want_browser) {
         out("Opening it in your browser.\n");
-        open_browser(url);
+        show_ui(url);
     }
     out("\nThis window is only watching it. Closing this window leaves Fox Reader\n"
         "running -- stop it from the window that started it, or from the UI.\n\n");
 
-    while (!g_stop_asked) {
+    while (!STOP_REQUESTED()) {
         sleep_ms(ATTACH_POLL_MS);
-        if (g_stop_asked)
+        if (STOP_REQUESTED())
             break;
         if (probe(connect_host(g_host), g_port) == PROBE_FOX) {
             misses = 0;
@@ -1551,10 +1733,10 @@ static int monitor_owned(const char *url, int want_browser)
      * ninety seconds would look like a broken program. The child's own log is
      * being relayed to this console, so there is always something to look at,
      * and the exit below is what catches a backend that actually failed. */
-    while (!g_stop_asked) {
+    while (!STOP_REQUESTED()) {
         if (!child_alive(&g_child)) {
             errline("\nerror: the backend exited before it was ready (code %d).\n", g_child.code);
-            errline("       The log above should say why.\n");
+            errline("       See logs/backend.log and logs/backend-output.log.\n");
             return 1;
         }
 
@@ -1567,6 +1749,10 @@ static int monitor_owned(const char *url, int want_browser)
         waited += READY_POLL_MS;
         if (!announced_slow && waited > 30000) {
             announced_slow = 1;
+#ifdef FOX_GUI
+            if (g_gui)
+                fox_window_status("Still starting Fox Reader. The first launch can take longer.\nSee logs/backend.log for details.");
+#endif
             out("\nStill starting. A first run downloads model weights, which can take a while.\n");
         }
     }
@@ -1577,11 +1763,11 @@ static int monitor_owned(const char *url, int want_browser)
     out("\nFox Reader is ready at %s\n", url);
     if (want_browser) {
         out("Opening it in your browser.\n");
-        open_browser(url);
+        show_ui(url);
     }
     out("\nLeave this window open. Close it, or press Ctrl+C, to stop Fox Reader.\n\n");
 
-    while (!g_stop_asked) {
+    while (!STOP_REQUESTED()) {
         if (!child_alive(&g_child)) {
             if (g_child.code == 0)
                 out("\nThe backend has shut down.\n");
@@ -1605,7 +1791,12 @@ static void usage(void)
         "\n"
         "  launcher [options]\n"
         "\n"
-        "  --no-browser   start without opening the UI\n"
+#ifdef FOX_NO_WINDOW
+        "  --browser      open your default browser with a terminal manager (default)\n"
+#else
+        "  --browser      use your default browser instead of the native viewer\n"
+#endif
+        "  --cli          run in the terminal without opening a browser or window\n"
         "  --version      print the launcher version\n"
         "  --help, -h     this message\n"
         "\n"
@@ -1614,7 +1805,7 @@ static void usage(void)
         "If Fox Reader is already up, this window watches it instead of starting a\n"
         "second copy, and closing this window leaves it running.\n"
         "\n"
-        "FOX_READER_NO_BROWSER=1 has the same effect as --no-browser.\n",
+        "FOX_READER_CLI=1 has the same effect as --cli.\n",
         FOX_LAUNCHER_VERSION);
 }
 
@@ -1627,62 +1818,16 @@ static int env_truthy(const char *name)
              strcmp(v, "no") == 0 || strcmp(v, "off") == 0);
 }
 
-int main(int argc, char **argv)
+static int run_backend(const pchar *root, int want_browser)
 {
-    pchar root[PATH_CAP], backend[PATH_CAP], bindir[PATH_CAP];
+    pchar backend[PATH_CAP], bindir[PATH_CAP];
     char url[MAX_URL];
     char *printable;
     lock_t lock;
-    int want_browser = 1;
     int i, locked, rc = 0;
     probe_t state;
-
-#ifdef _WIN32
-    /* UTF-8 out, so a path with non-ASCII in it prints as itself. Set before
-     * anything is written. */
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleTitleW(L"Fox Reader");
-#endif
-
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--no-browser") == 0) {
-            want_browser = 0;
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            usage();
-            return 0;
-        } else if (strcmp(argv[i], "--version") == 0) {
-            out("%s\n", FOX_LAUNCHER_VERSION);
-            return 0;
-        } else {
-            errline("error: unknown option %s\n\n", argv[i]);
-            usage();
-            maybe_pause();
-            return 2;
-        }
-    }
-
-    if (env_truthy("FOX_READER_NO_BROWSER"))
-        want_browser = 0;
-
-    if (!exe_dir(root, PATH_CAP)) {
-#ifdef _WIN32
-        fatal("cannot work out where this program is installed.");
-#else
-        /* No procfs. argv[0] with a slash in it is the next best thing. */
-        char *slash;
-        if (argc < 1 || !argv[0] || !strchr(argv[0], '/'))
-            fatal("cannot work out where this program is installed; run it by path.");
-        strncpy(root, argv[0], PATH_CAP - 1);
-        root[PATH_CAP - 1] = 0;
-        slash = strrchr(root, '/');
-        if (!slash)
-            fatal("cannot work out where this program is installed; run it by path.");
-        *slash = 0;
-#endif
-    }
-
     if (!p_join(bindir, PATH_CAP, root, FOX_BIN_DIR))
-        fatal("the install path is too long to work with.");
+        return 1;
 
     backend[0] = 0;
     for (i = 0; i < BACKEND_NAME_COUNT; i++) {
@@ -1694,13 +1839,15 @@ int main(int argc, char **argv)
         printable = PRINTABLE(bindir);
         errline("error: no Fox Reader binary in %s\n", printable ? printable : "bin");
         PRINTABLE_FREE(printable);
-        errline("       This launcher has to sit next to the bin folder it came with.\n");
+        errline("       Keep the launcher and bin folder in the same distribution.\n");
         maybe_pause();
         return 1;
     }
 
-    if (!net_start())
-        fatal("could not initialise networking.");
+    if (!net_start()) {
+        errline("Could not initialise networking.\n");
+        return 1;
+    }
 
     read_config(root, g_host, sizeof g_host, &g_port);
     build_url(url, sizeof url, connect_host(g_host), g_port);
@@ -1711,7 +1858,6 @@ int main(int argc, char **argv)
     PRINTABLE_FREE(printable);
     out("  address: %s\n", url);
 
-    install_handlers();
 
     /*
      * Who is in charge here?
@@ -1723,6 +1869,10 @@ int main(int argc, char **argv)
      *   nothing              -> ours to start.
      */
     locked = lock_acquire(&lock, root);
+    if (locked < 0) {
+        errline("Cannot lock this installation. Check folder permissions.\n");
+        return 1;
+    }
 
     if (locked == 0) {
         /* A held lock means a live launcher, since the lock dies with the process
@@ -1733,7 +1883,7 @@ int main(int argc, char **argv)
         int took_over = 0;
         out("\nAnother launcher is already starting Fox Reader. Waiting for it.\n");
         out("Press Ctrl+C to stop waiting.\n");
-        while (!g_stop_asked) {
+        while (!STOP_REQUESTED()) {
             if (probe(connect_host(g_host), g_port) == PROBE_FOX)
                 break;
             sleep_ms(ATTACH_POLL_MS);
@@ -1751,7 +1901,7 @@ int main(int argc, char **argv)
             if (waited % PEER_NOTE_MS < ATTACH_POLL_MS)
                 out("  still waiting...\n");
         }
-        if (g_stop_asked) {
+        if (STOP_REQUESTED()) {
             if (took_over)
                 lock_release(&lock);
             return 0;
@@ -1779,7 +1929,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (g_stop_asked) {
+    if (STOP_REQUESTED()) {
         lock_release(&lock);
         return 0;
     }
@@ -1814,3 +1964,266 @@ int main(int argc, char **argv)
 
     return rc;
 }
+
+#ifdef FOX_GUI
+typedef struct {
+    const pchar *root;
+    int want_ui;
+    int result;
+} launch_context;
+
+static void window_stop(void)
+{
+    ASK_STOP();
+}
+
+#ifdef _WIN32
+static DWORD WINAPI lifecycle_thread(LPVOID param)
+#else
+static void *lifecycle_thread(void *param)
+#endif
+{
+    launch_context *context = (launch_context *)param;
+    context->result = run_backend(context->root, context->want_ui);
+    fox_window_finish(context->result);
+    return 0;
+}
+#endif
+
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+static int terminal_cancelled(void) { return STOP_REQUESTED(); }
+#endif
+
+#if defined(FOX_NO_WINDOW) && (defined(_WIN32) || defined(__APPLE__))
+static int terminal_available(void)
+{
+#ifdef _WIN32
+    DWORD mode;
+    return GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mode) &&
+        (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) ||
+         GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &mode));
+#else
+    int fd, available;
+    if (!isatty(STDIN_FILENO) || (!isatty(STDOUT_FILENO) && !isatty(STDERR_FILENO))) return 0;
+    fd = open("/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    available = tcgetpgrp(fd) == getpgrp();
+    close(fd);
+    return available;
+#endif
+}
+#endif
+
+int main(int argc, char **argv)
+{
+    pchar root[PATH_CAP];
+    int want_browser = 1, browser_mode = 0, i, result;
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    const char *terminal_socket = NULL;
+#endif
+#ifdef _WIN32
+    /* Preserve command-line output without creating a console on double-click. */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE *stream;
+        if (GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_PIPE)
+            freopen_s(&stream, "CONOUT$", "w", stdout);
+        if (GetFileType(GetStdHandle(STD_ERROR_HANDLE)) != FILE_TYPE_PIPE)
+            freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--cli") == 0) {
+            want_browser = 0;
+        } else if (strcmp(argv[i], "--browser") == 0) {
+            browser_mode = 1;
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+        } else if (strcmp(argv[i], "--terminal-manager") == 0 && i + 1 < argc && !terminal_socket) {
+            /* Internal terminal handoff: bypass GTK but keep the browser UI.
+             * A private handshake and real controlling TTY are mandatory. */
+            terminal_socket = argv[++i];
+#endif
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            usage();
+            return 0;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            out("%s\n", FOX_LAUNCHER_VERSION);
+            return 0;
+        } else {
+            errline("error: unknown option %s\n\n", argv[i]);
+            usage();
+            maybe_pause();
+            return 2;
+        }
+    }
+
+    if (env_truthy("FOX_READER_CLI"))
+        want_browser = 0;
+
+    if (!exe_dir(root, PATH_CAP)) {
+#ifdef _WIN32
+        fatal("cannot work out where this program is installed.");
+#else
+        /* No procfs. argv[0] with a slash in it is the next best thing. */
+        char *slash;
+        if (argc < 1 || !argv[0] || !strchr(argv[0], '/'))
+            fatal("cannot work out where this program is installed; run it by path.");
+        strncpy(root, argv[0], PATH_CAP - 1);
+        root[PATH_CAP - 1] = 0;
+        slash = strrchr(root, '/');
+        if (!slash)
+            fatal("cannot work out where this program is installed; run it by path.");
+        *slash = 0;
+#endif
+    }
+
+
+#ifdef __APPLE__
+    /* Finder entry point, allowing the user to rename the .app. */
+    {
+        const char *suffix = "/Contents/MacOS";
+        size_t len = strlen(root), tail = strlen(suffix);
+        if (len > tail + 4 && strcmp(root + len - tail, suffix) == 0 &&
+            strncmp(root + len - tail - 4, ".app", 4) == 0) {
+            char *parent;
+            root[len - tail] = 0;
+            parent = strrchr(root, '/');
+            if (parent) *parent = 0;
+        }
+    }
+#endif
+    init_logs(root);
+    install_handlers();
+#if defined(FOX_NO_WINDOW) && (defined(_WIN32) || defined(__APPLE__))
+    if (want_browser && !terminal_available()) {
+#ifdef __APPLE__
+        errline("Browser mode needs an interactive terminal. Open Fox Reader.command, "
+                "or run ./launcher --cli for terminal-free operation.\n");
+#else
+        errline("Browser mode needs an interactive terminal. Open launcher.exe normally, "
+                "or run launcher.exe --cli for terminal-free operation.\n");
+#endif
+        result = 1;
+        goto finished;
+    }
+#endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    if (terminal_socket && (STOP_REQUESTED() || !want_browser || fox_terminal_connect(terminal_socket) != 0)) {
+        if (!STOP_REQUESTED())
+            errline("Cannot establish an interactive terminal manager. Open a terminal in the Fox Reader folder "
+                    "and run ./launcher --cli.\n");
+        result = STOP_REQUESTED() ? 0 : 1;
+        goto finished;
+    }
+    if (terminal_socket && (STOP_REQUESTED() || !fox_terminal_available())) {
+        result = STOP_REQUESTED() ? 0 : 1;
+        goto finished;
+    }
+#endif
+#ifdef FOX_GUI
+    if (want_browser
+#ifdef __linux__
+        && !terminal_socket
+#endif
+    ) {
+        char *root_utf8 = PRINTABLE(root);
+        g_gui = fox_window_create(root_utf8, window_stop, open_browser, window_log, browser_mode);
+        PRINTABLE_FREE(root_utf8);
+    }
+#endif
+#if defined(__linux__) && (defined(FOX_GUI) || defined(FOX_NO_WINDOW))
+    if (want_browser && !g_gui && !fox_terminal_available()) {
+        char executable[PATH_CAP];
+        ssize_t length = readlink("/proc/self/exe", executable, sizeof executable - 1);
+#ifdef FOX_NO_WINDOW
+        const char *failure = "Fox Reader could not open an interactive terminal. "
+            "Open a terminal in the Fox Reader folder and run ./launcher, "
+            "or use ./launcher --cli for terminal-free operation.";
+#else
+        const char *failure = "Fox Reader could not open a control window or an interactive terminal. "
+            "Open a terminal in the Fox Reader folder and run ./launcher --cli. "
+            "The graphical controller needs GTK 3 and a desktop session.";
+#endif
+        result = 1;
+        if (terminal_socket || STOP_REQUESTED()) {
+            /* A terminal that disappeared must never trigger a relaunch loop. */
+            result = STOP_REQUESTED() ? 0 : 1;
+            goto finished;
+        }
+        if (length > 0 && length < (ssize_t)sizeof executable - 1) {
+            executable[length] = 0;
+            out("Opening an interactive terminal manager.\n");
+            if (fox_terminal_handoff(executable, terminal_cancelled) == 0 || STOP_REQUESTED()) result = 0;
+        }
+        if (result) {
+            errline("%s\n", failure);
+#ifndef FOX_NO_WINDOW
+            fox_terminal_notify(failure);
+#endif
+        }
+        /* The terminal successor owns startup and shutdown. This process
+         * never starts a backend when no visible controls are available. */
+        goto finished;
+    }
+#endif
+#ifdef FOX_GUI
+    if (g_gui) {
+        launch_context context;
+        context.root = root;
+        context.want_ui = want_browser;
+        context.result = 1;
+#ifdef _WIN32
+        {
+            HANDLE worker = CreateThread(NULL, 0, lifecycle_thread, &context, 0, NULL);
+            if (!worker) {
+                fox_window_status("Cannot start the launcher worker. Close and try again.");
+                fox_window_finish(1);
+            }
+            fox_window_run();
+            window_stop();
+            if (worker) {
+                WaitForSingleObject(worker, INFINITE);
+                CloseHandle(worker);
+            }
+        }
+#else
+        {
+            pthread_t worker;
+            int started = pthread_create(&worker, NULL, lifecycle_thread, &context) == 0;
+            if (!started) {
+                fox_window_status("Cannot start the launcher worker. Close and try again.");
+                fox_window_finish(1);
+            }
+            fox_window_run();
+            window_stop();
+            if (started)
+                pthread_join(worker, NULL);
+        }
+#endif
+        fox_window_destroy();
+        result = context.result;
+    } else
+#else
+    (void)browser_mode;
+#endif
+        result = run_backend(root, want_browser);
+#if (defined(__linux__) && defined(FOX_GUI)) || defined(FOX_NO_WINDOW)
+finished:
+#endif
+    if (g_log)
+        fclose(g_log);
+    return result;
+}
+
+#if defined(_WIN32) && defined(FOX_GUI)
+/* Match WinMainCRTStartup: main() parses narrow ASCII options from __argv.
+ * The wide CRT startup only initializes __wargv, leaving __argv null.
+ * Filesystem paths still use the explicit wide Windows APIs above. */
+int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int show)
+{
+    extern int __argc;
+    extern char **__argv;
+    (void)instance; (void)previous; (void)command; (void)show;
+    return main(__argc, __argv);
+}
+#endif

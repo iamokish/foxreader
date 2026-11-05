@@ -7,7 +7,9 @@ one does (open with total/initial, update per chunk, close per file).
 
 import threading
 import time
+from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -23,9 +25,10 @@ def _unbind():
 
 
 def _ctx(state=None, lock=None, key="m:0"):
-    return {"state": state if state is not None else {"progress": {}},
-            "lock": lock if lock is not None else threading.Lock(),
-            "key": key}
+    state = state if state is not None else {"progress": {}}
+    entry = state["progress"].setdefault(key, setup_mod._fresh_progress_entry(0))
+    entry["current_file"] = "a.gguf"
+    return setup_mod._file_progress(state, lock or threading.Lock(), key, entry)
 
 
 def test_adapter_reports_bytes_and_survives_garbage():
@@ -44,7 +47,7 @@ def test_adapter_reports_bytes_and_survives_garbage():
     assert entry["current_bytes"] == 450
     assert entry["current_total"] == 1000
     assert entry["bytes_done"] == 450
-    assert entry["bytes_total"] == 1000
+    assert entry["bytes_total"] == 0  # future model files have unknown sizes
     assert entry["current_file"] == "a.gguf"
 
 
@@ -80,7 +83,7 @@ class _FakeApi:
         return [".gitattributes", *self._files]
 
 
-def _install_fake_hub(monkeypatch, payload, fail_on=()):
+def _install_fake_hub(monkeypatch, payload, fail_on=(), *, repo_files=("a.gguf", "b.gguf")):
     """Stub hf_hub_download: write `payload` bytes per file via the real adapter."""
     import huggingface_hub
 
@@ -101,10 +104,12 @@ def _install_fake_hub(monkeypatch, payload, fail_on=()):
         with bar:
             for offset in range(0, total, 4096):
                 bar.update(min(4096, total - offset))
-        (Path(local_dir) / filename).write_bytes(payload)
+        destination = Path(local_dir) / filename
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
         return str(Path(local_dir) / filename)
 
-    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: FakeApi(["a.gguf", "b.gguf"]))
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: FakeApi(repo_files))
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
     return calls
 
@@ -196,6 +201,169 @@ def test_run_names_the_model_in_errors(tmp_path, monkeypatch):
         assert "Fake" in str(exc) and "a.gguf" in str(exc)
     else:
         raise AssertionError("a failed file must raise")
+
+
+@pytest.mark.parametrize(("patterns", "repo_files", "message"), [
+    (None, [], "no downloadable model files"),
+    ([], [".cache/ignored"], "no downloadable model files"),
+    (["a.gguf"], ["README.md"], "a.gguf"),
+    (["a.gguf", "b.gguf"], ["a.gguf"], "b.gguf"),
+    ([".gguf", ".json"], ["a.gguf", "b.gguf"], ".json"),
+])
+def test_incomplete_repository_does_not_download_or_complete(tmp_path, monkeypatch, patterns, repo_files, message):
+    from fox_reader.constants import MTL_COMPLETION_MARKER
+
+    model = {**_model(), "files": patterns}
+    calls = _install_fake_hub(monkeypatch, b"weights", repo_files=repo_files)
+    state = {
+        "active": True, "stage": "non_mtl", "current_model": None,
+        "progress": {}, "error": None, "complete": False,
+    }
+    monkeypatch.setattr(setup_mod, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(setup_mod, "_download_state", state)
+
+    setup_mod._download_models_task(tmp_path, [(model["id"], model)], "non_mtl")
+
+    assert calls == []
+    assert state["active"] is False
+    assert state["complete"] is False
+    assert state["current_model"] is None
+    assert state["progress"] == {}
+    assert "Fake" in state["error"] and message in state["error"]
+    assert not (tmp_path / model["dest"] / MTL_COMPLETION_MARKER).exists()
+    assert not setup_mod._model_completed(tmp_path, model)
+
+
+@pytest.mark.parametrize(("patterns", "expected"), [
+    ([".gguf"], ["nested/a.gguf", "b.gguf"]),
+    (["nested/a.gguf", ".json"], ["nested/a.gguf", "config.json"]),
+    (None, ["nested/a.gguf", "b.gguf", "config.json", "README.md"]),
+    ([], ["nested/a.gguf", "b.gguf", "config.json", "README.md"]),
+])
+def test_repository_selection_preserves_suffix_and_whole_repo_downloads(tmp_path, monkeypatch, patterns, expected):
+    from fox_reader.constants import MTL_COMPLETION_MARKER
+
+    model = {**_model(), "files": patterns}
+    if patterns is None:
+        model.pop("files")
+    calls = _install_fake_hub(
+        monkeypatch, b"weights", repo_files=["nested/a.gguf", "b.gguf", "config.json", "README.md"],
+    )
+    state = {"current_model": None, "progress": {}}
+
+    setup_mod._run_model_downloads([(model["id"], model, tmp_path)], lock=threading.Lock(), state=state)
+
+    assert calls == expected
+    assert state["progress"][model["id"]]["downloaded"] is True
+    assert state["progress"][model["id"]]["files_done"] == len(expected)
+    assert (tmp_path / model["dest"] / MTL_COMPLETION_MARKER).is_file()
+    assert setup_mod._model_completed(tmp_path, model)
+
+
+def test_incomplete_repository_can_be_retried_without_trusting_stale_marker(tmp_path, monkeypatch):
+    from fox_reader.constants import MTL_COMPLETION_MARKER
+
+    model = _model()
+    destination = tmp_path / model["dest"]
+    destination.mkdir(parents=True)
+    marker = destination / MTL_COMPLETION_MARKER
+    marker.touch()
+    (destination / "a.gguf").write_bytes(b"existing")
+    repo_files = ["a.gguf"]
+    calls = _install_fake_hub(monkeypatch, b"weights", repo_files=repo_files)
+    state = {"current_model": None, "progress": {}}
+    lock = threading.Lock()
+
+    with pytest.raises(RuntimeError, match="b.gguf"):
+        setup_mod._run_model_downloads([(model["id"], model, tmp_path)], lock=lock, state=state)
+
+    assert calls == []
+    assert not marker.exists()
+    assert (destination / "a.gguf").read_bytes() == b"existing"
+    repo_files.append("b.gguf")
+
+    setup_mod._run_model_downloads([(model["id"], model, tmp_path)], lock=lock, state=state)
+
+    assert calls == ["a.gguf", "b.gguf"]
+    assert state["progress"][model["id"]]["downloaded"] is True
+    assert setup_mod._model_completed(tmp_path, model)
+
+
+@pytest.mark.parametrize("stage", ["non_mtl", "mtl"])
+def test_directory_failure_allows_retry_with_terms_still_required(tmp_path, monkeypatch, stage):
+    from fox_reader import constants, model_terms
+
+    required = {**_model(), "id": "ppocrv6-det", "isRequired": True}
+    mtl = {**_model(), "id": "gemma-4-e4b-q8-uncensored"}
+    monkeypatch.setattr(constants, "HF_BASE_MODELS", {"paddleocr": [required]})
+    monkeypatch.setattr(constants, "MTL_MODELS", [mtl])
+    monkeypatch.setattr(setup_mod, "MODELS_DIR", tmp_path / "required")
+    monkeypatch.setattr(setup_mod, "_MTL_DIR", tmp_path / "mtl")
+    monkeypatch.setattr(setup_mod, "_download_state", {
+        "active": False, "stage": "non_mtl", "current_model": None,
+        "progress": {}, "error": None, "complete": False,
+    })
+    monkeypatch.setattr(model_terms, "_store", model_terms.TermsStore(tmp_path / "config"))
+    calls = _install_fake_hub(monkeypatch, b"weights")
+    model = required if stage == "non_mtl" else mtl
+    destination = setup_mod.MODELS_DIR if stage == "non_mtl" else setup_mod._MTL_DIR
+    body = {} if stage == "non_mtl" else {
+        "selected_mtl": [model["id"]], "mtl_dir": str(destination),
+    }
+    if stage == "mtl":
+        _mark_downloaded(setup_mod.MODELS_DIR, required)
+
+    blocked = True
+    mkdir = Path.mkdir
+
+    def fail_directory(path, *args, **kwargs):
+        if blocked and path == destination:
+            raise PermissionError("Model folder is not writable")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_directory)
+    finished = threading.Event()
+    worker = setup_mod._download_models_task
+
+    def run_worker(*args):
+        try:
+            worker(*args)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(setup_mod, "_download_models_task", run_worker)
+    app = FastAPI()
+    app.include_router(setup_mod.router)
+    with TestClient(app) as client:
+        refused = client.post("/api/setup/download", json=body)
+        assert refused.status_code == 403
+        assert refused.json()["terms_required"] == [model["id"]]
+        _accept(client, model["id"])
+        assert client.post("/api/setup/download", json=body).json()["status"] == "started"
+        assert finished.wait(5), "download worker did not finish"
+        failed = client.get("/api/setup/status").json()
+        assert failed["active"] is False
+        assert failed["complete"] is False
+        assert failed["current_model"] is None
+        assert failed["error"] == "Model folder is not writable"
+        assert calls == []
+        assert not setup_mod._model_completed(destination, model)
+
+        blocked = False
+        finished.clear()
+        # A retry cannot bypass a missing or reset acceptance record.
+        monkeypatch.setattr(model_terms, "_store", model_terms.TermsStore(tmp_path / "new-config"))
+        assert client.post("/api/setup/download", json=body).status_code == 403
+        assert not finished.is_set()
+        _accept(client, model["id"])
+        assert client.post("/api/setup/download", json=body).json()["status"] == "started"
+        assert finished.wait(5), "retry worker did not finish"
+        recovered = client.get("/api/setup/status").json()
+        assert recovered["active"] is False
+        assert recovered["error"] is None
+        assert recovered["stage"] == "mtl_selection"
+        assert recovered["progress"][model["id"]]["downloaded"] is True
+        assert setup_mod._model_completed(destination, model)
 
 
 def _setup_client(monkeypatch, tmp_path):

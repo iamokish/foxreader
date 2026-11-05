@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
-import logging
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -131,12 +133,28 @@ class ConfigManager:
         if self.config is None:
             raise RuntimeError("Configuration has not been loaded.")
 
-        with self.config_path.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                self.config.model_dump(mode="json"),
-                f,
-                sort_keys=False,
-            )
+        destination = self.config_path.resolve(strict=False)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=destination.parent,
+                prefix=f".{self.config_path.name}.", suffix=".tmp", delete=False,
+            ) as f:
+                temporary = Path(f.name)
+                yaml.safe_dump(self.config.model_dump(mode="json"), f, sort_keys=False)
+                f.flush()
+                os.fsync(f.fileno())
+            if destination.exists() and os.name != "nt":
+                temporary.chmod(destination.stat().st_mode & 0o777)
+            # Replace only after the complete document is durable. A failed save
+            # must leave the previous configuration readable on the next launch.
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Could not remove temporary config %s", temporary)
 
     def update(self, **changes) -> FoxConfig:
         if self.config is None:
@@ -159,9 +177,13 @@ class ConfigManager:
         candidate = self.config.model_copy(update=changes)
         candidate = FoxConfig.model_validate(candidate.model_dump())
 
+        previous = self.config
         self.config = candidate
-
-        self.save()
+        try:
+            self.save()
+        except Exception:
+            self.config = previous
+            raise
 
         return self.config
 

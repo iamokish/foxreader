@@ -38,6 +38,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { state } from "../state";
 import { currentPageUrl, variantPageUrl } from "../viewer";
+import { applyImageTransform, disposeImageTransform } from "../imageTransform";
 import { getReadingDirection } from "../readingOrder";
 import {
     buildSpreads,
@@ -196,7 +197,7 @@ export function Pager({ view, fit, gap, coverAlone, wideAlone, revision, onZoomC
         const row = rowRef.current;
         if (!row) return;
         const { x, y } = panRef.current;
-        row.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${zoomRef.current})`;
+        applyImageTransform(row, x, y, zoomRef.current);
         // The grab cursor is a promise that there is somewhere to drag to, so it is
         // derived from the live size rather than from state -- which this is
         // deliberately not kept in. A class toggle costs nothing next to the
@@ -207,6 +208,23 @@ export function Pager({ view, fit, gap, coverAlone, wideAlone, revision, onZoomC
         const vp = viewportRef.current;
         stage.classList.toggle("is-pannable", box.width > vp.width + 1 || box.height > vp.height + 1);
     }, []);
+
+    // The row's transform is owned by paint, including its delayed resting form.
+    // A JSX style would restore the 3D form when a label/image load re-renders.
+    // Releasing the old ref also cancels work when an empty view removes the row.
+    const setRow = useCallback(
+        (row: HTMLDivElement | null) => {
+            if (rowRef.current && rowRef.current !== row) {
+                disposeImageTransform(rowRef.current);
+                // Preact may reuse this div for the empty-state message. Its
+                // transform is imperative, so the style diff cannot clear it for us.
+                rowRef.current.style.transform = "";
+            }
+            rowRef.current = row;
+            if (row) paint();
+        },
+        [paint],
+    );
 
     /** Publish the zoom to the chrome, at most once per frame. */
     const publishZoom = useCallback(() => {
@@ -398,7 +416,7 @@ export function Pager({ view, fit, gap, coverAlone, wideAlone, revision, onZoomC
             onPointerDown={onPointerDown}
         >
             {panes.length === 0 ? (
-                <div class="vx-pager__empty">
+                <div class="vx-pager__empty" key="empty">
                     <span class="material-icons" aria-hidden="true">
                         auto_stories
                     </span>
@@ -407,12 +425,10 @@ export function Pager({ view, fit, gap, coverAlone, wideAlone, revision, onZoomC
             ) : (
                 <div
                     class="vx-pager__row"
-                    ref={rowRef}
+                    key="pages"
+                    ref={setRow}
                     style={{
                         gap: `${gap}px`,
-                        // Seeded from the live refs so a re-render never reverts the
-                        // transform `paint` has written.
-                        transform: `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0) scale(${zoomRef.current})`,
                     }}
                 >
                     {panes.map((pane) => {

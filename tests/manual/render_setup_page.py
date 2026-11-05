@@ -29,7 +29,12 @@ env = Environment(
     autoescape=True,
 )
 
-page = env.get_template("setup.html").render(mtl_dir="models")
+model_dir = str(ROOT / "models")
+page = env.get_template("setup.html").render(
+    mtl_dir="models",
+    mtl_default_dir=model_dir,
+    mtl_resolved_dir=model_dir,
+)
 
 blocks = re.findall(r"<script>(.*?)</script>", page, re.S)
 wizard = [body for body in blocks if "function initialize()" in body]
@@ -48,6 +53,21 @@ print(f"page   {len(page)} chars")
 print(f"script {len(wizard[0])} chars -> {out / 'setup-page.js'}")
 
 markers = (
+    # Tabs keep only one model group visible without replacing its controls.
+    'id="setupTabs"',
+    'id="requiredTab"',
+    'id="optionalTab"',
+    'id="mtlTab"',
+    'id="requiredPanel"',
+    'id="optionalPanel"',
+    'id="mtlPanel"',
+    'id="primaryAction"',
+    'id="tabPrerequisite"',
+    "function selectSetupTab(",
+    # Current-file progress remains accessible and can update without new cards.
+    'role="progressbar"',
+    "data-model-progress",
+    "function refreshModelProgress(",
     # The licence card, its scrolling pane, and the controls that gate on it.
     'id="termsGate"',
     'id="termsBody"',
@@ -62,6 +82,13 @@ markers = (
     'id="optionalBtn"',
     "Optional Models",
     "downloadOptional()",
+    # The storage controls and their preflight must exist before MTL can start.
+    'id="mtlStorage"',
+    'id="storageDefault"',
+    'id="storageCustom"',
+    'id="storageApplyBtn"',
+    'id="storageFeedback"',
+    "/api/setup/storage/inspect",
     # The licence link on a model card, and the function behind it.
     "terms-peek",
     "reviewTerms(",

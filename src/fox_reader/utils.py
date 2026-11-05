@@ -79,8 +79,9 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 FONT_DIR = PROJECT_ROOT / "fonts"
 MODELS_DIR = PROJECT_ROOT / "models"
 CACHE_DIR = PROJECT_ROOT / "cache"
+LOG_DIR = PROJECT_ROOT / "logs"
 
-USER_DIRS = (CONFIG_DIR, FONT_DIR, MODELS_DIR, CACHE_DIR)
+USER_DIRS = (CONFIG_DIR, FONT_DIR, MODELS_DIR, CACHE_DIR, LOG_DIR)
 
 # ── Frontend, in a checkout ───────────────────────────────────────────────────
 # A compiled build has none of these; `fox_reader.assets` reads the embedded
@@ -92,7 +93,7 @@ TEMPLATES_DIR = FRONTEND_DIR / "templates"
 
 
 def ensure_user_dirs() -> None:
-    """Create the four user directories, so the tree looks right on first run.
+    """Create user directories, so the tree looks right on first run.
 
     Best effort: a read-only install still starts, and every consumer creates
     what it needs on demand anyway.

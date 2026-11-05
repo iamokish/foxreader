@@ -1,7 +1,9 @@
 # Building Fox Reader binaries yourself
 
-What you get at the end: a folder with `launcher` (double-click to start),
-which runs the app with no Python or Node.js installed on that machine.
+What you get at the end: a portable folder with a native desktop launcher
+(`launcher.exe` on Windows, `launcher` on Linux, `Fox Reader.app` on macOS).
+The destination machine needs no Python or Node.js. The viewer uses WebView2
+on Windows, the distribution's WebKitGTK on Linux, and built-in WKWebView on Mac.
 
 Time and disk (rough, one CPU build):
 
@@ -145,28 +147,39 @@ Linux shortcut:
 sudo apt install -y git
 ```
 
-### 1e. C compiler (for the tiny launcher program)
+### 1e. Native compiler and system WebView headers
 
-**Windows — pick one:**
+**Windows:** install Visual Studio Build Tools from
+<https://visualstudio.microsoft.com/downloads/>. Select the
+**“Desktop development with C++”** workload, including the Windows SDK.
+The native-window launcher requires MSVC, including for CPU builds.
+The `--no-window` console launcher and standalone C test fixtures can also
+use MinGW; CUDA builds retain their own compiler requirements.
 
-- **Option A (recommended, required for GPU builds):**
-  Visual Studio Build Tools: <https://visualstudio.microsoft.com/downloads/> —
-  scroll to “All downloads” → “Build Tools for Visual Studio”, and in the
-  installer tick the **“Desktop development with C++”** workload.
-- **Option B (CPU builds only):** MinGW-w64 `gcc` on `PATH`
-  (e.g. from <https://winlibs.com/> or MSYS2 `mingw-w64-x86_64-gcc`).
-  With no compiler at all, the build downloads Nuitka's own MinGW
-  automatically — CPU builds still work.
-
-> Windows GPU builds must use Option A: NVIDIA's compiler only accepts
-> Microsoft's compiler, never MinGW.
+Native-window builds fetch Microsoft.Web.WebView2 SDK `1.0.2903.40` from NuGet and
+checks its pinned SHA512 before extracting the header and static loader.
+`FOX_WEBVIEW2_SDK` can point at that unpacked SDK package for an offline build.
+Verified SDK copies are cached under `packaging/.build/webview2` and reused even
+with `--clean`. An incomplete or damaged copy is replaced by a new, fully verified
+directory; existing files are left untouched so open compiler/scanner handles
+cannot block cache repair. Folder access failures report the affected cache path.
+The Chromium runtime is not bundled. On machines running Fox Reader, the
+launcher checks for [WebView2 Evergreen](https://developer.microsoft.com/microsoft-edge/webview2/)
+and falls back to the system browser with an installer link if it is missing.
 
 **Linux:**
 
 ```bash
-sudo apt install -y build-essential
+sudo apt install -y build-essential pkg-config libwebkit2gtk-4.1-dev
 gcc --version
 ```
+
+Users running the reader window need `libwebkit2gtk-4.1-0` from their distribution.
+Without WebKitGTK, the launcher uses the browser with a separate GTK 3 controller.
+The archive contains `libfox-window.so` for the WebKitGTK viewer and
+`libfox-browser.so` for the GTK-only controller; keep both beside the launcher.
+GTK and WebKitGTK remain system dependencies. Test the reader and controller
+under both Wayland and X11 before publishing a release.
 
 **macOS (Apple Silicon):**
 
@@ -307,9 +320,12 @@ and test data during Nuitka's data collection. Removing them before signing
 keeps Nuitka's `codesign` command below macOS's argument limit; native
 libraries and runtime resources remain included and signed.
 
-The archive is a portable folder with `launcher`, not an `.app` or DMG.
-Extract it to a writable folder and run `./fox-reader/launcher` from
-Terminal. Ad-hoc signatures satisfy local Apple Silicon signing requirements
+The archive is a portable folder containing `Fox Reader.app` for Finder and
+`launcher` for command-line use. Extract the whole folder to a writable
+location and double-click the app. Keep `bin`, `config`, `fonts`, `models`,
+and the other portable folders beside the app; moving only the `.app` loses
+its backend and data. WKWebView is part of macOS and needs no installation.
+Ad-hoc signatures satisfy local Apple Silicon signing requirements
 but do not identify a publisher: downloaded builds may need approval in
 System Settings → Privacy & Security. Developer ID signing and notarization
 are separate release operations requiring the publisher's credentials.
@@ -447,8 +463,39 @@ The finished archive lands in `dist/`, e.g.
 `dist/SHA256SUMS.txt` listing its SHA-256.
 
 Mac builds also accept `--clean`, `--keep-venv`, `--skip-frontend`,
-`--deep-compile`, `--split-bin` and `--no-gguf`. CPU baseline, OpenBLAS,
+`--deep-compile`, `--split-bin`, `--no-gguf` and `--no-window`. CPU baseline, OpenBLAS,
 CUDA and HIP tuning options are for the existing Windows/Linux variants.
+
+### Optional browser and terminal build
+
+Add `--no-window` to any supported local build command:
+
+```bash
+python packaging/build.py --no-window
+python packaging/build.py --device cpu --no-gguf --no-window
+```
+
+This removes every Fox Reader graphical window: the reader, loading banner,
+browser controller, and error dialogs. It builds a console launcher without
+WebView2 or GTK/WebKitGTK, and omits their native assets. The Linux launcher
+therefore needs only the C compiler, without the WebKitGTK development
+packages; the backend and optional GGUF build still need their usual tools
+and libraries. macOS still requires Apple Clang and the SDK to compile and
+sign its ARM64 binaries.
+
+The result opens the system browser with a visible terminal manager. Use
+`launcher --cli` or `FOX_READER_CLI=1` for terminal/headless operation without
+opening a browser. On Windows open `launcher.exe`; on Linux run its installer
+and use the `Terminal=true` menu entry; on macOS open `Fox Reader.command`
+in Terminal instead of a `.app`. Keep the terminal open while reading and
+press Ctrl+C to stop the backend it started. Closing the browser alone leaves
+the manager running. A manager attached to an existing backend only detaches.
+
+Archives gain a distinct suffix, for example
+`fox-reader-v0.2.2-cpu-gguf-linux-x64-no-window.tar.gz`, and `build-info.json`
+records `"no_window": true`. Standard archive names and CI build variants
+are unchanged. Update checks remain available, but this custom variant must
+be rebuilt with `--no-window` for a newer release.
 
 ### If the build stops with an error
 
@@ -541,11 +588,42 @@ gh attestation verify <file> --repo iamokish/foxreader
 
 ## 5. Run your build
 
-1. Unzip / untar the archive from `dist/` anywhere you like.
-2. Start `launcher` (`launcher.exe` on Windows) — it starts the backend
-   and opens the UI at `http://127.0.0.1:7954`.
-3. First launch opens `/setup`, which downloads the models (needs internet
+1. Unzip / untar the archive from `dist/` into a writable folder.
+2. Start `launcher.exe` on Windows or `Fox Reader.app` on macOS. On Linux,
+   run `./install-desktop.sh` after choosing the folder's final location,
+   then open **Fox Reader** from your applications menu. The Linux desktop
+   entry uses `Terminal=false`; running `./launcher` also works.
+3. A loading banner appears immediately while the detached backend starts.
+   When `/api/health` identifies a ready Fox Reader backend, the native
+   viewer loads `http://127.0.0.1:7954` (or your configured host/port).
+4. First launch opens `/setup`, which downloads the models (needs internet
    once; weights live in `models/` afterwards).
+
+Press **F11** or **Alt+Enter** to toggle fullscreen. The title bar follows the
+system appearance, with a dark fallback. On Mac keyboards, F11 may require
+Fn if macOS reserves the key. Closing the window asks the owned backend to
+shut down, allows 20 seconds to release models and clear scratch files, and
+then forces it down if necessary. An attached window never stops another
+launcher's backend.
+
+Use `launcher --browser` for the system-browser workflow and debugging,
+or `launcher --cli` for a foreground terminal/headless manager without a browser
+or GUI. `FOX_READER_CLI=1` selects the same mode. Desktop browser mode keeps a
+controller window; closing it stops its owned backend. Linux loads this GTK-only
+controller independently of WebKitGTK. It remains visible after the browser
+closes and offers **Open Reader** and **Quit Fox Reader**; an attached controller
+instead offers **Close This Window**.
+
+If GTK cannot open a window, Linux uses an attached terminal or opens a visible
+terminal manager before starting the backend. If neither is available, startup
+fails without leaving a new backend running. Explicit `--cli` operation remains
+available without a display or terminal emulator.
+
+Read `logs/launcher.log` for launcher errors, `logs/backend.log` for Python
+logs, `logs/backend-output.log` for native backend output, and
+`logs/frontend.log` for browser errors. See [desktop validation](../docs/desktop.md)
+for the platform smoke checklist, and [updating](../docs/updating.md) for
+verified downloads, the `latest.json` release manifest, and installation steps.
 
 ---
 
@@ -562,6 +640,7 @@ gh attestation verify <file> --repo iamokish/foxreader
 | `--cuda-arch LIST` / `--hip-arch LIST` | Override GPU architectures (e.g. `75-real;86-real`) |
 | `--split-bin [MB]` | Cut the finished archive into parts of at most MB megabytes (default 1000) if it is larger; see [4a](#4a-splitting-a-big-archive---split-bin) |
 | `--skip-frontend` | Reuse an already built `frontend/static` |
+| `--no-window` | Omit all Fox Reader graphical windows; open the browser with a terminal manager by default, or use `--cli` |
 | `--keep-venv` | Keep the build environment for the next rebuild |
 | `--clean` | Delete all previous build outputs first |
 | `--deep-compile` | Also compile dependencies (hours; release-grade) |
@@ -595,7 +674,7 @@ translation works, on any machine.
 | `no working C compiler found` | Windows: install VS Build Tools with “Desktop development with C++”. Linux: `sudo apt install -y build-essential`. Check with `python packaging/toolchain.py --which` |
 | `nvcc: command not found` | The CUDA toolkit is not installed (or not on `PATH`). See 2b; restart the terminal after installing |
 | nvcc refuses the host compiler (Linux) | Wrong GCC for the toolkit — see the 2c table (e.g. CUDA 12.9 wants `gcc-13`) |
-| CUDA build fails on MinGW (Windows) | Expected: install VS Build Tools (Option A in 1e); nvcc never drives MinGW |
+| Native viewer or CUDA build fails on MinGW (Windows) | Install VS Build Tools with “Desktop development with C++” and the Windows SDK; the desktop host requires MSVC |
 | `cblas_sgemm was not declared` (GGUF compile) | System OpenBLAS missing/misdetected — install `libopenblas-dev` (2d) or rebuild with `--openblas download` |
 | Out of disk halfway | Free 15 GB (CPU) / 25 GB (CUDA); the same gigabytes are written three times before archiving. `--split-bin` wants one more copy of the archive on top |
 | `could not split …: No space left on device` | The archive itself is untouched — free some space and re-run, or upload it by hand |

@@ -1,8 +1,10 @@
 """Setup page routes — first-launch model download wizard."""
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from fox_reader import assets
 from fox_reader.config import FoxConfig
+from fox_reader.hub_progress import FileProgress, observe_hub_client
+from fox_reader.hub_progress import HubByteProgress as _HubByteProgress
+from fox_reader.hub_progress import download_context as _dl_ctx
 from fox_reader.utils import MODELS_DIR, PROJECT_ROOT
 
 router = APIRouter(tags=["setup"])
@@ -29,6 +34,7 @@ _download_state: dict[str, Any] = {
 }
 
 _download_lock = threading.Lock()
+_storage_apply_generation = 0
 _incomplete_models: list[str] = []
 _HF_MODELS: dict[str, list[dict]] = {}
 _MTL_DIR = Path("models")
@@ -57,107 +63,22 @@ _optional_state: dict[str, Any] = {
 }
 _optional_lock = threading.Lock()
 
-#: Which download (job, model, file) a hub progress bar belongs to. Set by the
-#: worker around each `hf_hub_download` call; the bar itself only sees bytes.
-_dl_ctx = threading.local()
+def _file_progress(state: dict[str, Any], lock: Any, key: str, entry: dict[str, Any]) -> FileProgress:
+    """Bind a callback to this exact job, row and file; never reuse its identity."""
+    token = entry["_file_token"] = object()
+    completed = entry["bytes_base"]
 
+    def publish(count: int, total: int, phase: str) -> None:
+        transfer = progress.transfer_snapshot()
+        with lock:
+            if state["progress"].get(key) is not entry or entry.get("_file_token") is not token:
+                return
+            entry.update(
+                current_bytes=count, current_total=total, bytes_done=completed + count, phase=phase, **transfer,
+            )
 
-def _safe_int(value: Any) -> int:
-    try:
-        number = int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-    return max(0, number)
-
-
-class _HubByteProgress:
-    """A tqdm-compatible sink forwarding hub byte progress into setup state.
-
-    Passed as ``tqdm_class`` to ``hf_hub_download`` so the battle-tested hub
-    machinery (resume, retries, Xet) stays untouched while the setup page gets
-    real bytes instead of file counts. Only the interface matters here —
-    ``__init__(total, initial, desc)``, ``update(n)``, ``close()`` and the
-    context-manager protocol — so a hub upgrade that stops calling it degrades
-    to file-count progress rather than breaking the download.
-
-    Never raises and never prints: this runs on the download thread, where an
-    exception would abort the file and stdout goes nowhere useful.
-    """
-
-    def __init__(self, total: Any = None, initial: Any = 0, desc: Any = None, **_kwargs: Any) -> None:
-        self._total = _safe_int(total)
-        self._count = _safe_int(initial)
-        ctx = getattr(_dl_ctx, "current", None)
-        self._ctx = dict(ctx) if isinstance(ctx, dict) else None
-        if self._ctx is not None:
-            try:
-                _progress_file_started(self._ctx, self._total, self._count, desc)
-            except Exception:
-                pass
-
-    def update(self, n: Any) -> None:
-        try:
-            step = int(n or 0)
-        except (TypeError, ValueError):
-            return
-        self._count = max(0, self._count + step)
-        if self._ctx is not None:
-            try:
-                _progress_file_advanced(self._ctx, self._count, self._total)
-            except Exception:
-                pass
-
-    def close(self) -> None:
-        if self._ctx is not None:
-            try:
-                _progress_file_advanced(self._ctx, self._count, self._total)
-            except Exception:
-                pass
-
-    def __enter__(self) -> _HubByteProgress:
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        self.close()
-
-
-def _progress_entry(state: dict[str, Any], key: str) -> dict[str, Any]:
-    return state["progress"].setdefault(key, {
-        "done": False,
-        "files_done": 0,
-        "files_total": 0,
-        "current_file": "",
-        "downloaded": False,
-        "bytes_done": 0,
-        "bytes_total": 0,
-        "current_bytes": 0,
-        "current_total": 0,
-    })
-
-
-def _progress_file_started(ctx: dict[str, Any], total: int, initial: int, desc: Any) -> None:
-    """A hub bar opened for the worker's current file: publish its total."""
-    state, lock, key = ctx["state"], ctx["lock"], ctx["key"]
-    with lock:
-        entry = _progress_entry(state, key)
-        entry["current_total"] = total
-        entry["current_bytes"] = min(initial, total) if total else initial
-        entry["bytes_total"] = _safe_int(entry.get("bytes_base", 0)) + total
-        entry["bytes_done"] = _safe_int(entry.get("bytes_base", 0)) + entry["current_bytes"]
-        if isinstance(desc, str) and desc and not entry.get("current_file"):
-            entry["current_file"] = desc
-
-
-def _progress_file_advanced(ctx: dict[str, Any], count: int, total: int) -> None:
-    """A hub bar moved: publish bytes without touching file counts."""
-    state, lock, key = ctx["state"], ctx["lock"], ctx["key"]
-    with lock:
-        entry = _progress_entry(state, key)
-        if total:
-            entry["current_total"] = total
-            entry["bytes_total"] = _safe_int(entry.get("bytes_base", 0)) + total
-        entry["current_bytes"] = count
-        entry["bytes_done"] = _safe_int(entry.get("bytes_base", 0)) + count
+    progress = FileProgress(publish)
+    return progress
 
 _WINDOWS_RESERVED = {
     "CON",
@@ -167,7 +88,7 @@ _WINDOWS_RESERVED = {
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
-_INVALID_CHARS = re.compile(r'[<>:"|?*\x00]')
+_INVALID_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -408,11 +329,8 @@ def _required_models_ready() -> bool:
     return True
 
 
-def _derive_stage() -> str:
-    with _download_lock:
-        if _download_state["active"]:
-            return _download_state["stage"]
-
+def _derive_idle_stage() -> str:
+    """Derive the selection stage without taking a snapshot of the running job."""
     # A direct /setup visit is also a model-management/setup page after the
     # required models are installed. The persistent setup-complete marker
     # controls normal application startup, but must not hide MTL choices here.
@@ -422,18 +340,32 @@ def _derive_stage() -> str:
     return "mtl_selection"
 
 
+def _derive_stage() -> str:
+    with _download_lock:
+        if _download_state["active"]:
+            return _download_state["stage"]
+    return _derive_idle_stage()
+
+
 # ── Download worker ───────────────────────────────────────────────────────────
 
 def _discover_model_files(api, model: dict) -> list[str]:
-    raw_files = model.get("files")
+    """Resolve every configured filename/suffix before downloading any files."""
+    patterns = tuple(model.get("files") or ())
     repo_files = api.list_repo_files(model["repo"])
 
     files: list[str] = []
     for repo_file in repo_files:
         if repo_file.startswith("."):
             continue
-        if not raw_files or repo_file.endswith(tuple(raw_files)):
+        if not patterns or repo_file.endswith(patterns):
             files.append(repo_file)
+
+    missing = [pattern for pattern in patterns if not any(name.endswith(pattern) for name in files)]
+    if missing:
+        raise ValueError(f"required model files not found in repository: {', '.join(missing)}")
+    if not files:
+        raise ValueError("repository contains no downloadable model files")
 
     return files
 
@@ -446,6 +378,7 @@ def _fresh_progress_entry(files_total: int) -> dict[str, Any]:
     """
     return {
         "done": False,
+        "phase": "preparing",
         "files_done": 0,
         "files_total": files_total,
         "current_file": "",
@@ -461,7 +394,7 @@ def _fresh_progress_entry(files_total: int) -> dict[str, Any]:
 def _public_progress(progress: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Progress safe to serialise: the same entries minus internal fields."""
     return {
-        key: {k: v for k, v in entry.items() if k != "bytes_base"}
+        key: {k: v for k, v in entry.items() if k not in ("bytes_base", "_file_token")}
         for key, entry in progress.items()
     }
 
@@ -477,9 +410,12 @@ def _run_model_downloads(
     Shared by the wizard stages and the optional PaddleOCR-VL job: the only
     difference between them is which state dict is passed in. Each file goes
     through ``hf_hub_download`` with a byte-reporting ``tqdm_class`` so the
-    page sees MiBs moving, not just file counts; file counts remain the
-    fallback for servers that reply without a length and for hub paths that
-    never instantiate the bar.
+    page sees bytes moving, including when the server provides no length.
+    A response-stream observer adds finer updates for HTTP without changing
+    Hub's chunking, retries, or cache. Xet's native transfer counters are kept
+    separate from assembled file bytes, which can stay at zero until assembly.
+    Phases describe the current file; its byte total never stands in for the
+    unknown sizes of remaining model files.
 
     Raises the first failure with the model named, so the route can store an
     error the page can show. The completion marker is touched only after all
@@ -511,6 +447,7 @@ def _run_model_downloads(
                     **_fresh_progress_entry(0),
                     "done": True,
                     "downloaded": True,
+                    "phase": "complete",
                 }
             continue
         try:
@@ -537,35 +474,40 @@ def _run_model_downloads(
                 entry["files_done"] = index - 1
                 entry["current_bytes"] = 0
                 entry["current_total"] = 0
+                entry.pop("transfer_bytes", None)
+                entry.pop("transfer_total", None)
+                entry["phase"] = "preparing"
                 entry["bytes_base"] = completed_bytes
                 entry["bytes_done"] = completed_bytes
+                progress = _file_progress(state, lock, model_key, entry)
 
-            _dl_ctx.current = {"state": state, "lock": lock, "key": model_key}
+            previous = getattr(_dl_ctx, "current", None)
+            _dl_ctx.current = progress
             try:
-                hf_hub_download(
+                observe_hub_client()
+                downloaded_path = hf_hub_download(
                     repo_id=model["repo"],
                     filename=filename,
                     local_dir=str(model_dest),
                     tqdm_class=_HubByteProgress,
                 )
+                # Cached files may never open a progress bar. A successful Hub
+                # return and the saved file, not a byte counter, prove completion.
+                finished = Path(downloaded_path).stat().st_size
+                progress.finish(finished)
             except Exception as exc:
                 raise RuntimeError(f"{model.get('name', model_key)}: {filename}: {exc}") from exc
             finally:
-                _dl_ctx.current = None
+                progress.finish()
+                _dl_ctx.current = previous
 
             with lock:
                 entry = state["progress"][model_key]
-                # The bar's last count is the file's true size, even when the
-                # server never sent a length up front.
-                finished = max(_safe_int(entry.get("current_bytes")), _safe_int(entry.get("current_total")))
                 completed_bytes += finished
                 entry["files_done"] = index
                 entry["bytes_base"] = completed_bytes
                 entry["bytes_done"] = completed_bytes
-                entry["bytes_total"] = max(_safe_int(entry.get("bytes_total")), completed_bytes)
-                entry["current_file"] = ""
-                entry["current_bytes"] = 0
-                entry["current_total"] = 0
+                entry.pop("_file_token", None)
 
         completed_file.touch()
 
@@ -573,11 +515,13 @@ def _run_model_downloads(
             entry = state["progress"][model_key]
             entry["done"] = True
             entry["downloaded"] = True
+            entry["phase"] = "complete"
             entry["current_file"] = ""
             entry["current_bytes"] = 0
             entry["current_total"] = 0
-            if entry["bytes_total"] <= 0:
-                entry["bytes_total"] = entry["bytes_done"]
+            entry.pop("transfer_bytes", None)
+            entry.pop("transfer_total", None)
+            entry["bytes_total"] = completed_bytes
 
 
 def _download_models_task(
@@ -588,16 +532,14 @@ def _download_models_task(
     """Background task for one setup wizard stage."""
     global _download_state
 
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    if stage == "mtl":
-        mtl_dir.mkdir(parents=True, exist_ok=True)
-
     entries = [
         (key, model, mtl_dir if stage == "mtl" else MODELS_DIR)
         for key, model in models_to_download
     ]
 
     try:
+        # The shared worker creates its destination directories here, so a
+        # filesystem failure clears the active state like any download error.
         _run_model_downloads(entries, lock=_download_lock, state=_download_state)
     except Exception as e:
         with _download_lock:
@@ -620,72 +562,166 @@ def _download_models_task(
 
 # ── Path validation ──────────────────────────────────────────────────────────
 
+def _storage_paths(user_path: str) -> tuple[Path, Path]:
+    """Return a portable configured spelling and its absolute destination."""
+    if not isinstance(user_path, str):
+        raise ValueError("Enter a folder path.")
+    value = user_path.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    if not value:
+        raise ValueError("Enter a folder path or choose the default location.")
+    if "\x00" in value:
+        raise ValueError("The folder path contains an invalid character.")
+    path = Path(value).expanduser()
+    if os.name == "nt":
+        if path.drive and not path.is_absolute():
+            raise ValueError("Use a full drive path, such as C:\\Models, instead of a drive-relative path.")
+        for part in path.parts:
+            if part in (path.anchor, "", ".", ".."):
+                continue
+            if _INVALID_CHARS.search(part):
+                raise ValueError(f"Invalid character in folder name: {part!r}")
+            if part.endswith((" ", ".")):
+                raise ValueError(f"Folder names cannot end in a space or dot: {part!r}")
+            if part.split(".")[0].upper() in _WINDOWS_RESERVED:
+                raise ValueError(f"Reserved Windows folder name: {part!r}")
+    resolved = (path if path.is_absolute() else PROJECT_ROOT / path).resolve(strict=False)
+    # The default stays relative so moving a portable build does not orphan its models.
+    configured = Path("models") if resolved == (PROJECT_ROOT / "models").resolve() else path
+    return configured, resolved
+
+
+def _inspect_storage(user_path: str) -> dict[str, Any]:
+    """Validate without creating folders or changing configuration."""
+    from fox_reader.fsaccess import _probe_writable
+
+    report: dict[str, Any] = {"ok": False, "path": "", "error": "", "exists": False, "can_create": False}
+    try:
+        _, path = _storage_paths(user_path)
+        report["path"] = str(path)
+        report["exists"] = path.exists()
+        if report["exists"] and not path.is_dir():
+            raise ValueError("This path points to a file. Choose a folder instead.")
+        target = path if report["exists"] else path.parent
+        if not target.exists():
+            raise ValueError("The parent folder does not exist. Choose an existing folder or a new folder inside one.")
+        if not target.is_dir():
+            raise ValueError("The parent path is a file, not a folder.")
+        # Use the exact host-native path here. fsaccess.describe_dir also
+        # normalizes backslashes/quotes, which are valid POSIX filename characters.
+        with os.scandir(target):
+            pass
+        if not os.access(target, os.X_OK) or not _probe_writable(str(target)):
+            raise ValueError("Fox Reader cannot write to this folder. Choose a writable location.")
+        report.update(ok=True, can_create=not report["exists"])
+        try:
+            report["free_bytes"] = shutil.disk_usage(target).free
+        except OSError:
+            pass
+    except (OSError, RuntimeError, ValueError) as exc:
+        report["error"] = str(exc) or "This folder could not be checked."
+    return report
+
+
 def validate_output_calc(user_path: str) -> dict[str, Path | str]:
-    path = Path(user_path)
+    """Compatibility wrapper shared with setup's original download entry point."""
+    report = _inspect_storage(user_path)
+    if not report["ok"]:
+        return {"status": "failed", "error": report["error"]}
+    return {"status": "success", "path": Path(report["path"])}
 
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
 
-    path = path.resolve(strict=False)
+def _store_mtl_location(request: Request, user_path: str, path: Path, *, preserve_existing: bool = False) -> str:
+    """Called under the download lock; publish only after persistence succeeds."""
+    global _MTL_DIR
+    configured, resolved = _storage_paths(user_path)
+    if resolved != path:
+        raise ValueError("The folder changed while it was being checked. Try again.")
+    manager = getattr(request.app.state, "config_manager", None)
+    if manager is None:
+        # Older embedded clients can still download into their existing root.
+        # A different location must never look saved when there is no config owner.
+        if path != _MTL_DIR.resolve():
+            raise RuntimeError("The storage configuration is unavailable. Restart Fox Reader and try again.")
+        return str(path)
+    config = manager.config
+    if config is None:
+        raise RuntimeError("The storage configuration has not loaded. Restart Fox Reader and try again.")
+    if preserve_existing and config.resolve_mtl_dir(PROJECT_ROOT).resolve() == path:
+        # Download requests identify the applied folder by absolute path; that
+        # must not rewrite an already-saved portable relative preference.
+        configured = config.mtl_dir
+    if config.mtl_dir != configured:
+        config = manager.update(mtl_dir=configured)
+    request.app.state.config = config
+    request.app.state.mtl_dir = path
+    _MTL_DIR = path
+    return str(config.mtl_dir)
 
-    for part in path.parts:
-        if part in (path.anchor, "", os.sep):
-            continue
 
-        if _INVALID_CHARS.search(part):
-            return {
-                "status": "failed",
-                "error": f"Invalid character in path component: {part!r}",
-            }
+async def _storage_request_path(request: Request) -> str | JSONResponse:
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Send a folder path as JSON."}, status_code=400)
+    if not isinstance(body, dict) or not isinstance(body.get("path"), str):
+        return JSONResponse({"error": "path must be a folder path string."}, status_code=400)
+    return body["path"]
 
-        if part.endswith((" ", ".")):
-            return {
-                "status": "failed",
-                "error": f"Invalid trailing space/dot: {part!r}",
-            }
 
-        stem = part.rstrip(" .").split(".")[0].upper()
-        if stem in _WINDOWS_RESERVED:
-            return {
-                "status": "failed",
-                "error": f"Reserved Windows filename: {part!r}",
-            }
+@router.post("/api/setup/storage/inspect")
+async def inspect_setup_storage(request: Request):
+    path = await _storage_request_path(request)
+    if isinstance(path, JSONResponse):
+        return path
+    return JSONResponse(await asyncio.to_thread(_inspect_storage, path))
 
-    current = Path(path.anchor)
 
-    for part in path.parts[1:]:
-        current /= part
-
-        if not current.exists() and not current.is_symlink():
-            break
-
-        if current.is_symlink():
-            return {"status": "failed", "error": f"Symlink not allowed: {current}"}
-
-    if path.is_symlink():
-        return {"status": "failed", "error": "Target path is a symlink."}
-
-    if path.exists() and not path.is_dir():
-        return {"status": "failed", "error": "Target path already exists as a file."}
-
-    parent = path.parent
-
-    if not parent.exists():
-        return {"status": "failed", "error": "Parent directory does not exist."}
-
-    if parent.is_symlink():
-        return {"status": "failed", "error": "Parent directory is a symlink."}
-
-    if not parent.is_dir():
-        return {"status": "failed", "error": "Parent is not a directory."}
-
-    if not os.access(parent, os.R_OK | os.W_OK | os.X_OK):
-        return {
-            "status": "failed",
-            "error": f"Insufficient permissions for: {path}",
-        }
-
-    return {"status": "success", "path": path}
+@router.post("/api/setup/storage")
+async def apply_setup_storage(request: Request):
+    global _storage_apply_generation
+    value = await _storage_request_path(request)
+    if isinstance(value, JSONResponse):
+        return value
+    with _download_lock:
+        if _download_state["active"] or getattr(request.app.state, "setup_closing", False):
+            return JSONResponse(
+                {"error": "Wait until the current download finishes before changing its location."}, status_code=409,
+            )
+        _storage_apply_generation += 1
+        generation = _storage_apply_generation
+    report = await asyncio.to_thread(_inspect_storage, value)
+    if not report["ok"]:
+        return JSONResponse(report, status_code=400)
+    path = Path(report["path"])
+    with _download_lock:
+        if _download_state["active"] or getattr(request.app.state, "setup_closing", False):
+            return JSONResponse(
+                {"error": "The storage location cannot change while downloading or closing."}, status_code=409,
+            )
+        # A timed-out request can finish inspection after a retry has already
+        # saved a newer choice. Never let that older request overwrite it.
+        if generation != _storage_apply_generation:
+            return JSONResponse(
+                {"error": "A newer storage location request replaced this one. Check the current location."},
+                status_code=409,
+            )
+        try:
+            configured = _store_mtl_location(request, value, path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return JSONResponse({"error": f"Could not save the storage location: {exc}"}, status_code=503)
+        # These entries describe the previous job's destination. Its completed
+        # flags must not make a different folder look populated in the UI.
+        _download_state["progress"] = {}
+        _download_state["current_model"] = None
+        _download_state["error"] = None
+        _download_state["complete"] = False
+    return JSONResponse({
+        "path": str(path), "mtl_dir": configured,
+        "mtl_models": _get_mtl_models(path),
+        "all_mtl_downloaded": _all_mtl_models_downloaded(path),
+    })
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -694,18 +730,22 @@ def validate_output_calc(user_path: str) -> dict[str, Path | str]:
 async def setup_page(request: Request):
     global _MTL_DIR
 
-    config = request.app.state.config
-    _MTL_DIR = config.resolve_mtl_dir(PROJECT_ROOT)
-
-    if not _download_state["active"]:
-        _download_state["stage"] = _derive_stage()
-        _download_state["complete"] = False
+    stage = _derive_idle_stage()
+    with _download_lock:
+        config = request.app.state.config
+        if not _download_state["active"]:
+            _MTL_DIR = config.resolve_mtl_dir(PROJECT_ROOT).resolve()
+            _download_state["stage"] = stage
+            _download_state["complete"] = False
+        resolved = str(_MTL_DIR)
 
     return templates.TemplateResponse(
         request=request,
         name="setup.html",
         context={
             "mtl_dir": str(config.mtl_dir),
+            "mtl_default_dir": str((PROJECT_ROOT / "models").resolve()),
+            "mtl_resolved_dir": resolved,
         },
     )
 
@@ -714,10 +754,12 @@ async def setup_page(request: Request):
 async def setup_status(request: Request):
     from fox_reader import model_terms
 
-    mtl_dir = _MTL_DIR
-    derived_stage = _derive_stage()
+    # A worker can finish while readiness is checked. Only read its active
+    # stage in the same locked snapshot as `active`, never before that snapshot.
+    derived_stage = _derive_idle_stage()
 
     with _download_lock:
+        mtl_dir = _MTL_DIR
         if not _download_state["active"]:
             _download_state["stage"] = derived_stage
             _download_state["complete"] = False
@@ -729,6 +771,7 @@ async def setup_status(request: Request):
             "progress": _public_progress(_download_state["progress"]),
             "error": _download_state["error"],
             "complete": _download_state["complete"],
+            "mtl_dir": str(mtl_dir),
         }
 
     # Read once and thread it through: this route is polled every second, and
@@ -836,6 +879,8 @@ async def setup_download(request: Request):
         mtl_dir_raw = body.get("mtl_dir", str(_MTL_DIR))
         selected_ids = body.get("selected_mtl", [])
 
+        if not isinstance(mtl_dir_raw, str):
+            return JSONResponse({"error": "mtl_dir must be a folder path string."}, status_code=400)
         if not isinstance(selected_ids, list):
             return JSONResponse(
                 {"error": "selected_mtl must be a list"},
@@ -847,7 +892,7 @@ async def setup_download(request: Request):
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
-        mtl_dir_rep = validate_output_calc(str(mtl_dir_raw))
+        mtl_dir_rep = await asyncio.to_thread(validate_output_calc, mtl_dir_raw)
         if (
             mtl_dir_rep["status"] != "success"
             or not isinstance(mtl_dir_rep.get("path"), Path)
@@ -855,23 +900,12 @@ async def setup_download(request: Request):
             return JSONResponse({"error": mtl_dir_rep["error"]}, status_code=400)
 
         mtl_dir = mtl_dir_rep["path"]
-        _MTL_DIR = mtl_dir
 
         # Already-downloaded models are excluded from the worker.
         selected_models = [
             model for model in selected_models
             if not _model_completed(mtl_dir, model)
         ]
-
-        if not selected_models:
-            with _download_lock:
-                _download_state["stage"] = "complete"
-                _download_state["complete"] = True
-                _download_state["active"] = False
-                _download_state["error"] = None
-                _download_state["current_model"] = None
-                _download_state["progress"] = {}
-            return JSONResponse({"status": "complete", "stage": "complete"})
 
         # Gemma and VNTL carry the strictest terms of anything here -- Google's
         # Gemma Terms and Meta's Llama 3 Community License, both of which
@@ -885,6 +919,22 @@ async def setup_download(request: Request):
         ]
 
         with _download_lock:
+            # Inspection runs off-thread. Another tab may have started a job
+            # while it was pending, so claim the destination and job together.
+            if _download_state["active"] or getattr(request.app.state, "setup_closing", False):
+                return JSONResponse({"error": "A download is active or Fox Reader is closing."}, status_code=409)
+            try:
+                _store_mtl_location(request, mtl_dir_raw, mtl_dir, preserve_existing=True)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return JSONResponse({"error": f"Could not save the storage location: {exc}"}, status_code=503)
+            if not selected_models:
+                _download_state["stage"] = "complete"
+                _download_state["complete"] = True
+                _download_state["active"] = False
+                _download_state["error"] = None
+                _download_state["current_model"] = None
+                _download_state["progress"] = {}
+                return JSONResponse({"status": "complete", "stage": "complete"})
             _download_state["active"] = True
             _download_state["error"] = None
             _download_state["complete"] = False
@@ -950,6 +1000,7 @@ async def setup_close(request: Request):
         _download_state["stage"] = "complete"
         _download_state["complete"] = True
         _download_state["error"] = None
+        request.app.state.setup_closing = True
 
     # Give the HTTP response a moment to reach the browser, then stop this Fox
     # Reader backend. The setup page no longer restarts it.

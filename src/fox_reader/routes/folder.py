@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Literal
 
-from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from PIL import Image
 
 from fox_reader import assets, fsaccess
+from fox_reader.image_rendering import image_render_quality_mode
 from fox_reader.models.requests import FolderInspectRequest, FolderRequest
+from fox_reader.services.thumbnails import MAX_DIMENSION, ThumbnailService
 
 router = APIRouter()
 templates = assets.templates()
@@ -66,6 +69,7 @@ async def home(request: Request):
         context={
             "initial_theme": config.theme,
             "initial_layout": config.layout,
+            "image_render_quality_mode": image_render_quality_mode(),
             "deepl_available": bool(translate_status.get("deepl")),
             "jpdb_available": bool(translate_status.get("jpdb")),
             # The service, not the weights on disk: it is None when the model is
@@ -319,14 +323,8 @@ async def load_folder(request: Request, request_data: FolderRequest):
     )
 
 
-@router.get("/img_serve/{filename}")
-async def serve_image(request: Request, filename: str, variant: str = "original"):
-    """Serve one page, from the source folder or from the destination.
-
-    `variant=saved` asks for the typeset copy. A page with no typeset copy yet
-    falls back to the original rather than 404-ing: the switch is a view state
-    that outlives a re-render, and a blank viewer would look like data loss.
-    """
+def _image_path(request: Request, filename: str, variant: str) -> str | JSONResponse:
+    """Resolve both full pages and previews with the same workspace rules."""
     session = request.app.state.session
     source = session.current_dir
     if not source:
@@ -345,6 +343,39 @@ async def serve_image(request: Request, filename: str, variant: str = "original"
         if file_path is None:
             return JSONResponse({"error": "Invalid filename"}, status_code=400)
         if os.path.isfile(file_path):
-            return FileResponse(file_path)
+            return file_path
 
     return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+@router.get("/img_serve/{filename}")
+async def serve_image(request: Request, filename: str, variant: str = "original"):
+    """Serve original bytes; a missing saved copy falls back to its source."""
+    path = _image_path(request, filename, variant)
+    return path if isinstance(path, JSONResponse) else FileResponse(path)
+
+
+@router.get("/api/thumbnail/{filename}")
+async def serve_thumbnail(
+    request: Request,
+    filename: str,
+    width: int = Query(ge=1, le=MAX_DIMENSION),
+    height: int = Query(ge=1, le=MAX_DIMENSION),
+    fit: Literal["contain", "cover"] = "contain",
+    variant: str = "original",
+    t: str = Query(default="", max_length=128),
+    viewer: Literal["native", "browser"] = "browser",
+):
+    path = _image_path(request, filename, variant)
+    if isinstance(path, JSONResponse):
+        return path
+    mode = image_render_quality_mode()
+    # This is a rendering preference, not an authentication boundary. Ordinary
+    # browsers never opt into previews in mode 1, even beside a native window.
+    if mode == 3 or (mode == 1 and viewer != "native"):
+        return FileResponse(path)
+    service = getattr(request.app.state, "thumbnails", None)
+    if service is None:
+        service = request.app.state.thumbnails = ThumbnailService()
+    data = await service.get(path, width, height, fit, t)
+    return Response(data, media_type="image/png") if data is not None else FileResponse(path)

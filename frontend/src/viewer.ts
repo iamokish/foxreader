@@ -1,6 +1,8 @@
 import { state, isViewingSaved } from "./state";
 import type { PageVariant } from "./state";
 import { emit } from "./eventbus";
+import { applyImageTransform, disposeImageTransform } from "./imageTransform";
+import { createGalleryThumbnails } from "./galleryThumbnails";
 
 const STRIP_DETECT_ASPECT = 2.2;
 const STRIP_DETECT_SAMPLE = 5;
@@ -79,6 +81,7 @@ const pageBusters = new Map<string, number>();
  * which is the one case where the stale copy must not be served.
  */
 let saveTick = 0;
+let galleryThumbnails: ReturnType<typeof createGalleryThumbnails> | null = null;
 
 /** The cache-busting token for the copy of `file` named by `variant`. */
 function busterFor(file: string, variant: PageVariant = state.viewVariant): string {
@@ -190,9 +193,7 @@ function isPannable(container: HTMLElement): boolean {
             img.naturalHeight * state.zoomLevel > container.clientHeight + 1
         );
     }
-    return (
-        container.scrollWidth > container.clientWidth + 1 || container.scrollHeight > container.clientHeight + 1
-    );
+    return container.scrollWidth > container.clientWidth + 1 || container.scrollHeight > container.clientHeight + 1;
 }
 
 export function getClampedZoom(current: number, delta: number, min: number, max: number): number {
@@ -392,7 +393,10 @@ export function buildStrip(): void {
         scroller.appendChild(slot);
     });
 
-    if (mainImg) mainImg.style.display = "none";
+    if (mainImg) {
+        disposeImageTransform(mainImg);
+        mainImg.style.display = "none";
+    }
 
     stripObserver = new IntersectionObserver(
         (entries) => {
@@ -512,9 +516,9 @@ export function applyReaderTransform(
     mainImg.style.transformOrigin = "0 0";
     mainImg.style.top = "0px";
     mainImg.style.left = "0px";
-    // `translate3d` (not `translate`): the same placement, but it promotes the
-    // page to a compositor layer so pan/zoom is a GPU shift, not a repaint.
-    mainImg.style.transform = `translate3d(${px}px, ${py}px, 0) scale(${zoom})`;
+    // Enabled viewers release the forced layer after movement settles; the
+    // overlay receives both transform forms at the same original coordinates.
+    applyImageTransform(mainImg, px, py, zoom, syncSvgOverlayDimensions);
     syncSvgOverlayDimensions();
 }
 
@@ -612,9 +616,7 @@ function applyWorkTransform(container: HTMLElement, mainImg: HTMLImageElement): 
     mainImg.style.transformOrigin = "0 0";
     mainImg.style.top = "0px";
     mainImg.style.left = "0px";
-    // `translate3d` (not `translate`): the same placement, but it promotes the
-    // page to a compositor layer so zoom/pan is a GPU shift, not a repaint.
-    mainImg.style.transform = `translate3d(${Math.max(0, (cw - w) / 2)}px, ${Math.max(0, (ch - h) / 2)}px, 0) scale(${zoom})`;
+    applyImageTransform(mainImg, Math.max(0, (cw - w) / 2), Math.max(0, (ch - h) / 2), zoom, syncSvgOverlayDimensions);
     syncContainerOverflow();
 
     syncSvgOverlayDimensions();
@@ -734,6 +736,8 @@ function zoomReaderAround(
 export function renderGallery(files: string[], dimensions: [number, number][] = []): void {
     const gallery = document.getElementById("gallery");
     if (!gallery) return;
+    galleryThumbnails?.dispose();
+    galleryThumbnails = createGalleryThumbnails(gallery);
     gallery.innerHTML = "";
     folderBuster = Date.now();
     pageBusters.clear();
@@ -768,14 +772,12 @@ export function renderGallery(files: string[], dimensions: [number, number][] = 
 
         const img = document.createElement("img");
         img.className = "gallery-item";
-        // A thumbnail is the page itself, served full size, so a folder of two
-        // hundred pages was two hundred full downloads before the first one had
-        // been looked at. `.gallery-item` is a fixed 80x80 box, so deferring the
-        // ones off-screen costs no layout and no reflow when they arrive.
+        // Lazy in either policy. Enabled viewers request display-sized previews;
+        // other viewers retain the original image path.
         img.loading = "lazy";
         img.decoding = "async";
         img.draggable = false;
-        setImageSrc(img, currentPageUrl(file));
+        galleryThumbnails!.update(img, currentPageUrl(file));
 
         const label = document.createElement("div");
         label.className = "gallery-index";
@@ -794,6 +796,7 @@ export function renderGallery(files: string[], dimensions: [number, number][] = 
         fragment.appendChild(itemDiv);
     });
     gallery.appendChild(fragment);
+    galleryThumbnails.start();
 
     updateVariantSwitch();
 }
@@ -1003,7 +1006,9 @@ export function refreshVariantImages(): void {
     document.querySelectorAll<HTMLElement>(".gallery-item-container").forEach((itemDiv, index) => {
         const file = state.currentFiles[index];
         if (!file) return;
-        setImageSrc(itemDiv.querySelector<HTMLImageElement>("img.gallery-item"), currentPageUrl(file));
+        const img = itemDiv.querySelector<HTMLImageElement>("img.gallery-item");
+        if (img && galleryThumbnails) galleryThumbnails.update(img, currentPageUrl(file));
+        else setImageSrc(img, currentPageUrl(file));
     });
 
     document.querySelectorAll<HTMLImageElement>(".strip-img").forEach((img) => {
@@ -1073,6 +1078,7 @@ export function selectImage(file: string): void {
     if (!mainImg || !container) return;
 
     if (changed) {
+        disposeImageTransform(mainImg);
         container.scrollLeft = 0;
         container.scrollTop = 0;
         container.style.overflow = "hidden";
@@ -1121,8 +1127,7 @@ export function applyImageFit(container: HTMLElement, mainImg: HTMLImageElement)
     if (!naturalHeight || !naturalWidth) return;
 
     if (isReaderMode()) {
-        state.zoomLevel =
-            state.readerFit === "width" ? containerWidth / naturalWidth : containerHeight / naturalHeight;
+        state.zoomLevel = state.readerFit === "width" ? containerWidth / naturalWidth : containerHeight / naturalHeight;
         state.fitZoomLevel = state.zoomLevel;
         state.panX = 0;
         state.panY = 0;

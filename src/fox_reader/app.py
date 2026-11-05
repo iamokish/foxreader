@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI):
     configure_threads(settings_mgr.get_mtl_threads())
 
     app.state.config = config
+    app.state.config_manager = fox_config_mgr
     app.state.settings = settings_mgr
     app.state.user_endpoints = user_endpoints
     app.state.workspaces = workspaces
@@ -156,6 +157,14 @@ async def lifespan(app: FastAPI):
         app.state.needs_setup = True
 
     yield
+
+    thumbnails = getattr(app.state, "thumbnails", None)
+    if thumbnails is not None:
+        thumbnails.close()
+
+    updates = getattr(app.state, "updates", None)
+    if updates is not None:
+        updates.close()
 
     # The Text Seg network is the one model built outside the service graph, so
     # it is the one that has to be told to let go of its device.
@@ -208,13 +217,17 @@ assets.mount_static(app)
 
 from fox_reader.routes import bubble, folder, inpaint, ocr, setup, system, translate, ws  # noqa: E402
 from fox_reader.routes import characters as characters_routes  # noqa: E402
+from fox_reader.routes import diagnostics as diagnostics_routes  # noqa: E402
 from fox_reader.routes import settings as settings_routes  # noqa: E402
+from fox_reader.routes import updates as updates_routes  # noqa: E402
 from fox_reader.routes import user_endpoints as user_endpoints_routes  # noqa: E402
 
 app.include_router(setup.router)
 app.include_router(ws.router)
 app.include_router(folder.router)
 app.include_router(system.router)
+app.include_router(diagnostics_routes.router)
+app.include_router(updates_routes.router)
 app.include_router(ocr.router)
 app.include_router(bubble.router)
 app.include_router(translate.router)

@@ -10,6 +10,8 @@ export interface InitialFoxConfig {
     layout?: string;
     deeplAvailable?: boolean;
     jpdbAvailable?: boolean;
+    /** 1: native windows only; 2: every viewer; 3: original rendering. */
+    imageRenderQuality?: 1 | 2 | 3;
     /**
      * Whether the bubble-segmentation model is loaded. Optional, and read as
      * "available" when absent: a cached page served before the flag existed

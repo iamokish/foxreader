@@ -19,6 +19,11 @@ permissions:
   contents: write
   actions: read
 
+# Asset sets and latest.json must never be interleaved by concurrent reruns.
+concurrency:
+  group: fox-reader-release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Publish Release
@@ -36,35 +41,43 @@ jobs:
         id: target
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          INPUT_RUN_ID="${{ inputs.run_id }}"
-          INPUT_TAG="${{ inputs.tag }}"
-
           if [ -n "$INPUT_RUN_ID" ]; then
             RUN_ID="$INPUT_RUN_ID"
-          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-            RUN_ID="${{ github.event.workflow_run.id }}"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            RUN_ID="$EVENT_RUN_ID"
           else
             if [ -z "$INPUT_TAG" ]; then
               echo "Error: Either run_id or tag must be provided when manually dispatching." >&2
               exit 1
             fi
             echo "Searching latest 'Build Executables' run for branch/tag '$INPUT_TAG'..."
-            RUN_ID=$(gh run list --workflow "Build Executables" --branch "$INPUT_TAG" --limit 1 --json databaseId -q ".[0].databaseId")
+            RUN_ID=$(gh run list --workflow "Build Executables" --branch "$INPUT_TAG" --status success --limit 1 --json databaseId -q ".[0].databaseId")
             if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
               echo "Error: Could not find any workflow run for '$INPUT_TAG'." >&2
               exit 1
             fi
           fi
 
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "Invalid run ID" >&2; exit 1; }
+          gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" > build_run.json
+          EXPECTED_WORKFLOW=$(gh api "repos/$REPOSITORY/actions/workflows/build.yml" --jq .id)
+          jq -e --arg repository "$REPOSITORY" --argjson workflow "$EXPECTED_WORKFLOW" \
+            '.conclusion == "success" and .status == "completed" and .workflow_id == $workflow and
+             .head_repository.full_name == $repository and (.event == "push" or .event == "workflow_dispatch")' \
+            build_run.json > /dev/null
+
           if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
-          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
-            TAG="${{ github.event.workflow_run.head_branch }}"
           else
-            TAG=$(gh run view "$RUN_ID" --json headBranch -q .headBranch)
+            TAG=$(jq -r .head_branch build_run.json)
           fi
 
           # Strip refs/tags/ if present
@@ -74,11 +87,17 @@ jobs:
           echo "Target Tag:    $TAG"
 
           # Verify that TAG is a git tag (skip if build was just a branch push)
-          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && ! gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" >/dev/null 2>&1; then
+          if ! git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
             echo "::notice ::Target '$TAG' is not a git tag. Release publishing skipped."
             echo "is_tag=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # A manual run_id/tag pair must refer to the exact same source.
+          [[ "$(git rev-parse "refs/tags/$TAG^{commit}")" == "$(jq -r .head_sha build_run.json)" ]] || {
+            echo "Tag commit does not match the successful build" >&2; exit 1;
+          }
+          [[ "$TAG" =~ ^v?[0-9][A-Za-z0-9.+_-]*$ ]] || { echo "Release tag must be a version" >&2; exit 1; }
 
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -111,21 +130,19 @@ jobs:
         if: steps.target.outputs.is_tag == 'true'
         run: ls -lh artifacts/
 
-      # One manifest over everything that is about to be attached.
-      - name: Write SHA256SUMS.txt
+      - name: Download build-time checksum manifests
         if: steps.target.outputs.is_tag == 'true'
-        working-directory: artifacts
-        run: |
-          for whole in $(ls fox-reader-*.001 2>/dev/null | sed 's/\.001$//'); do
-            echo "# $whole (rejoined)  $(cat "$whole".[0-9][0-9][0-9] | sha256sum | cut -d' ' -f1)"
-          done > SHA256SUMS.txt
-          sha256sum fox-reader-* >> SHA256SUMS.txt
-          cat SHA256SUMS.txt
+        uses: actions/download-artifact@v8
+        with:
+          pattern: checksums-*
+          path: checksums/
+          merge-multiple: false
+          run-id: ${{ steps.target.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare release notes
         if: steps.target.outputs.is_tag == 'true'
         run: |
-          TAG="${{ steps.target.outputs.tag }}"
           cat << 'EOF' > release_body.md
           ## What's new
 
@@ -181,50 +198,80 @@ jobs:
 
           ### Checking your download
 
-          `SHA256SUMS.txt` lists every file attached here. Verify with
+          `SHA256SUMS.txt` lists every archive and numbered part attached here. Verify with
           `sha256sum -c SHA256SUMS.txt` (Linux),
           `shasum -a 256 -c SHA256SUMS.txt` (macOS), or
           `Get-FileHash <file> -Algorithm SHA256` (Windows) and compare. For a
           split download, the `#` line naming the archive gives the digest of
           the **joined** file, so you can check the result of the step above.
 
-          Every file is also covered by a signed GitHub build attestation —
-          proof it was produced by this repository's workflow from this tag:
+          Where available, a signed GitHub build attestation verifies that an
+          archive or part was produced by this repository's workflow:
 
           ```
           gh attestation verify <file> --repo ${{ github.repository }}
           ```
+
+          `latest.json` is the update index: it includes release notes, platform
+          variants, ordered part URLs, sizes, and SHA256 digests. New desktop
+          builds can check and download a matching update from Settings. Install
+          into a new folder and copy your config, fonts, and models; keep the
+          previous installation until the new version works.
           EOF
 
-      - name: Ensure GitHub Release exists
+      - name: Validate downloads and generate latest.json
         if: steps.target.outputs.is_tag == 'true'
         env:
+          TAG: ${{ steps.target.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.target.outputs.run_id }}
         run: |
-          TAG="${{ steps.target.outputs.tag }}"
+          set -euo pipefail
+          gh api --method POST "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > changes.md
+          cat changes.md release_body.md > complete_release_body.md
+          gh api --paginate --slurp "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > build-jobs.json
+          gh api --paginate --slurp "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" > build-artifacts.json
+          python packaging/release_manifest.py generate \
+            --artifacts artifacts --checksums checksums --repository "$REPOSITORY" --tag "$TAG" \
+            --notes-file complete_release_body.md --output artifacts/latest.json \
+            --build-jobs-json build-jobs.json --build-artifacts-json build-artifacts.json \
+            --require-platform linux --require-platform windows --require-platform macos
+
+      - name: Create or resume draft release
+        if: steps.target.outputs.is_tag == 'true'
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
           TITLE="Fox Reader v${TAG#v}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release '$TAG' already exists. Updating notes..."
-            gh release edit "$TAG" --title "$TITLE" -F release_body.md
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "Published releases are immutable. Create a new version to replace assets." >&2
+              exit 1
+            fi
+            gh release edit "$TAG" --title "$TITLE" -F complete_release_body.md
           else
-            echo "Creating release '$TAG'..."
             gh release create "$TAG" \
               --title "$TITLE" \
-              -F release_body.md \
+              -F complete_release_body.md \
               --verify-tag \
-              --generate-notes
+              --draft
           fi
 
       - name: Upload assets sequentially
         if: steps.target.outputs.is_tag == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.target.outputs.tag }}
         run: |
-          TAG="${{ steps.target.outputs.tag }}"
+          set -euo pipefail
 
           shopt -s nullglob
-          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*-macos-arm64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt)
+          files=(artifacts/fox-reader-*-windows-x64.zip artifacts/fox-reader-*-linux-x64.tar.gz artifacts/fox-reader-*-macos-arm64.tar.gz artifacts/fox-reader-*.[0-9][0-9][0-9] artifacts/SHA256SUMS.txt artifacts/latest.json)
 
           if [ ${#files[@]} -eq 0 ]; then
             echo "Error: No release assets found to upload." >&2
@@ -260,3 +307,21 @@ jobs:
 
           echo "===================================================="
           echo "All release assets uploaded successfully."
+
+      - name: Verify uploaded assets and publish
+        if: steps.target.outputs.is_tag == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.target.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          RELEASE_ID=$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq .id)
+          gh api --paginate --slurp "repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > uploaded-assets.json
+          python packaging/release_manifest.py verify-assets --manifest artifacts/latest.json --assets-json uploaded-assets.json
+          # Prereleases never replace the stable /releases/latest pointer.
+          if [[ "${TAG#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            gh release edit "$TAG" --draft=false
+          else
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          fi

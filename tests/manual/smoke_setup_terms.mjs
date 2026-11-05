@@ -70,6 +70,7 @@ function makeClassList(el) {
 //: The only selectors the page asks an element for, and what each one means.
 //: Unknown selectors throw: see the file header.
 const SELECTORS = {
+  'input[type="checkbox"]': (el) => el.type === "checkbox",
   "input[type=checkbox]:not([disabled])": (el) => el.type === "checkbox" && !el.disabled,
   "input[type=checkbox]:not([disabled]):checked": (el) =>
     el.type === "checkbox" && !el.disabled && el.checked,
@@ -77,6 +78,10 @@ const SELECTORS = {
 
 const GATE_FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+const PROGRESS_SELECTORS = new Set([
+  ".progress-file", ".progress-percent", ".progress-bytes", ".progress-phase", ".progress-files",
+  '[role="progressbar"]', ".progress-bar", ".badge",
+]);
 
 /** Every element the page can reach by id, whether declared or rendered. */
 const byId = new Map();
@@ -90,9 +95,38 @@ const byId = new Map();
  * captureOptionalSelections reading a checkbox that is not on the page (which
  * guards with `if (!cb) return` precisely because the answer can be null).
  */
-const DECLARED = new Set(
-  [...fs.readFileSync(PAGE, "utf8").matchAll(/\bid="([^"]+)"/g)].map(([, id]) => id),
+const DECLARED = new Map(
+  [...fs.readFileSync(PAGE, "utf8").matchAll(/<[a-z][\w-]*\b([^>]*\bid="([^"]+)"[^>]*)>/gi)]
+    .map(([, attrs, id]) => [id, initialAttributes(attrs)]),
 );
+
+/** Only initial attributes are parsed; subsequent changes use DOM properties. */
+function initialAttributes(attrs) {
+  const values = Object.fromEntries(
+    [...attrs.matchAll(/([\w-]+)\s*=\s*"([^"]*)"/g)].map(([, name, value]) => [
+      name,
+      value.replace(/&(?:amp|quot|lt|gt|#39|#34|#x27);/g, (entity) => ({
+        "&amp;": "&", "&quot;": '"', "&lt;": "<", "&gt;": ">",
+        "&#39;": "'", "&#34;": '"', "&#x27;": "'",
+      })[entity]),
+    ]),
+  );
+  const bare = attrs.replace(/[\w-]+\s*=\s*"[^"]*"/g, " ");
+  const dataset = Object.fromEntries(Object.entries(values)
+    .filter(([name]) => name.startsWith("data-"))
+    .map(([name, value]) => [name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
+  return {
+    type: values.type || "text",
+    value: values.value || "",
+    disabled: /\bdisabled\b/.test(bare),
+    checked: /\bchecked\b/.test(bare),
+    readOnly: /\breadonly\b/.test(bare),
+    hidden: /\bhidden\b/.test(bare),
+    tabIndex: Number(values.tabindex ?? -1),
+    attributes: values,
+    dataset,
+  };
+}
 
 function makeElement(id, extra = {}) {
   const el = {
@@ -102,11 +136,17 @@ function makeElement(id, extra = {}) {
     type: "text",
     disabled: false,
     checked: false,
+    readOnly: false,
+    hidden: false,
+    tabIndex: -1,
+    dataset: {},
     style: {},
     attributes: {},
     //: Children parsed out of innerHTML. Only <input> is modelled: it is the
     //: only descendant the page reads back (see SELECTORS).
     children: [],
+    progressRegions: [],
+    __query: {},
     //: What a browser would give a laid-out, visible element. focusablesIn
     //: filters on it, so `null` here means "not focusable".
     offsetParent: {},
@@ -128,6 +168,7 @@ function makeElement(id, extra = {}) {
         if (byId.get(child.id) === child) byId.delete(child.id);
       });
       el.children = parseInputs(el.__html);
+      el.progressRegions = parseProgressRegions(el.__html);
       el.children.forEach((child) => byId.set(child.id, child));
     },
 
@@ -142,14 +183,27 @@ function makeElement(id, extra = {}) {
     setAttribute(name, value) {
       el.attributes[name] = String(value);
     },
+    removeAttribute(name) {
+      delete el.attributes[name];
+    },
     getAttribute: (name) => (name in el.attributes ? el.attributes[name] : null),
     focus() {
       el.__focused += 1;
       document.activeElement = el;
     },
+    select() {},
     contains: (node) => node === el || el.children.indexOf(node) !== -1 || (el.__focusables || []).indexOf(node) !== -1,
+    closest(selector) {
+      if (selector !== ".model") throw new Error(`unknown closest selector: ${selector}`);
+      return el.__model || null;
+    },
+    querySelector(selector) {
+      if (!PROGRESS_SELECTORS.has(selector)) throw new Error(`unknown element selector: ${selector}`);
+      return el.__query[selector] || null;
+    },
     querySelectorAll(selector) {
       if (selector === GATE_FOCUSABLE) return el.__focusables || [];
+      if (selector === '[data-model-progress]') return el.progressRegions;
 
       const match = SELECTORS[selector];
       if (!match) {
@@ -164,7 +218,15 @@ function makeElement(id, extra = {}) {
 
   el.__html = "";
   el.classList = makeClassList(el);
+  Object.defineProperty(el, "className", {
+    get: () => el.classList.toString(),
+    set: (value) => {
+      el.classList.__names.clear();
+      String(value).split(/\s+/).filter(Boolean).forEach((name) => el.classList.add(name));
+    },
+  });
   Object.assign(el, extra);
+  if (extra.attributes?.class) el.className = extra.attributes.class;
   return el;
 }
 
@@ -176,22 +238,42 @@ function makeElement(id, extra = {}) {
  * /\bchecked\b/ over the whole tag reads that as a ticked checkbox.
  */
 function parseInputs(html) {
-  return [...html.matchAll(/<input\b([^>]*)>/g)].map(([, attrs]) => {
+  const cards = [...html.matchAll(/<div\b([^>]*\bclass="model(?:\s[^"]*)?"[^>]*)>/g)].map((match, index, matches) => {
+    const card = makeElement("", initialAttributes(match[1]));
+    const body = html.slice(match.index, matches[index + 1]?.index);
+    const badge = /<span\b([^>]*\bclass="badge(?:\s[^"]*)?"[^>]*)>([^<]*)/.exec(body);
+    if (badge) card.__query[".badge"] = makeElement("", { ...initialAttributes(badge[1]), textContent: badge[2] });
+    return { index: match.index, card };
+  });
+  return [...html.matchAll(/<input\b([^>]*)>/g)].map((match) => {
+    const attrs = match[1];
     const quoted = (name) => {
       const found = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
       return found ? found[1] : "";
     };
-    const bare = attrs.replace(/[\w-]+\s*=\s*"[^"]*"/g, " ");
+    const card = cards.findLast((card) => card.index < match.index)?.card;
+    return makeElement(quoted("id"), { ...initialAttributes(attrs), __model: card });
+  });
+}
 
-    return makeElement(quoted("id"), {
-      type: quoted("type") || "text",
-      // Attribute to property once, at parse time, exactly as a browser does
-      // for the *initial* state. From then on the property is what counts,
-      // which is what makes toggleOptionalModel's `cb.checked = !cb.checked`
-      // mean anything here.
-      checked: /\bchecked\b/.test(bare),
-      disabled: /\bdisabled\b/.test(bare),
-    });
+/** The stable progress subtree is the only rendered non-input DOM we patch. */
+function parseProgressRegions(html) {
+  const regions = [...html.matchAll(/<div\b([^>]*\bdata-model-progress="[^"]*"[^>]*)>/g)];
+  return regions.map((match, index) => {
+    const region = makeElement("", initialAttributes(match[1]));
+    const body = html.slice(match.index, regions[index + 1]?.index);
+    for (const [, attrs, text] of body.matchAll(/<[a-z]+\b([^>]*)>([^<]*)/g)) {
+      const node = makeElement("", { ...initialAttributes(attrs), textContent: text });
+      for (const selector of PROGRESS_SELECTORS) {
+        const matches = selector === '[role="progressbar"]'
+          ? node.attributes.role === "progressbar"
+          : node.classList.contains(selector.slice(1));
+        if (matches && !region.__query[selector]) region.__query[selector] = node;
+      }
+    }
+    const bar = region.__query['[role="progressbar"]'];
+    if (bar) bar.__query[".progress-bar"] = region.__query[".progress-bar"];
+    return region;
   });
 }
 
@@ -204,7 +286,7 @@ const document = {
   getElementById(id) {
     if (byId.has(id)) return byId.get(id);
     if (!DECLARED.has(id)) return null;
-    byId.set(id, makeElement(id));
+    byId.set(id, makeElement(id, DECLARED.get(id)));
     return byId.get(id);
   },
   // Only the nodes the stub knows about are "on the page". Anything else is
@@ -263,6 +345,7 @@ const sandbox = {
   document,
   console,
   fetch: fetchStub,
+  AbortController,
   JSON,
   Math,
   String,
@@ -331,11 +414,16 @@ const source =
   `
 ;globalThis.__api = {
   requireTerms, reviewTerms, renderTermsDocument, updateTermsReadState,
+  initStorage, initSetupTabs, selectSetupTab, handlePrimaryAction, toggleMtlModel,
+  renderStatus: (data) => { currentStage = data.stage; renderStage(data); },
+  resetStage: () => { currentStage = 'mtl_selection'; },
+  storageReady: () => Boolean(storageReport?.ok),
   renderOptional, downloadOptional, toggleOptionalModel, handleOptionalCheckboxChange,
   initCopyrightGate, initTermsGate, settleTerms, onGateKeydown,
   OPTIONAL_BLURB,
   isTermsOpen: () => termsOpen,
   setGateMode: (mode) => { gateMode = mode; },
+  setStatusAvailable: () => { statusUnavailable = false; },
   el: (id) => document.getElementById(id),
 };`;
 
@@ -347,6 +435,9 @@ const api = sandbox.__api;
 // tested through the same path a real key press takes.
 api.initCopyrightGate();
 api.initTermsGate();
+api.initSetupTabs();
+// Component checks below bypass initialize() and its successful status poll.
+api.setStatusAvailable();
 
 const els = {
   gate: api.el("termsGate"),
@@ -416,6 +507,14 @@ function serve({ accepted = [], acceptReply, statusOk = false } = {}) {
 
   routes = {
     "/api/setup/status": { ok: statusOk, data: {} },
+    "/api/setup/storage/inspect": (call) => ({ data: {
+      ok: true,
+      path: call.body.path === "models" ? api.el("mtlStorage").dataset.defaultPath : call.body.path,
+      exists: true,
+      can_create: false,
+      error: "",
+    } }),
+    "/api/setup/download": { data: { status: "started", stage: "mtl" } },
     "/api/setup/terms/accept": (call) => {
       if (acceptReply) return acceptReply(call);
       call.body.ids.forEach((id) => accept.add(id));
@@ -460,6 +559,9 @@ function tickAcceptBox() {
 const postsTo = (url) => calls.filter((call) => call.url === url && call.method === "POST");
 
 function reset() {
+  api.setStatusAvailable();
+  api.resetStage();
+  api.selectSetupTab('optional');
   calls.length = 0;
   els.body.scrollTop = 0;
   els.chk.checked = false;
@@ -471,6 +573,27 @@ function reset() {
 function showErrors() {
   els.errorMsg.textContent = "";
 }
+
+// Run the real storage initialization/preflight used before MTL downloads.
+// Its controller, timeout wrapper and validation remain production code.
+serve();
+api.initStorage();
+await tick();
+check("the rendered storage path was validated", api.storageReady());
+check("the default folder is selected", api.el("storageDefault").checked);
+check("its absolute destination came from the server", api.el("storageResolvedPath").textContent === api.el("mtlStorage").dataset.defaultPath);
+
+console.log("\n--- model tabs ---");
+check("Required is the default selected tab", api.el("requiredTab").getAttribute("aria-selected") === "true");
+check("only its panel is initially visible", !api.el("requiredPanel").hidden && api.el("optionalPanel").hidden && api.el("mtlPanel").hidden);
+fire(api.el("requiredTab"), "keydown", { key: "ArrowRight" });
+check("ArrowRight activates and focuses Optional", !api.el("optionalPanel").hidden && document.activeElement === api.el("optionalTab"));
+check("the required action is hidden on Optional", api.el("primaryAction").hidden);
+fire(api.el("optionalTab"), "keydown", { key: "End" });
+check("End activates MTL", !api.el("mtlPanel").hidden && document.activeElement === api.el("mtlTab"));
+check("the prerequisite remains visible before required models finish", !api.el("tabPrerequisite").hidden);
+fire(api.el("mtlTab"), "keydown", { key: "Home" });
+check("Home returns to Required", !api.el("requiredPanel").hidden && document.activeElement === api.el("requiredTab"));
 
 // ---------------------------------------------------------------------------
 console.log("\n--- nothing left to ask ---");
@@ -808,14 +931,14 @@ check("but its href is left usable", html.includes('href="https://example.com/?a
 // ---------------------------------------------------------------------------
 console.log("\n--- the optional models section ---");
 
-function optionalBlock({ active = false, downloaded = [], accepted = [], current = null } = {}) {
+function optionalBlock({ active = false, downloaded = [], accepted = [], current = null, progress = {} } = {}) {
   const done = new Set(downloaded);
   const ok = new Set(accepted);
 
   return {
     active,
     current_model: current,
-    progress: {},
+    progress,
     models: [BUBBLE, TEXTSEG].map((doc) => ({
       id: doc.id,
       name: doc.name,
@@ -870,14 +993,29 @@ check(
   (els.optionalModels.innerHTML.match(/class="terms-peek"/g) || []).length === 1,
 );
 
-api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id }));
+const partialProgress = { phase: "downloading", current_file: "weights.gguf", current_bytes: 10, current_total: 100, bytes_done: 10, bytes_total: 0, files_done: 0, files_total: 1 };
+api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id, progress: { [TEXTSEG.id]: partialProgress } }));
 boxes = els.optionalModels.children;
 check("a running job locks every box", boxes.every((box) => box.disabled));
 check("and the button", els.optionalBtn.disabled === true);
 check("which says what it is doing", els.optionalBtn.textContent === "Downloading…", els.optionalBtn.textContent);
 
+const progressRegion = els.optionalModels.querySelectorAll('[data-model-progress]')[0];
+check("the active file exposes byte progress", progressRegion?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === "10");
+api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id, progress: { [TEXTSEG.id]: { ...partialProgress, current_bytes: 40, bytes_done: 40 } } }));
+check("a byte update keeps the existing model controls", els.optionalModels.children[1] === boxes[1]);
+check("and updates the existing progress region", els.optionalModels.querySelectorAll('[data-model-progress]')[0] === progressRegion && progressRegion?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === "40");
+api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id, progress: { [TEXTSEG.id]: { ...partialProgress, current_total: 0 } } }));
+check("unknown size removes the invented percentage", progressRegion?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === null);
+api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id, progress: { [TEXTSEG.id]: { ...partialProgress, current_bytes: 0, current_total: 150, transfer_bytes: 40, transfer_total: 100 } } }));
+check("native transferred bytes move before reconstructed bytes", progressRegion?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === "40");
+check("the native byte metric is labelled", progressRegion?.querySelector('.progress-bytes')?.textContent.startsWith("Transferred "));
+api.renderOptional(optionalBlock({ active: true, current: TEXTSEG.id, progress: { [TEXTSEG.id]: { ...partialProgress, current_file: "next.bin", current_bytes: 20 } } }));
+check("a file without native metrics returns to current-file bytes", progressRegion?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") === "20" && !progressRegion?.querySelector('.progress-bytes')?.textContent.includes("Transferred"));
+
 api.renderOptional({ models: [] });
-check("no optional models means no section", els.optionalSection.classList.contains("hidden"));
+check("an empty Optional tab explains that no models are configured", els.optionalModels.innerHTML.includes("No optional models are configured."));
+check("and offers no download action", els.optionalBtn.classList.contains("hidden"));
 
 // ---------------------------------------------------------------------------
 console.log("\n--- a download goes through the licences ---");
@@ -1006,6 +1144,41 @@ result = await api.requireTerms(["paddleocr-vl-1.6"], els.optionalBtn);
 check("a notice that will not load is not an acceptance", result === false);
 check("and the card stays shut", api.isTermsOpen() === false);
 check("the page says something", els.errorMsg.textContent.length > 0, els.errorMsg.textContent);
+
+// ---------------------------------------------------------------------------
+console.log("\n--- an MTL download keeps its validated destination ---");
+
+serve();
+reset();
+makeScrollable();
+api.renderStatus({
+  stage: "mtl_selection",
+  active: false,
+  required_models: [],
+  mtl_models: [{ ...BUBBLE, downloaded: false }],
+  optional: { models: [] },
+  progress: {},
+});
+api.selectSetupTab('mtl');
+api.toggleMtlModel(BUBBLE.id);
+const appliedFolder = api.el("mtlStorage").dataset.appliedPath;
+check("the selected MTL model can be downloaded", api.el("downloadBtn").disabled === false);
+
+download = api.handlePrimaryAction();
+await tick();
+check("the MTL licence opens before downloading", api.isTermsOpen() === true && postsTo("/api/setup/download").length === 0);
+check("the destination stays locked while reading the licence", ["storageDefault", "storageCustom", "mtlDir", "storageApplyBtn"].every((id) => api.el(id).disabled));
+
+scrollToEnd();
+tickAcceptBox();
+fire(els.accept, "click");
+await tick();
+await download;
+
+posts = postsTo("/api/setup/download");
+check("one MTL download starts", posts.length === 1);
+check("it uses the applied folder and selected model", posts.length === 1 && posts[0].body.mtl_dir === appliedFolder && JSON.stringify(posts[0].body.selected_mtl) === JSON.stringify([BUBBLE.id]), JSON.stringify(posts[0]?.body));
+check("the MTL acceptance is saved before its download", calls.findIndex((call) => call.url === "/api/setup/terms/accept") < calls.findIndex((call) => call.url === "/api/setup/download"));
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nthe licence gate holds and the optional section behaves");
 process.exit(failures ? 1 : 0);

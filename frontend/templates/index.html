@@ -2,6 +2,7 @@
 <html lang="en">
 
 <head>
+  <script type="module" src="/static/desktop-entry.js"></script>
   <meta charset="UTF-8">
   <title>Fox Reader</title>
   <link rel="stylesheet" href="/static/style.css">
@@ -82,7 +83,7 @@
     }
   </style>
   <script>
-    window.__FOX_CONFIG__ = { theme: "{{ initial_theme }}", layout: "{{ initial_layout }}", deeplAvailable: {{ deepl_available | default(false) | lower }}, jpdbAvailable: {{ jpdb_available | default(false) | lower }}, bubbleAvailable: {{ bubble_available | default(false) | lower }} };
+    window.__FOX_CONFIG__ = { theme: "{{ initial_theme }}", layout: "{{ initial_layout }}", deeplAvailable: {{ deepl_available | default(false) | lower }}, jpdbAvailable: {{ jpdb_available | default(false) | lower }}, bubbleAvailable: {{ bubble_available | default(false) | lower }}, imageRenderQuality: {{ image_render_quality_mode | default(1) | int }} };
   </script>
 </head>
 

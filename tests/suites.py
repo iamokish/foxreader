@@ -210,6 +210,8 @@ BACKEND = Domain(
         "test_config",
         "test_device_vl_slot",
         "test_folder_workspace",
+        "test_image_rendering",
+        "test_thumbnails",
         "test_hf_vendored",
         "test_models",
         "test_mtl_characters",
@@ -218,8 +220,11 @@ BACKEND = Domain(
         "test_ocr_engine",
         "test_ocr_routes",
         "test_setup_downloads",
+        "test_hub_progress",
+        "test_setup_storage",
         "test_session_service",
         "test_system_routes",
+        "test_updates",
         "test_typeset_layout",
         "test_symbol_fallbacks",
         "test_frontend_vs_backend_typeset",
@@ -296,7 +301,10 @@ BACKEND = Domain(
 # tests. The live scripts need an already compiled distribution.
 BUILD = Domain(
     name="build",
-    modules=("test_macos_build", "test_llamacpp_macos"),
+    modules=("test_macos_build", "test_llamacpp_macos", "test_release_manifest",
+             "test_webview_sdk", "test_desktop_packaging", "test_launcher",
+             "test_window_recovery_policy", "test_window_recovery",
+             "test_linux_browser_controller", "test_linux_terminal"),
     scripts=(
         Script(
             path="dist/cvcheck.py",

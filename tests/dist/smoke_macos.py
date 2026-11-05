@@ -81,7 +81,7 @@ def _clean_env() -> dict[str, str]:
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("DYLD_", "PYTHON", "FOX_READER_", "GGML_"))
            and key != "LLAMA_CPP_LIB_PATH"}
-    env["FOX_READER_NO_BROWSER"] = "1"
+    env["FOX_READER_CLI"] = "1"
     env["HF_HUB_OFFLINE"] = "1"
     return env
 
@@ -138,7 +138,7 @@ def _run(root: Path, *, gguf: bool, scratch: Path) -> None:
     log_path = scratch / "launcher.log"
     with log_path.open("wb") as log:
         process = subprocess.Popen(
-            [str(root / "launcher"), "--no-browser"], cwd=scratch, env=env,
+            [str(root / "launcher"), "--cli"], cwd=scratch, env=env,
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         children: set[int] = set()
