@@ -2192,6 +2192,7 @@
       } else {
         selectedOptionalIds.delete(id);
       }
+      syncSelectedCards(els.optionalModels, 'opt-', selectedOptionalIds, 'Not downloaded');
       updateOptionalButton();
     }
 
@@ -2265,6 +2266,7 @@
       } else {
         selectedMtlIds.delete(id);
       }
+      syncSelectedCards(els.mtlModels, 'mtl-', selectedMtlIds, 'Waiting');
       updateMtlButtons();
     }
 

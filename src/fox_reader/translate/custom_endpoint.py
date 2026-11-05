@@ -15,9 +15,8 @@ from fox_reader.models.responses import TranslationResult
 from fox_reader.translate._http import decompress_response, parse_json_response
 from fox_reader.translate.characters import (
     normalize_character_info,
-    normalize_character_links,
 )
-from fox_reader.translate.context import normalize_context
+from fox_reader.translate.context import normalize_context_with_links
 from fox_reader.user_endpoints import UserEndpoint
 
 logger = logging.getLogger(__name__)
@@ -309,17 +308,12 @@ def prepare_request(
     if endpoint.encrypts_request:
         text = _encrypt_text(endpoint, text)
 
-    pairs = normalize_context(context)
+    pairs, links = normalize_context_with_links(context, context_character_links)
 
     try:
         characters = list(normalize_character_info(character_info).values())
     except Exception:
         characters = []
-
-    try:
-        links = normalize_character_links(context_character_links, len(pairs))
-    except Exception:
-        links = [None] * len(pairs)
 
     if endpoint.encrypts_request and pairs:
         pairs = _encrypt_pairs(endpoint, pairs)

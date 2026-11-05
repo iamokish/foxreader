@@ -149,7 +149,7 @@ PACKAGE_DATA = (
 #: device (see packaging/llamacpp.py) -- so `--no-gguf`, or a build host with no
 #: toolchain, leaves it absent and everything below has to cope with that. The
 #: import that reaches it is inside a function
-#: (`translate.machine_translation.gemma_e4b_q8_llamacpp._import_llama_cpp`), and
+#: (`translate.machine_translation.gemma_e4b_llamacpp._import_llama_cpp`), and
 #: naming the package here rather than leaning on that keeps the pieces it only
 #: reaches lazily -- the chat-format handlers, the tokenizer shims -- in the
 #: bundle too.

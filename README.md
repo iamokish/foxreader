@@ -56,8 +56,8 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 ### Translate
 
 - Built-in buttons per language: DeepL (`/translate/deepl`, JA/ZH/KO), JPDB (`/translate/jpdb`), local MTL (`/translate/ml`), plus user-defined custom endpoints (`/translate/custom`).
-- Local MTL models: Gemma Q6/Q8 (JA/KO/ZH, GGUF via llama.cpp), VNTL Llama-3 8B (JA-EN with translation context + character roster).
-- Auto-translate switch, translation context (previous pairs for context-aware models), character/speaker metadata for VNTL models, custom endpoint editor with preview/test/activate.
+- Local MTL models: Gemma E4B Q6/Q8, Qwen3.5 9B Q6_K/Q8_0 and 4B Q8_0 (JA/KO/ZH), VNTL Llama-3 8B v2 Q5_K_M/Q8_0 (JA-EN), all GGUF via llama.cpp.
+- Auto-translate switch, translation context and character/speaker metadata for all local models, custom endpoint editor with preview/test/activate.
 
 ### Entries & typesetting
 
@@ -78,7 +78,7 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 ### Productivity
 
 - Split flow: draw a cut across a region to divide it; pieces inherit styling and slot.
-- Characters roster (VNTL speaker tags) with CSV import/export.
+- Characters roster with CSV import/export and speaker attribution for all local models.
 - Layouts (`basic` / `vulpes`), dark/light themes.
 - Vulpes layout: pages rail + canvas + editor, resizable sections, entry actions in the footer.
 - Reader mode (both layouts, in each one's colours): single page, double-page spread (reading-direction aware; cover and landscape pages stand alone), continuous vertical scroll with an adjustable gap, and a before/after comparison of the original against the typeset copy. Centred page-turn arrows, and the whole overlay hides itself once the pointer goes still.
@@ -228,10 +228,56 @@ Switching method never loses tuning: `speed`/`tta`/`tile` ride along so toggling
 |---|---|---|
 | DeepL | `POST /translate/deepl` | Needs API token in Settings; buttons hidden until `/api/translate/status` allows; `:fx` keys use the free host |
 | JPDB | `POST /translate/jpdb` | Japanese parser API, token in Settings |
-| Local MTL | `POST /translate/ml` | Gemma Q6/Q8 (JA/KO/ZH, GGUF); VNTL Llama-3 8B (JA-EN, context + characters). Load/unload + VRAM check via `/ml/*` |
+| Local MTL | `POST /translate/ml` | Gemma E4B Q6/Q8 and Qwen3.5 9B Q6_K/Q8_0, 4B Q8_0 (JA/KO/ZH); VNTL Llama-3 8B v2 Q5_K_M/Q8_0 (JA-EN). All support context + characters. Load/unload + memory check via `/ml/*` |
 | Custom | `POST /translate/custom` | User-templated endpoints (editor at `/user_endpoints`, preview/test/activate per language) |
 
 Context pairs and character links ride only on MTL/custom requests, gated by the Context/Characters switches.
+
+### Local translation models
+
+Choose and download models from `/setup`, accepting each model's terms before
+its download. Select the model per source language in `/settings`. All translate
+into English; Japanese, Chinese and Korean are abbreviated JA, ZH and KO below.
+
+| Model | Quantisation | Source languages | Download size | Upstream terms |
+|---|---|---|---|---|
+| [Gemma 4 E4B Uncensored (Aggressive)](https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive) | Q8_K_P | JA/ZH/KO | 7.6 GiB | Gemma Terms of Use |
+| Gemma 4 E4B Uncensored (Aggressive) | Q6_K_P | JA/ZH/KO | 5.8 GiB | Gemma Terms of Use |
+| [VNTL Llama3 8B v2](https://huggingface.co/lmg-anon/vntl-llama3-8b-v2-gguf) | Q8_0 | JA | 8.0 GiB | Llama 3 Community License |
+| VNTL Llama3 8B v2 | Q5_K_M | JA | 5.3 GiB | Llama 3 Community License |
+| [Qwen3.5 9B Uncensored (Aggressive)](https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive) | Q6_K | JA/ZH/KO | 6.9 GiB | Apache 2.0 |
+| Qwen3.5 9B Uncensored (Aggressive) | Q8_0 | JA/ZH/KO | 8.9 GiB | Apache 2.0 |
+| [Qwen3.5 4B Uncensored (Aggressive)](https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive) | Q8_0 | JA/ZH/KO | 4.2 GiB | Apache 2.0 |
+
+Gemma and Qwen receive earlier translations, character names, aliases, gender
+and speaker attribution through the translation prompt. Both VNTL quants use
+the model's trained metadata and dialogue format. The additional fields are
+optional: requests containing only the new text work for every model, including
+when there is no earlier context. Enable **Characters** and assign a speaker to
+an entry to identify who is speaking; the roster can also guide names mentioned
+in dialogue.
+
+When prompts are full, Gemma and Qwen discard unused roster entries before
+older context, while keeping the current speaker. This trims only the request;
+the roster itself is unchanged. The CSV/API fields `name_ja` and `alias_ja`
+retain their existing names and hold the original-language name and alias for
+Chinese and Korean too; the roster editor labels them **Name (original)** and
+**Alias (original)**.
+
+Qwen runs in non-thinking mode for direct text translation. Fox Reader downloads
+only the selected text GGUF; no vision encoder (`mmproj`) is needed. Each model's
+**Context Window** in `/settings` defaults to **8192** tokens. Gemma and Qwen
+also offer **16384**; both VNTL quants stay at their trained **8192** limit.
+Changes take effect the next time that model is loaded. The selected size must
+fit the actual GGUF's declared limit. The 16384 option adds an estimated
+384 MiB of RAM/VRAM for cache and working buffers; model weights keep the same size.
+The window includes the prompt and reply; translation drops older context when
+space is needed and reserves up to 1024 tokens for the reply.
+RAM/VRAM requirements shown as **estimates** for the new
+VNTL Q5 and Qwen variants include runtime overhead and are not benchmarked peaks;
+actual usage varies with the backend and text. Download size is not a memory
+requirement. See the [GGUF backend guide](docs/llama-cpp-python.md) for builds and
+device support.
 
 ## Custom Endpoints (User Translation APIs)
 
@@ -382,7 +428,7 @@ On-disk state (repo root, gitignored except `fox_config.yaml`):
 - `config/settings.yaml` — `mtl_defaults` per language (`japanese/korean/chinese`), `devices` (`paddleocr/paddleocr_vl/bubble/translator/textseg: auto|<device>`, `mtl_threads`), `deepl_api_token` / `jpdb_api_token`, `ocr_engine: paddleocr|paddleocr-vl`.
 - `config/user_endpoints.yaml` — custom translation endpoints.
 - `config/workspaces.yaml` — panel layout sizes.
-- `models/` — weights (bubble `model.safetensors`, PaddleOCR det/rec + VL GGUF, manga seg safetensors, MTL Gemma/VNTL). Downloaded once via `/setup`; each completed download touches a `_completed` marker.
+- `models/` — weights (bubble `model.safetensors`, PaddleOCR det/rec + VL GGUF, manga seg safetensors, MTL Gemma/VNTL/Qwen). Downloaded once via `/setup`; each completed download touches a `_completed` marker.
 - `fonts/` — your `.ttf`/`.otf` faces (scanned + cached in `.fonts_cache.json`); ComicMono and NotoSansSymbols2 are bundled. `NotoSansSymbols2` is a render-time per-glyph fallback, never listed. Guide (adding faces, symbol fallbacks, licensing): [`/FONT.md`](/FONT.md).
 - `cache/` — scratch previews/masks; cleared at startup and shutdown.
 
@@ -391,7 +437,7 @@ Pages:
 - `/setup` — first-run wizard: required + MTL download state, per-file progress, optional OCR-VL side job, finish/close.
 - `/settings` — devices (per-slot AUTO + thread count), per-language MTL defaults, API tokens (validated), OCR engine switch.
 - `/user_endpoints` — custom endpoint CRUD, mustache-style preview, test call, per-language activation.
-- Characters modal — VNTL speaker roster CRUD + CSV import/export; entry Speaker select tags `character_id`.
+- Characters modal — speaker roster CRUD + CSV import/export for all local models; entry Speaker select tags `character_id`.
 
 ## Environment Variables
 
@@ -648,7 +694,7 @@ Pages → [folder] → gallery
 
 - OCR: [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (classic + VL)
 - Detection: PyTorch bubble segmentation (SafeTensors) + OpenCV (`opencv-contrib-python`)
-- Local MT: Gemma / VNTL via [llama.cpp](https://github.com/ggerganov/llama.cpp) (`llama-cpp-python`)
+- Local MT: Gemma / VNTL / Qwen via [llama.cpp](https://github.com/ggerganov/llama.cpp) (`llama-cpp-python`)
 - Online MT: [DeepL API](https://www.deepl.com/pro-api) (official v2 client), [JPDB](https://jpdb.io/) (official v1 client); custom user endpoints supported
 - Packaging: [Nuitka](https://nuitka.net/), Vite, Preact, Hugging Face Hub, FastAPI/Uvicorn, Pydantic
 - Fonts: ComicMono (bundled fallback) + NotoSansSymbols2 (render-time symbol fallback) — see `fonts/` licences

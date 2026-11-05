@@ -209,7 +209,9 @@ export async function pageCapture(deps: PageTlDeps): Promise<void> {
                     translator.endpoint === "/translate/ml" || translator.endpoint === "/translate/custom";
                 const context = sendsLists && state.isContextEnabled ? buildTranslationContext(entry.id) : undefined;
                 const built =
-                    sendsLists && state.isCharactersEnabled ? buildTranslationCharacters(entry.id) : undefined;
+                    sendsLists && state.isCharactersEnabled
+                        ? buildTranslationCharacters(entry.id, !!context?.length)
+                        : undefined;
                 const extras = built && (built.character_info.length || built.meta_id) ? built : undefined;
                 const result = extras
                     ? await api.translate(

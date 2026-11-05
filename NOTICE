@@ -266,10 +266,22 @@ own terms regardless of §0.
   Use (license id: gemma). Must be accepted; prohibited uses apply;
   downstream distributions must carry the terms. Uncensoring removes no base
   obligation.
-* VNTL Llama-3 8B v2 Q8 (lmg-anon/…) — CUSTOM Llama 3 Community License
+* VNTL Llama-3 8B v2 Q8_0/Q5_K_M (lmg-anon/…) — CUSTOM Llama 3 Community License
   (license id: llama3). Commercial use generally allowed subject to the
   Acceptable Use Policy, derivative attribution, and an extra Meta license
   above 700M monthly active users.
+  https://huggingface.co/lmg-anon/vntl-llama3-8b-v2-gguf
+* Qwen3.5 9B Q6_K/Q8_0 and 4B Q8_0 Uncensored (Aggressive), published by
+  HauhauCS — Apache License 2.0 declared by both the modified-model cards
+  and the Qwen3.5 base-model cards. Commercial use, modification and
+  redistribution are permitted subject to the license: retain applicable
+  copyright, license and attribution notices and mark modifications.
+  No warranty; "uncensored" grants no rights to other people's content.
+  https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive
+  https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive
+  Base licenses:
+  https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE
+  https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE
 
 4. TRAINING-DATA TERMS (bind models trained on them — and you, using them)
 --------------------------------------------------------------------------------
@@ -290,7 +302,8 @@ own terms regardless of §0.
 --------------------------------------------------------------------------------
 A paid/commercial Fox Reader offering MUST EXCLUDE the Manga109-lineage
 weights (bubble, text-seg) unless separate rights are obtained.
-Gemma/VNTL may be included subject to their own Terms. A commercial license
+Gemma/VNTL may be included subject to their own Terms; Qwen3.5 may be included
+subject to Apache License 2.0. A commercial license
 from the holder covers Fox Reader's own code ONLY — never third-party
 weights, data, fonts or libraries.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from .device import AUTO_THREADS
 from .device import SLOTS as DEVICE_SLOTS
 from .device import normalize_id as normalize_device_id
 from .device import normalize_threads as normalize_thread_count
+from .translate.context_window import DEFAULT_CONTEXT_SIZE, context_size_options
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,22 @@ def _normalize_language(value: Any, field_name: str = "language") -> str:
         )
 
     return value
+
+
+def _validate_mtl_context_size(
+    model_id: object, value: object, *, model_path: Path | str | None = None,
+) -> tuple[str, int]:
+    """Strict update validation; saved optional preferences use this per entry."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError("model_id must be a known MTL model ID")
+    model_id = model_id.strip()
+    options = context_size_options(model_id, model_path)
+    if not options:
+        raise ValueError("These model weights cannot support the minimum 8192-token context window.")
+    if type(value) is not int or value not in options:
+        choices = ", ".join(str(option) for option in options)
+        raise ValueError(f"context_size for {model_id} must be one of: {choices}")
+    return model_id, value
 
 
 class MTLDefaults(BaseModel):
@@ -218,6 +236,8 @@ class FoxSettings(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     mtl_defaults: MTLDefaults = Field(default_factory=MTLDefaults)
+    #: Per-model preferences are read only when creating a native context.
+    mtl_context_sizes: dict[str, int] = Field(default_factory=dict)
     devices: DeviceSettings = Field(default_factory=DeviceSettings)
     fonts: FontSettings = Field(default_factory=FontSettings)
     deepl_api_token: str = ""
@@ -228,6 +248,22 @@ class FoxSettings(BaseModel):
     #: are present (see OCRService fallback), so an old or hand-edited file
     #: can never break startup.
     ocr_engine: str = Field(default="paddleocr")
+
+    @field_validator("mtl_context_sizes", mode="before")
+    @classmethod
+    def normalize_mtl_context_sizes(cls, value: object) -> dict[str, int]:
+        if not isinstance(value, dict):
+            logger.warning("Ignoring malformed optional MTL context-size preferences")
+            return {}
+        cleaned: dict[str, int] = {}
+        for model_id, context_size in value.items():
+            try:
+                key, size = _validate_mtl_context_size(model_id, context_size)
+            except ValueError as exc:
+                logger.warning("Ignoring invalid saved MTL context size: %s", exc)
+                continue
+            cleaned[key] = size
+        return cleaned
 
     @field_validator("fonts", mode="before")
     @classmethod
@@ -270,6 +306,7 @@ class SettingsManager:
     """
 
     def __init__(self, config_root: Path):
+        self._lock = threading.RLock()
         self.config_root = Path(config_root)
         self.settings_path = self.config_root / DEFAULT_SETTINGS_FILENAME
         self.settings: FoxSettings | None = None
@@ -357,9 +394,12 @@ class SettingsManager:
                     logger.debug("Could not remove temporary settings file %s", temporary)
 
     def _ensure_loaded(self) -> FoxSettings:
-        if self.settings is None:
-            return self.load()
-        return self.settings
+        # Runtime readers run on worker threads. Do not expose a replacement
+        # until its save succeeded (or the previous snapshot was restored).
+        with self._lock:
+            if self.settings is None:
+                return self.load()
+            return self.settings
 
     def _replace(self, **changes: Any) -> FoxSettings:
         """Rebuild the settings with some blocks swapped out, and persist.
@@ -369,21 +409,34 @@ class SettingsManager:
         is how the API tokens used to disappear whenever an MTL default was
         picked.
         """
-        settings = self._ensure_loaded()
-
-        self.settings = FoxSettings.model_validate({**settings.model_dump(), **changes})
-        try:
-            self.save()
-        except OSError:
-            self.settings = settings
-            raise
-
-        return self.settings
+        with self._lock:
+            settings = self._ensure_loaded()
+            self.settings = FoxSettings.model_validate({**settings.model_dump(), **changes})
+            try:
+                self.save()
+            except OSError:
+                self.settings = settings
+                raise
+            return self.settings
 
     def get_default_model(self, language: str) -> str | None:
         language = _normalize_language(language)
         settings = self._ensure_loaded()
         return getattr(settings.mtl_defaults, language)
+
+    def get_mtl_context_size(self, model_id: str) -> int:
+        """The saved preference, independent of any currently loaded model."""
+        return self._ensure_loaded().mtl_context_sizes.get(model_id, DEFAULT_CONTEXT_SIZE)
+
+    def update_mtl_context_size(
+        self, model_id: object, context_size: object, *, model_path: Path | str | None = None,
+    ) -> FoxSettings:
+        """Save one strict preference without loading or unloading a model."""
+        model_id, context_size = _validate_mtl_context_size(model_id, context_size, model_path=model_path)
+        with self._lock:
+            sizes = dict(self._ensure_loaded().mtl_context_sizes)
+            sizes[model_id] = context_size
+            return self._replace(mtl_context_sizes=sizes)
 
     def get_defaults(self) -> dict[str, str | None]:
         settings = self._ensure_loaded()

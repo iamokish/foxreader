@@ -263,18 +263,19 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
                 </div>
 
                 <p class="ch-hint">
-                    Roster for VNTL speaker tags. Ids assign on add/import; entries pointing at a removed character fall
-                    back to none. Nothing is saved to disk -- export a CSV to keep a copy.
+                    Character names and speakers help all local translation models stay consistent, even with Context
+                    off. Removing a character clears its speaker assignments. Export a CSV to keep your roster after a
+                    restart.
                 </p>
 
                 {error && <p class="ch-error">{error}</p>}
 
                 <div class="ch-add">
                     {field(draft.name_en ?? "", "Name (EN)", "add", "name_en")}
-                    {field(draft.name_ja ?? "", "Name (JA)", "add", "name_ja")}
+                    {field(draft.name_ja ?? "", "Name (original)", "add", "name_ja")}
                     {genderSelect(draft.gender ?? "", "add")}
                     {field(draft.alias_en ?? "", "Alias (EN)", "add", "alias_en")}
-                    {field(draft.alias_ja ?? "", "Alias (JA)", "add", "alias_ja")}
+                    {field(draft.alias_ja ?? "", "Alias (original)", "add", "alias_ja")}
                     <button type="button" class="ch-btn is-primary" disabled={adding} onClick={() => void doAdd()}>
                         {adding ? "Adding…" : "Add"}
                     </button>
@@ -293,10 +294,10 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
                                 {editing ? (
                                     <>
                                         {field(editDraft.name_en ?? "", "Name (EN)", "edit", "name_en")}
-                                        {field(editDraft.name_ja ?? "", "Name (JA)", "edit", "name_ja")}
+                                        {field(editDraft.name_ja ?? "", "Name (original)", "edit", "name_ja")}
                                         {genderSelect(editDraft.gender ?? "", "edit")}
                                         {field(editDraft.alias_en ?? "", "Alias (EN)", "edit", "alias_en")}
-                                        {field(editDraft.alias_ja ?? "", "Alias (JA)", "edit", "alias_ja")}
+                                        {field(editDraft.alias_ja ?? "", "Alias (original)", "edit", "alias_ja")}
                                         <span class="ch-actions">
                                             <button
                                                 type="button"

@@ -357,7 +357,7 @@ export function Toolbar({ showFolderNav = true }: ToolbarProps) {
                 <button
                     id="charactersBtn"
                     type="button"
-                    title="Manage characters (speaker metadata for VNTL models)"
+                    title="Manage character names and speakers for translation"
                     aria-label="Characters"
                     hidden={!charactersEnabled}
                     style={{ display: charactersEnabled ? "" : "none" }}

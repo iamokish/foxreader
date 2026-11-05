@@ -215,7 +215,15 @@ BACKEND = Domain(
         "test_hf_vendored",
         "test_models",
         "test_mtl_characters",
+        "test_mtl_catalog",
         "test_mtl_context",
+        "test_mtl_context_window",
+        "test_mtl_context_runtime",
+        "test_mtl_settings",
+        "test_mtl_prompt",
+        "test_mtl_lifecycle",
+        "test_gemma_mtl",
+        "test_qwen_mtl",
         "test_ocr_colors",
         "test_ocr_engine",
         "test_ocr_routes",
@@ -290,8 +298,6 @@ BACKEND = Domain(
         Script(
             path="manual/smoke_gemma_gguf.py",
             why="the Gemma GGUF loader and its quantisation choices",
-            xfail="imports GEMMA_E4B_MODEL_DIR, which is now GEMMA_E4B_Q6_MODEL_DIR -- "
-                  "the constant was renamed and this script was never run again.",
         ),
     ),
 )

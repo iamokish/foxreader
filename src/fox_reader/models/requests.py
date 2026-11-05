@@ -103,7 +103,7 @@ class TranslationRequest(BaseModel):
     # models that do not render it.
     context: list[list[str]] | None = None
 
-    # Character metadata for models that render it (VNTL). All optional so
+    # Character metadata for local models and custom endpoints. All optional so
     # older pages keep working; the backend ignores them for models without
     # character support, and degrades gracefully (tags dropped, never a 422)
     # when they are malformed.

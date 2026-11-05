@@ -75,14 +75,14 @@ export interface TranslationRequest {
     lang_group?: string;
     /**
      * Earlier [[source, english], ...] pairs in reading order, sent only for
-     * the local MTL endpoint when the Context switch is on. The backend uses
-     * them solely when the loaded model renders context.
+     * local MTL and custom endpoints when the Context switch is on. Custom
+     * endpoints use them when their request schema includes a Context node.
      */
     context?: [string, string][];
     /**
-     * Character metadata for models that render it (VNTL). Sent only for the
-     * local MTL endpoint when the Characters switch is on; ignored by every
-     * other model. `character_info` is the roster snapshot,
+     * Character metadata for local MTL and custom endpoints when the Characters
+     * switch is on, independently of Context. Custom endpoints use it when
+     * configured in their request schema. `character_info` is the roster snapshot,
      * `context_character_links` aligns to `context` by position (one meta_id
      * or null per pair), and `meta_id` names the speaker of `text`.
      */

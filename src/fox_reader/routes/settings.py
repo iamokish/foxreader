@@ -6,11 +6,18 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from fox_reader import assets
-from fox_reader.constants import MTL_MODELS, mtl_model_downloaded
+from fox_reader.constants import MTL_MODELS, mtl_model, mtl_model_downloaded
 from fox_reader.device import AUTO_THREADS, CPU, physical_cores, thread_count, thread_override
 from fox_reader.device import SLOTS as DEVICE_SLOTS
 from fox_reader.device import snapshot as device_snapshot
 from fox_reader.settings import SUPPORTED_MTL_LANGUAGES
+from fox_reader.translate.context_window import (
+    CONTEXT_SIZE_OPTIONS,
+    DEFAULT_CONTEXT_SIZE,
+    context_size_options,
+    model_context_limit,
+    resolve_context_size,
+)
 
 router = APIRouter(tags=["settings"])
 templates = assets.templates()
@@ -49,10 +56,60 @@ def _serialize_available_models(mtl_dir: Path) -> list[dict]:
     ]
 
 
-def _build_settings_payload(request: Request) -> dict:
+def _context_model_path(request: Request, model_id: str) -> Path | None:
+    model = mtl_model(model_id)
+    if model is None:
+        return None
+    return Path(request.app.state.mtl_dir) / model["dest"] / model["files"][0]
+
+
+def _running_mtl_status(request: Request) -> dict:
+    """Read an advisory snapshot without taking the native generation lock."""
+    service = getattr(request.app.state, "translate", None)
+    try:
+        status = service.ml_context_status() if service is not None else {}
+    except Exception:
+        return {}
+    return status if isinstance(status, dict) else {}
+
+
+def _build_context_payload(request: Request, model_id: str, running_status: dict | None = None) -> dict:
+    try:
+        selected = request.app.state.settings.get_mtl_context_size(model_id)
+    except Exception:
+        selected = DEFAULT_CONTEXT_SIZE
+    if type(selected) is not int or selected not in CONTEXT_SIZE_OPTIONS:
+        selected = DEFAULT_CONTEXT_SIZE
+    path = _context_model_path(request, model_id)
+    options = context_size_options(model_id, path)
+    effective = resolve_context_size(model_id, selected, path) if options else None
+    status = running_status if isinstance(running_status, dict) else {}
+    running = None
+    if status.get("loaded", True) and status.get("model_id") == model_id:
+        value = status.get("context_size")
+        if type(value) is int and value > 0:
+            running = value
+    payload = {
+        "selected": selected,
+        "effective": effective,
+        "max": model_context_limit(model_id, path),
+        "options": options,
+        "running": running,
+        "pending": running is not None and effective is not None and running != effective,
+    }
+    if not options:
+        payload["error"] = "These model weights cannot support the minimum 8192-token context window."
+    return payload
+
+
+def _build_settings_payload(request: Request, *, mtl_status: dict | None = None) -> dict:
     settings_mgr = request.app.state.settings
     mtl_dir = request.app.state.mtl_dir
     models = _serialize_available_models(mtl_dir)
+    if mtl_status is None:
+        mtl_status = _running_mtl_status(request)
+    for model in models:
+        model["context"] = _build_context_payload(request, model["id"], mtl_status)
 
     # Startup already did this, but a model can be downloaded or deleted while
     # the app is running. Re-settling here keeps the page showing a value that
@@ -213,6 +270,28 @@ async def settings_page(request: Request):
 
 @router.get("/api/settings")
 async def get_settings(request: Request):
+    return JSONResponse(_build_settings_payload(request))
+
+
+@router.put("/api/settings/mtl-context")
+async def update_mtl_context(request: Request):
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "Expected a JSON object"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {"model_id", "context_size"}:
+        return JSONResponse({"error": "Expected model_id and context_size"}, status_code=400)
+    model_id = body["model_id"]
+    if not isinstance(model_id, str):
+        return JSONResponse({"error": "model_id must be a string"}, status_code=400)
+    try:
+        request.app.state.settings.update_mtl_context_size(
+            model_id, body["context_size"], model_path=_context_model_path(request, model_id.strip()),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except OSError:
+        return JSONResponse({"error": "Could not save model context settings"}, status_code=500)
     return JSONResponse(_build_settings_payload(request))
 
 

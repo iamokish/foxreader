@@ -466,6 +466,71 @@ _GEMMA_Q6 = {
     "name": "Gemma 4 E4B Q6 Uncensored (Aggressive)",
 }
 
+_VNTL_Q5 = {
+    **next(doc for doc in _DOCUMENTS if doc["id"] == "vntl-llama3-8b-v2"),
+    "id": "vntl-llama3-8b-v2-q5-k-m",
+    "name": "VNTL Llama3 8B v2 Q5_K_M",
+}
+
+
+def _qwen_document(model_id: str, size: str, quant: str) -> dict:
+    """Each Qwen download has its own acceptance, with its own upstream links."""
+    repo = f"HauhauCS/Qwen3.5-{size}-Uncensored-HauhauCS-Aggressive"
+    base = f"Qwen/Qwen3.5-{size}"
+    return {
+        "id": model_id,
+        "name": f"Qwen3.5 {size} {quant} Uncensored (Aggressive)",
+        "licence": "Apache License 2.0",
+        "lede": (
+            "HauhauCS publishes these modified Qwen3.5 weights under Apache "
+            "License 2.0. The upstream Qwen base model uses the same licence. "
+            "Commercial use, modification and redistribution are permitted "
+            "subject to the licence's conditions."
+        ),
+        "sections": [
+            _APACHE_2,
+            {
+                "heading": "Third-party modification and translation",
+                "paragraphs": [
+                    "The Aggressive variant is a third-party modification "
+                    "advertised as removing refusals. That description grants "
+                    "no rights to other people's content and does not remove "
+                    "your obligations under the licence or Fox Reader's "
+                    "Terms of Use.",
+                    "Fox Reader uses the text model for Japanese, Chinese and "
+                    "Korean translation into English. Conversation context and "
+                    "character names can guide its prompt when supplied. "
+                    "Translations may be wrong; verify anything that matters "
+                    "(TERMS.md §8).",
+                ],
+                "bullets": [],
+            },
+            _YOUR_RESPONSIBILITY,
+        ],
+        "links": [
+            {
+                "label": "Apache License 2.0",
+                "url": "https://www.apache.org/licenses/LICENSE-2.0",
+            },
+            {
+                "label": f"Model card — {repo}",
+                "url": f"https://huggingface.co/{repo}",
+            },
+            {
+                "label": f"Base model licence — {base}",
+                "url": f"https://huggingface.co/{base}/blob/main/LICENSE",
+            },
+        ],
+        "accept_label": "I accept the Apache License 2.0 conditions for these weights.",
+    }
+
+
+_QWEN_DOCUMENTS = (
+    _qwen_document("qwen3.5-9b-q6-k-uncensored", "9B", "Q6_K"),
+    _qwen_document("qwen3.5-9b-q8-0-uncensored", "9B", "Q8_0"),
+    _qwen_document("qwen3.5-4b-q8-0-uncensored", "4B", "Q8_0"),
+)
+
 
 def _fingerprint(document: dict) -> str:
     """A short stable hash of everything the user is shown.
@@ -488,7 +553,7 @@ def _fingerprint(document: dict) -> str:
 #: for no reason.
 DOCUMENTS: dict[str, dict] = {}
 
-for _doc in (*_DOCUMENTS, _GEMMA_Q6):
+for _doc in (*_DOCUMENTS, _GEMMA_Q6, _VNTL_Q5, *_QWEN_DOCUMENTS):
     DOCUMENTS[_doc["id"]] = {**_doc, "version": _fingerprint(_doc)}
 
 del _doc

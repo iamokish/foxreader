@@ -50,11 +50,14 @@ export function buildTranslationContext(targetEntryId: string | null | undefined
  * Returns the roster snapshot plus per-turn speaker links aligned to the
  * pairs {@link buildTranslationContext} produced, and the target's own
  * speaker. Unknown/deleted ids read as null (no tag) rather than throwing,
- * and an empty roster or a target with no speaker yields empty links plus a
- * null `meta_id` -- the backend then translates untagged, exactly like
- * context-off. Callers gate on `state.isCharactersEnabled` themselves.
+ * and a target with no speaker still carries the roster for name consistency.
+ * When context is disabled, only the roster and target speaker are sent.
+ * Callers gate on `state.isCharactersEnabled` themselves.
  */
-export function buildTranslationCharacters(targetEntryId: string | null | undefined): {
+export function buildTranslationCharacters(
+    targetEntryId: string | null | undefined,
+    includeContext = true,
+): {
     character_info: CharacterInfo[];
     context_character_links: (string | null)[];
     meta_id: string | null;
@@ -78,7 +81,7 @@ export function buildTranslationCharacters(targetEntryId: string | null | undefi
     // Links align to the surviving pairs (same skip rules as the pairs: only
     // visible entries with both sides, strictly before the target).
     const links: (string | null)[] = [];
-    for (let i = 0; i < target; i++) {
+    for (let i = 0; includeContext && i < target; i++) {
         const entry = entries[i];
         if (!entry || !entry.visible) continue;
         const source = (entry.ocr_text ?? "").trim();

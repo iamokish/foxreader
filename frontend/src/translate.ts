@@ -148,7 +148,7 @@ export function runTranslatorButton(btn: HTMLElement): void {
             : undefined;
     const characters =
         sendsContext && appState.isCharactersEnabled
-            ? buildTranslationCharacters(appState.currentlySelectedEntryId)
+            ? buildTranslationCharacters(appState.currentlySelectedEntryId, !!context?.length)
             : undefined;
     const extras = characters && (characters.character_info.length || characters.meta_id) ? characters : undefined;
     executeTranslationPipeline(

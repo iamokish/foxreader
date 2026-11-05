@@ -1,4 +1,4 @@
-"""Character metadata for the VNTL-style MTL models.
+"""Character metadata for local translation models and custom endpoints.
 
 The roster lives only in memory on the backend: nothing is written to disk by
 this module. The frontend offers CSV import/export, and the user re-imports the
@@ -54,6 +54,15 @@ _CONTROL_MARKERS = (
     "<|start_header_id|>",
     "<|end_header_id|>",
     "<|eot_id|>",
+    "<|im_start|>",
+    "<|im_end|>",
+    "<|endoftext|>",
+    "<start_of_turn>",
+    "<end_of_turn>",
+    "<|turn>",
+    "<turn|>",
+    "<think>",
+    "</think>",
     "<<START>>",
     "<<JAPANESE>>",
     "<<ENGLISH>>",

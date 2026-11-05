@@ -45,17 +45,34 @@ GEMMA_E4B_Q6_MODEL_DIR = "mtl/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6"
 GEMMA_E4B_Q6_MODEL_FILE = "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf"
 VNTL_LLAMA3_MODEL_DIR = "mtl/vntl-llama3-8b-v2-gguf"
 VNTL_LLAMA3_MODEL_FILE = "vntl-llama3-8b-v2-hf-q8_0.gguf"
+VNTL_LLAMA3_Q5_MODEL_DIR = "mtl/vntl-llama3-8b-v2-gguf-Q5_K_M"
+VNTL_LLAMA3_Q5_MODEL_FILE = "vntl-llama3-8b-v2-hf-q5_k_m.gguf"
+QWEN35_9B_Q6_MODEL_DIR = "mtl/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K"
+QWEN35_9B_Q6_MODEL_FILE = "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K.gguf"
+QWEN35_9B_Q8_MODEL_DIR = "mtl/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q8_0"
+QWEN35_9B_Q8_MODEL_FILE = "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf"
+QWEN35_4B_Q8_MODEL_DIR = "mtl/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0"
+QWEN35_4B_Q8_MODEL_FILE = "Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf"
 
 # Model metadata shown to users on the setup page.
 #
 # Fill in any "Not specified" values with the exact figures/details you want
 # users to see. Keeping these values here makes adding another MTL model easy.
 #
-# `cpu_ram_mib` and `gpu_vram_mib` are the measured peak footprint of a loaded
-# model. They are the figures the loader gates on (see
+# `cpu_ram_mib` and `gpu_vram_mib` are the loaded model's memory requirements.
+# Existing figures are measured; new variants use conservative estimates of
+# weights + cache/runtime overhead, identified by `memory_estimated`. They are
+# the figures the loader gates on (see
 # fox_reader.translate.local_mtl), so they are recorded as numbers; the
 # `cpu_ram` / `gpu_vram` strings the setup page prints are derived from them at
 # the bottom of this file rather than written out, so the two cannot drift.
+# `max_context_tokens` is the upstream GGUF architecture's `context_length`:
+# Gemma4 131072, Qwen3.5 262144, Llama3/VNTL 8192. The settings UI offers
+# only 8192/16384 within that ceiling; replacement files can lower it further.
+# `context_memory_mib_per_8192` estimates added memory for a 16K window:
+# Gemma's seven full-attention layers add at most 224 MiB of F16 KV cache;
+# Qwen's eight add 256 MiB. 384 MiB allows extra context-dependent work buffers.
+# Sliding-window/recurrent states and model weights do not double with context.
 MTL_MODELS: list[dict] = [
     {
         "id": "gemma-4-e4b-q8-uncensored",
@@ -64,11 +81,13 @@ MTL_MODELS: list[dict] = [
         "dest": GEMMA_E4B_Q8_MODEL_DIR,
         "files": [GEMMA_E4B_Q8_MODEL_FILE],
         "type": "gguf",
-        "size_on_disk": "7.7 GiB",
+        "size_on_disk": "7.6 GiB",
         "cpu_ram_mib": 7000,
         "gpu_vram_mib": 6800,
+        "max_context_tokens": 131072,
+        "context_memory_mib_per_8192": 384,
         "languages": ["japanese", "chinese", "korean"],
-        "note": "Not specified",
+        "note": "Uses conversation context and character metadata in the translation prompt when provided.",
     },
     {
         "id": "gemma-4-e4b-q6-uncensored",
@@ -77,11 +96,13 @@ MTL_MODELS: list[dict] = [
         "dest": GEMMA_E4B_Q6_MODEL_DIR,
         "files": [GEMMA_E4B_Q6_MODEL_FILE],
         "type": "gguf",
-        "size_on_disk": "5.9 GiB",
+        "size_on_disk": "5.8 GiB",
         "cpu_ram_mib": 6000,
         "gpu_vram_mib": 5800,
+        "max_context_tokens": 131072,
+        "context_memory_mib_per_8192": 384,
         "languages": ["japanese", "chinese", "korean"],
-        "note": "Not specified",
+        "note": "Uses conversation context and character metadata in the translation prompt when provided.",
     },
     {
         "id": "vntl-llama3-8b-v2",
@@ -90,25 +111,89 @@ MTL_MODELS: list[dict] = [
         "dest": VNTL_LLAMA3_MODEL_DIR,
         "files": [VNTL_LLAMA3_MODEL_FILE],
         "type": "gguf",
-        "size_on_disk": "8.5 GiB",
+        "size_on_disk": "8.0 GiB",
         "cpu_ram_mib": 9000,
         "gpu_vram_mib": 8800,
+        "max_context_tokens": 8192,
         "languages": ["japanese"],
         "note": "Japanese-English VN dialogue; uses conversation context and character metadata when provided.",
     },
+    {
+        "id": "vntl-llama3-8b-v2-q5-k-m",
+        "name": "VNTL Llama3 8B v2 Q5_K_M (context + characters)",
+        "repo": "lmg-anon/vntl-llama3-8b-v2-gguf",
+        "dest": VNTL_LLAMA3_Q5_MODEL_DIR,
+        "files": [VNTL_LLAMA3_Q5_MODEL_FILE],
+        "type": "gguf",
+        "size_on_disk": "5.3 GiB",
+        "cpu_ram_mib": 7200,
+        "gpu_vram_mib": 7000,
+        "max_context_tokens": 8192,
+        "memory_estimated": True,
+        "languages": ["japanese"],
+        "note": "Smaller VNTL quantisation; the same Japanese-English context and character support as Q8.",
+    },
+    {
+        "id": "qwen3.5-9b-q6-k-uncensored",
+        "name": "Qwen3.5 9B Q6_K Uncensored (Aggressive)",
+        "repo": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
+        "dest": QWEN35_9B_Q6_MODEL_DIR,
+        "files": [QWEN35_9B_Q6_MODEL_FILE],
+        "type": "gguf",
+        "size_on_disk": "6.9 GiB",
+        "cpu_ram_mib": 8600,
+        "gpu_vram_mib": 8200,
+        "max_context_tokens": 262144,
+        "context_memory_mib_per_8192": 384,
+        "memory_estimated": True,
+        "languages": ["japanese", "chinese", "korean"],
+        "note": "Text translation with conversation context and character metadata; thinking disabled.",
+    },
+    {
+        "id": "qwen3.5-9b-q8-0-uncensored",
+        "name": "Qwen3.5 9B Q8_0 Uncensored (Aggressive)",
+        "repo": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
+        "dest": QWEN35_9B_Q8_MODEL_DIR,
+        "files": [QWEN35_9B_Q8_MODEL_FILE],
+        "type": "gguf",
+        "size_on_disk": "8.9 GiB",
+        "cpu_ram_mib": 10600,
+        "gpu_vram_mib": 10200,
+        "max_context_tokens": 262144,
+        "context_memory_mib_per_8192": 384,
+        "memory_estimated": True,
+        "languages": ["japanese", "chinese", "korean"],
+        "note": "Text translation with conversation context and character metadata; thinking disabled.",
+    },
+    {
+        "id": "qwen3.5-4b-q8-0-uncensored",
+        "name": "Qwen3.5 4B Q8_0 Uncensored (Aggressive)",
+        "repo": "HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive",
+        "dest": QWEN35_4B_Q8_MODEL_DIR,
+        "files": [QWEN35_4B_Q8_MODEL_FILE],
+        "type": "gguf",
+        "size_on_disk": "4.2 GiB",
+        "cpu_ram_mib": 5800,
+        "gpu_vram_mib": 5500,
+        "max_context_tokens": 262144,
+        "context_memory_mib_per_8192": 384,
+        "memory_estimated": True,
+        "languages": ["japanese", "chinese", "korean"],
+        "note": "Smaller Qwen model; text translation with conversation context and characters; thinking disabled.",
+    },
 ]
 
-def _gib(mib: int | None) -> str:
+def _gib(mib: int | None, estimated: bool = False) -> str:
     """A MiB figure as the GiB string the setup page shows."""
     if not mib:
         return "Not specified"
 
-    return f"{mib / 1024:.1f} GiB"
+    return f"{mib / 1024:.1f} GiB" + (" (estimate)" if estimated else "")
 
 
 for _model in MTL_MODELS:
-    _model.setdefault("cpu_ram", _gib(_model.get("cpu_ram_mib")))
-    _model.setdefault("gpu_vram", _gib(_model.get("gpu_vram_mib")))
+    _model.setdefault("cpu_ram", _gib(_model.get("cpu_ram_mib"), _model.get("memory_estimated", False)))
+    _model.setdefault("gpu_vram", _gib(_model.get("gpu_vram_mib"), _model.get("memory_estimated", False)))
 
 del _model
 

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from fox_reader.models.requests import LoadMLRequest, TranslationRequest
-from fox_reader.translate.context import normalize_context
+from fox_reader.translate.context import normalize_context_with_links
 
 logger = logging.getLogger(__name__)
 
@@ -103,13 +103,14 @@ async def translate_custom(request: Request, payload: TranslationRequest):
         return JSONResponse(content=_empty_response("No text provided!"))
 
     translate = request.app.state.translate
+    context, links = normalize_context_with_links(payload.context, payload.context_character_links)
     result = await translate.custom(
         text,
         payload.source_lang.strip(),
         (payload.lang_group or "").strip().lower(),
-        normalize_context(payload.context),
+        context,
         getattr(payload, "character_info", None),
-        getattr(payload, "context_character_links", None),
+        links,
     )
     resp = result.to_dict()
     error = f"Error: {resp.get('message', 'Unknown')}" if result.code != 200 else None
@@ -132,13 +133,13 @@ async def translate_ml(request: Request, payload: TranslationRequest):
 
     try:
         async with ML_TRANSLATION_LIMIT:
-            context = normalize_context(payload.context)
+            context, links = normalize_context_with_links(payload.context, payload.context_character_links)
             result = await translate.ml_async(
                 text,
                 payload.source_lang.strip().lower(),
                 context,
                 getattr(payload, "character_info", None),
-                getattr(payload, "context_character_links", None),
+                links,
                 getattr(payload, "meta_id", None),
             )
         resp = result.to_dict()

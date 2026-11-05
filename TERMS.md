@@ -1,6 +1,6 @@
 # Fox Reader — Terms of Use
 
-_Last updated: 2026-09-26. These terms may change; continued use after a
+_Last updated: 2026-11-05. These terms may change; continued use after a
 change means you accept the new terms._
 
 ## 1. Acceptance and scope
@@ -43,8 +43,12 @@ edges are:
   academic-only Manga109 lineage: do not assume commercial rights.
 - **Gemma weights** — Google Gemma Terms of Use (acceptance + prohibited
   uses + carry-the-terms downstream).
-- **VNTL weights** — Llama 3 Community License (Acceptable Use Policy,
+- **VNTL weights (Q8_0 and Q5_K_M)** — Llama 3 Community License (Acceptable Use Policy,
   attribution, 700M-MAU clause).
+- **Qwen3.5 HauhauCS Aggressive weights (9B Q6_K/Q8_0, 4B Q8_0)** —
+  Apache License 2.0, as declared by the publisher and the base-model cards.
+  Preserve applicable license, copyright and attribution notices and mark
+  modifications when redistributing. The license provides no warranty.
 - **MS92 data lineage** — credit `"Copyrighted by Minshan Xie"` wherever
   required (see NOTICE §4).
 
@@ -100,8 +104,7 @@ answer is yours to know.
 ## 6. Prohibited uses
 
 - Breaking the law; infringing copyright, trademark, or privacy rights.
-- Using uncensored models to produce illegal content (including CSAM —
-  which we report).
+- Using uncensored models to produce illegal content (including CSAM).
 - Misrepresenting modified versions as the original project; stripping
   license, credit, or attribution notices.
 - Circumventing model-vendor gates (e.g. automating acceptance of gated

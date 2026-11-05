@@ -1,12 +1,26 @@
 # llama-cpp-python: versions, devices, and how the GGUF backend gets built
 
-The GGUF translation models (Gemma Q6/Q8, VNTL Llama-3) run through
+The GGUF translation models (Gemma E4B Q6/Q8, VNTL Llama-3 Q5_K_M/Q8_0,
+Qwen3.5 9B Q6_K/Q8_0 and 4B Q8_0) run through
 `llama_cpp`, a ctypes wrapper around a shared library that does not exist
 until someone compiles it. This document covers which version we compile,
 for which devices, with which flags — and why each choice is the way it is.
 
 The implementation lives in `packaging/llamacpp.py`. The build driver that
 calls it is `packaging/build.py` (`install_llama_cpp`, step 5/15).
+
+Qwen3.5 uses a hybrid Gated DeltaNet/attention architecture, so an older
+llama.cpp build that supports Qwen3 is not enough. Use the pinned backend
+below with Qwen3.5 support. Fox Reader runs these models as text translators,
+without a vision encoder (`mmproj`), and explicitly disables thinking using
+Qwen3.5's non-thinking prompt format. The runtime window defaults to 8192 tokens
+and can be set to 16384 per model in `/settings`, with up to 1024 generated
+tokens. The change applies when that model is next loaded. Gemma and Qwen
+support both choices; VNTL remains at 8192. The verified upstream GGUF limits
+are 131072 for Gemma4, 262144 for Qwen3.5 and 8192 for VNTL/Llama3. Fox Reader
+checks the selected file's metadata before allocation and never extends its
+declared context limit. Context and character metadata remain optional; plain
+text requests follow the same translation path.
 
 ---
 

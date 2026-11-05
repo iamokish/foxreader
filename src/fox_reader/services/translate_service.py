@@ -227,6 +227,10 @@ class TranslateService:
 
         return status
 
+    def ml_context_status(self) -> dict:
+        """Loaded translation window, available even during generation."""
+        return self._mtl.context_status() if self._mtl is not None else {}
+
     def ml_memory(self) -> dict:
         """Whether every configured local model fits on its device.
 

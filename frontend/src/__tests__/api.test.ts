@@ -184,6 +184,49 @@ describe("API Client", () => {
                 body: JSON.stringify({ text: "こんにちは", source_lang: "japanese" }),
             });
         });
+
+        it("sends character guidance without requiring conversation context", async () => {
+            const mockFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ translated: "Hello" }),
+            } as Response);
+            const character_info = [{ meta_id: "a", name_en: "Aiko" }];
+
+            await translate("/translate/ml", "こんにちは", "japanese", undefined, undefined, {
+                character_info,
+                context_character_links: ["unrelated-earlier-speaker"],
+                meta_id: "a",
+            });
+
+            expect(JSON.parse(mockFetch.mock.calls[0][1]?.body as string)).toEqual({
+                text: "こんにちは",
+                source_lang: "japanese",
+                character_info,
+                meta_id: "a",
+            });
+        });
+
+        it("keeps context speaker links alongside their conversation pairs", async () => {
+            const mockFetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ translated: "Hello" }),
+            } as Response);
+            const character_info = [{ meta_id: "a", name_en: "Aiko" }];
+            const context: [string, string][] = [["おはよう", "Morning"]];
+
+            await translate("/translate/ml", "こんにちは", "japanese", undefined, context, {
+                character_info,
+                context_character_links: ["a"],
+            });
+
+            expect(JSON.parse(mockFetch.mock.calls[0][1]?.body as string)).toEqual({
+                text: "こんにちは",
+                source_lang: "japanese",
+                character_info,
+                context,
+                context_character_links: ["a"],
+            });
+        });
     });
 
     describe("inpaintPreview", () => {

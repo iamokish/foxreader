@@ -146,7 +146,9 @@ export async function translate(
     if (lang_group) body.lang_group = lang_group;
     if (context?.length) body.context = context;
     if (extras?.character_info?.length) body.character_info = extras.character_info;
-    if (extras?.context_character_links?.length) body.context_character_links = extras.context_character_links;
+    if (context?.length && extras?.context_character_links?.length) {
+        body.context_character_links = extras.context_character_links;
+    }
     if (extras?.meta_id) body.meta_id = extras.meta_id;
     const res = await post(endpoint, body);
     return res.json();

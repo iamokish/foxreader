@@ -41,6 +41,8 @@ function makeElement(id) {
     type: "text",
     disabled: false,
     style: {},
+    setAttribute() {},
+    contains() { return false; },
     addEventListener() {},
   };
 }

@@ -236,6 +236,22 @@ describe("custom endpoint context", () => {
         expect(translate).toHaveBeenCalledWith("/translate/custom", "text", "ep1", "japanese", [["a", "b"]]);
         expect(translate.mock.calls[0]).toHaveLength(5);
     });
+
+    it("keeps custom character guidance independent of Context", async () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko" }];
+        const [first, second] = appState.pageEntriesCache["p.png"];
+        first.character_id = "a";
+        second.character_id = "a";
+        appState.isContextEnabled = false;
+        customDom("/translate/custom", "ep1");
+        handleAutoTranslation();
+        await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+        expect(translate).toHaveBeenCalledWith("/translate/custom", "text", "ep1", "japanese", undefined, {
+            character_info: mockRoster,
+            context_character_links: [],
+            meta_id: "a",
+        });
+    });
 });
 
 describe("ML character extras", () => {
@@ -286,6 +302,46 @@ describe("ML character extras", () => {
         handleAutoTranslation();
         await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
         expect(translate).toHaveBeenCalledWith("/translate/ml", "text", "japanese", "japanese", undefined);
+    });
+
+    it("sends characters with Context off without unrelated historical speaker links", async () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko" }];
+        const [first, second] = appState.pageEntriesCache["p.png"];
+        first.character_id = "a";
+        second.character_id = "a";
+        appState.isContextEnabled = false;
+        mlDom();
+        handleAutoTranslation();
+        await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+        expect(translate).toHaveBeenCalledWith("/translate/ml", "text", "japanese", "japanese", undefined, {
+            character_info: mockRoster,
+            context_character_links: [],
+            meta_id: "a",
+        });
+    });
+
+    it("sends the first bubble's speaker without needing earlier translations", async () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko" }];
+        const [first] = appState.pageEntriesCache["p.png"];
+        first.character_id = "a";
+        appState.currentlySelectedEntryId = first.id;
+        mlDom();
+        handleAutoTranslation();
+        await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+        expect(translate).toHaveBeenCalledWith("/translate/ml", "text", "japanese", "japanese", [], {
+            character_info: mockRoster,
+            context_character_links: [],
+            meta_id: "a",
+        });
+    });
+
+    it("preserves a plain-text request when no page entry is selected", async () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko" }];
+        appState.currentlySelectedEntryId = null;
+        mlDom();
+        handleAutoTranslation();
+        await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
+        expect(translate).toHaveBeenCalledWith("/translate/ml", "text", "japanese", "japanese", []);
     });
 
     it("sends no character extras while Characters is off", async () => {

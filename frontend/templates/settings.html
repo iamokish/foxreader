@@ -270,7 +270,105 @@
     }
 
     .language {
-      margin-bottom: 30px;
+      margin-bottom: 0;
+    }
+
+    .mtl-section { margin-bottom: 34px; }
+    .mtl-section .section-title { margin-top: 0; }
+
+    .language-tabs {
+      display: flex;
+      gap: 5px;
+      padding: 5px;
+      margin-bottom: 18px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: #11141a;
+    }
+
+    .language-tab {
+      flex: 1;
+      min-width: 0;
+      min-height: 42px;
+      padding: 9px 12px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: .88rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .language-tab:hover { color: var(--text); background: var(--surface); }
+    .language-tab[aria-selected="true"] {
+      border-color: var(--border);
+      background: var(--surface-selected);
+      color: var(--text);
+      box-shadow: inset 0 -2px var(--accent);
+    }
+
+    #settings :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    #settings [hidden] { display: none; }
+    #settings .model { display: block; padding: 0; overflow-wrap: anywhere; }
+    #settings .model.unavailable { opacity: 1; cursor: default; }
+    #settings .model.unavailable .name { color: var(--muted); }
+    #settings .model:has(input[type="radio"]:focus-visible) { border-color: var(--accent); }
+    .mtl-choice { display: flex; gap: 12px; padding: 16px; cursor: pointer; }
+    .unavailable .mtl-choice { cursor: default; }
+    .mtl-choice .status { display: block; line-height: 1.5; }
+    .mtl-summary { margin: 0 0 14px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+    .mtl-summary strong { color: var(--text); font-weight: 600; }
+    .mtl-summary a { color: var(--text); }
+    .mtl-section > .section-description a { color: var(--text); }
+    .mtl-context {
+      display: grid;
+      grid-template-columns: minmax(230px, auto) minmax(0, 1fr);
+      gap: 12px 20px;
+      align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, .1);
+      border-radius: 0 0 10px 10px;
+    }
+    .mtl-context fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
+    .mtl-context legend { padding: 0; margin-bottom: 8px; font-size: .77rem; font-weight: 650; }
+    .context-choices { display: flex; flex-wrap: wrap; gap: 7px; }
+    .context-choice {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 34px;
+      padding: 6px 9px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #11141a;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: .76rem;
+    }
+    .context-choice input[type="radio"] { margin: 0; }
+    .context-choice:has(input:checked) { color: var(--text); border-color: #747d91; background: var(--surface-selected); }
+    .context-choice:has(input:disabled) { opacity: .48; cursor: not-allowed; }
+    .context-note { margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.55; }
+    .context-note span { display: block; }
+    .context-note .context-pending { color: #f5c270; }
+    .context-note .context-error { color: #f5c270; }
+    .mtl-saving { margin: 0 0 12px; color: var(--muted); font-size: .8rem; }
+
+    @media (max-width: 620px) {
+      .mtl-context { grid-template-columns: 1fr; gap: 8px; }
+    }
+
+    @media (max-width: 480px) {
+      .language-tab { padding: 9px 5px; font-size: .81rem; }
+      .mtl-choice { padding: 13px; gap: 10px; }
+      #settings .name { font-size: .88rem; }
     }
 
     .language-header {
@@ -620,8 +718,7 @@
     <h1>Settings</h1>
     <p class="intro">
       Choose the default local translation model for each language.
-      Downloaded models are selectable. Models that are not downloaded are
-      shown for information only and cannot be selected.
+      Manage recognition, compute devices, and translation services below.
     </p>
 
     <section class="api-section">
@@ -719,7 +816,15 @@
       <span class="token-saved" id="tokensSaved">Saved.</span>
     </section>
 
-    <div id="settings"></div>
+    <section class="mtl-section" aria-labelledby="localTranslationTitle">
+      <h2 class="section-title" id="localTranslationTitle">Local Translation Models</h2>
+      <div class="section-description">
+        Select a language, then choose its default model. Download more models from <a href="/setup">Setup</a>.
+        A larger context keeps more dialogue and uses more RAM/VRAM.
+      </div>
+      <div id="settings" aria-busy="true"><div class="empty">Loading translation models…</div></div>
+    </section>
+
     <section class="api-section" aria-labelledby="updatesTitle" id="updatesPanel">
       <div class="section-title" id="updatesTitle">Fox Reader Updates</div>
       <div class="section-description">
@@ -761,6 +866,10 @@
     };
 
     let saving = false;
+    let mtlSettings = null;
+    let selectedMtlLanguage = "japanese";
+    let savingMtl = false;
+    let settingsLoadRevision = 0;
     let fontSettings = null;
     let fontSelection = [];
     let savingFonts = false;
@@ -1622,88 +1731,151 @@
       }
     }
 
+    function mtlLanguages(data) {
+      return Object.keys(LANGUAGE_NAMES).filter(language => data?.languages?.[language]);
+    }
+
+    function contextTokens(value) {
+      return Number(value).toLocaleString("en-US");
+    }
+
+    function renderMtlContext(model, key) {
+      const context = model.context;
+      if (!context) return "";
+      const supported = Array.isArray(context.options) ? context.options : [8192];
+      const effective = Number(context.effective) || null;
+      const selected = [8192, 16384].includes(context.selected) ? context.selected : effective || 8192;
+      const options = [8192, 16384].map(size => {
+        const allowed = supported.includes(size) && size <= Number(context.max);
+        return `<label class="context-choice" ${allowed ? "" : `title="This model supports up to ${contextTokens(context.max)} tokens."`}>
+          <input type="radio" name="context-${key}" value="${size}" data-context-model="${esc(model.id)}"
+            data-focus-key="context-${key}-${size}" aria-describedby="context-note-${key}"
+            ${size === selected ? "checked" : ""} ${allowed && !savingMtl ? "" : "disabled"}>
+          <span>${contextTokens(size)} tokens</span>
+        </label>`;
+      }).join("");
+      const limit = context.error ? `<span class="context-error">${esc(context.error)}</span>`
+        : !supported.includes(16384) || Number(context.max) < 16384
+          ? `<span>Model limit: ${contextTokens(context.max)} tokens.</span>` : "";
+      const running = Number(context.running) > 0
+        ? `<span ${context.pending ? 'class="context-pending"' : ""}>Currently loaded: ${contextTokens(context.running)} tokens.${context.pending ? " Change pending." : ""}</span>` : "";
+      const capped = effective && selected !== effective
+        ? `<span>Saved: ${contextTokens(selected)}; this model will use ${contextTokens(effective)} tokens.</span>` : "";
+      return `<div class="mtl-context">
+        <fieldset aria-label="Context window for ${esc(model.name)}">
+          <legend>Context window</legend><div class="context-choices">${options}</div>
+        </fieldset>
+        <p class="context-note" id="context-note-${key}">
+          <span>Applies the next time this model is loaded.</span>${running}${limit}${capped}
+        </p>
+      </div>`;
+    }
+
     function render(data) {
+      mtlSettings = data;
       const root = document.getElementById("settings");
-      root.innerHTML = Object.entries(data.languages).map(([language, info]) => {
-        const models = info.models || [];
-        const downloaded = models.filter(m => m.downloaded);
-        const selected = models.find(
-          m => m.downloaded && m.id === info.default_model
-        );
+      const focusKey = root.contains(document.activeElement)
+        ? document.activeElement.dataset.focusKey : null;
+      const languages = mtlLanguages(data);
+      if (!languages.includes(selectedMtlLanguage)) selectedMtlLanguage = languages[0] || "japanese";
+      root.setAttribute("aria-busy", String(savingMtl));
+      if (!languages.length) {
+        root.innerHTML = '<div class="empty">No local translation models are available.</div>';
+        return;
+      }
 
-        let modelHtml;
-
-        if (!models.length) {
-          modelHtml = `
-            <div class="empty">
-              No MTL model supports ${esc(languageName(language))}.
-            </div>`;
-        } else {
-          modelHtml = `
-            <div class="models">
-              ${models.map(model => {
-                const isAvailable = Boolean(model.downloaded);
-                const isSelected =
-                  isAvailable && model.id === info.default_model;
-
-                return `
-                  <label class="model ${isSelected ? "selected" : ""} ${
-                    isAvailable ? "available" : "unavailable"
-                  }">
-                    <input
-                      type="radio"
-                      name="mtl-${esc(language)}"
-                      value="${esc(model.id)}"
-                      ${isSelected ? "checked" : ""}
-                      ${isAvailable ? "" : "disabled"}
-                      onchange="choose('${esc(language)}', '${esc(model.id)}')"
-                    >
-                    <span class="details">
-                      <span class="name-row">
-                        <span class="name">${esc(model.name)}</span>
-                        ${
-                          isSelected
-                            ? '<span class="badge selected">Selected</span>'
-                            : isAvailable
-                              ? '<span class="badge downloaded">Downloaded</span>'
-                              : '<span class="badge unavailable">Not downloaded</span>'
-                        }
-                      </span>
-                      <span class="status">
-                        ${
-                          isSelected
-                            ? "Current default model"
-                            : isAvailable
-                              ? "Available"
-                              : "Download this model to make it selectable"
-                        }
-                      </span>
-                    </span>
-                  </label>`;
-              }).join("")}
-            </div>`;
-        }
-
+      const tabs = languages.map(language => `
+        <button type="button" class="language-tab" role="tab" id="mtl-tab-${language}"
+          aria-controls="mtl-panel-${language}" aria-selected="${language === selectedMtlLanguage}"
+          tabindex="${language === selectedMtlLanguage ? 0 : -1}"
+          data-language-tab="${language}" data-focus-key="tab-${language}">${esc(languageName(language))}</button>
+      `).join("");
+      const panels = languages.map(language => {
+        const info = data.languages[language];
+        const models = Array.isArray(info.models) ? info.models : [];
+        const downloaded = models.filter(model => model.downloaded);
+        const selected = downloaded.find(model => model.id === info.default_model);
+        const summary = selected
+          ? `Default: <strong>${esc(selected.name)}</strong>`
+          : downloaded.length ? "Choose a downloaded model below."
+          : 'No downloaded model for this language. <a href="/setup">Open Setup to download one.</a>';
+        const cards = models.map((model, index) => {
+          const available = Boolean(model.downloaded);
+          const isDefault = available && model.id === info.default_model;
+          const key = `${language}-${index}`;
+          const status = available
+            ? (model.size_on_disk ? `${esc(model.size_on_disk)} on disk` : "Ready to use")
+            : "Download from Setup to select this model.";
+          return `
+            <article class="model ${isDefault ? "selected" : ""} ${available ? "available" : "unavailable"}">
+              <label class="mtl-choice">
+                <input type="radio" name="mtl-${language}" value="${esc(model.id)}"
+                  data-model-choice="${esc(model.id)}" data-language="${language}" data-focus-key="model-${key}"
+                  aria-describedby="mtl-status-${key}" ${isDefault ? "checked" : ""}
+                  ${available && !savingMtl ? "" : "disabled"}>
+                <span class="details">
+                  <span class="name-row">
+                    <span class="name">${esc(model.name)}</span>
+                    ${isDefault ? '<span class="badge selected">Default</span>' : ""}
+                    <span class="badge ${available ? "downloaded" : "unavailable"}">${available ? "Downloaded" : "Not downloaded"}</span>
+                  </span>
+                  <span class="status" id="mtl-status-${key}">${status}</span>
+                </span>
+              </label>
+              ${renderMtlContext(model, key)}
+            </article>`;
+        }).join("");
         return `
-          <section class="language">
-            <div class="language-header">
-              <div class="language-name">${esc(languageName(language))}</div>
-              <div class="current">
-                ${
-                  selected
-                    ? `Selected: ${esc(selected.name)}`
-                    : downloaded.length
-                      ? ""
-                      : "No downloaded model"
-                }
-              </div>
+          <section class="language" id="mtl-panel-${language}" role="tabpanel"
+            aria-labelledby="mtl-tab-${language}" tabindex="0" ${language === selectedMtlLanguage ? "" : "hidden"}>
+            <p class="mtl-summary">${summary}</p>
+            <div class="models" role="group" aria-label="Models for ${esc(languageName(language))}">
+              ${cards || '<div class="empty">No models support this language.</div>'}
             </div>
-            ${modelHtml}
           </section>`;
       }).join("");
+      root.innerHTML = `<div class="language-tabs" role="tablist" aria-label="Translation language">${tabs}</div>
+        ${savingMtl ? '<p class="mtl-saving" role="status">Saving…</p>' : ""}${panels}`;
+      if (focusKey) {
+        Array.from(root.querySelectorAll("[data-focus-key]")).find(element => element.dataset.focusKey === focusKey)?.focus();
+      }
+    }
+
+    function selectMtlLanguage(language, focus = false) {
+      if (!mtlLanguages(mtlSettings).includes(language)) return;
+      selectedMtlLanguage = language;
+      render(mtlSettings);
+      if (focus) document.getElementById(`mtl-tab-${language}`)?.focus();
+    }
+
+    function initMtlControls() {
+      const root = document.getElementById("settings");
+      root.addEventListener("click", event => {
+        const tab = event.target.closest("[data-language-tab]");
+        if (tab) selectMtlLanguage(tab.dataset.languageTab, true);
+      });
+      root.addEventListener("keydown", event => {
+        const tab = event.target.closest("[data-language-tab]");
+        if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const languages = mtlLanguages(mtlSettings);
+        const current = languages.indexOf(tab.dataset.languageTab);
+        const index = event.key === "Home" ? 0 : event.key === "End" ? languages.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + languages.length) % languages.length;
+        selectMtlLanguage(languages[index], true);
+      });
+      root.addEventListener("change", event => {
+        const input = event.target;
+        if (input.matches("[data-model-choice]") && input.checked && !input.disabled) {
+          choose(input.dataset.language, input.dataset.modelChoice);
+        } else if (input.matches("[data-context-model]") && input.checked && !input.disabled) {
+          chooseMtlContext(input.dataset.contextModel, Number(input.value));
+        }
+      });
     }
 
     async function load() {
+      const revision = ++settingsLoadRevision;
       try {
         const response = await fetch("/api/settings", { cache: "no-store" });
         const data = await response.json();
@@ -1711,6 +1883,7 @@
         if (!response.ok) {
           throw new Error(data.error || "Failed to load settings.");
         }
+        if (revision !== settingsLoadRevision) return;
 
         setTokenInputs(data);
         renderFonts(data);
@@ -1718,24 +1891,51 @@
         renderOcrEngine(data);
         render(data);
       } catch (error) {
-        show(error.message, true);
+        if (revision === settingsLoadRevision) show(error.message, true);
       }
     }
 
     async function choose(language, modelId) {
-      if (saving) return;
+      if (saving) {
+        if (mtlSettings) render(mtlSettings);
+        return;
+      }
+      const info = mtlSettings?.languages?.[language];
+      const model = info?.models?.find(candidate => candidate.id === modelId && candidate.downloaded);
+      if (!model || info.default_model === modelId) return;
 
+      await saveMtlSetting("/api/settings/mtl-default", { language, model_id: modelId },
+        `${languageName(language)} default model saved.`);
+    }
+
+    async function chooseMtlContext(modelId, contextSize) {
+      if (saving) {
+        if (mtlSettings) render(mtlSettings);
+        return;
+      }
+      const model = Object.values(mtlSettings?.languages || {}).flatMap(info => info.models || [])
+        .find(candidate => candidate.id === modelId);
+      const context = model?.context;
+      if (!context || ![8192, 16384].includes(contextSize) || !context.options.includes(contextSize)
+        || contextSize > context.max || context.selected === contextSize) return;
+      await saveMtlSetting("/api/settings/mtl-context", { model_id: modelId, context_size: contextSize },
+        "Context window saved. Applies the next time this model is loaded.");
+    }
+
+    async function saveMtlSetting(path, body, successMessage) {
+      const focusKey = document.activeElement?.dataset.focusKey;
+      const focusLanguage = selectedMtlLanguage;
       saving = true;
+      savingMtl = true;
+      ++settingsLoadRevision;
+      render(mtlSettings);
       show("", false);
 
       try {
-        const response = await fetch("/api/settings/mtl-default", {
+        const response = await fetch(path, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            language: language,
-            model_id: modelId
-          })
+          body: JSON.stringify(body)
         });
 
         const data = await response.json();
@@ -1746,12 +1946,18 @@
 
         renderOcrEngine(data);
         render(data);
-        show("Setting saved and applied.", false);
+        show(successMessage, false);
       } catch (error) {
         show(error.message, true);
         await load();
       } finally {
         saving = false;
+        savingMtl = false;
+        if (mtlSettings) render(mtlSettings);
+        if (focusKey && focusLanguage === selectedMtlLanguage && document.activeElement === document.body) {
+          Array.from(document.querySelectorAll("#settings [data-focus-key]"))
+            .find(element => element.dataset.focusKey === focusKey)?.focus();
+        }
       }
     }
 
@@ -1956,6 +2162,7 @@
       `;
     }
 
+    initMtlControls();
     load();
     initSessionLock(initWebSocket());
   </script>

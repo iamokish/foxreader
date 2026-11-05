@@ -1,6 +1,6 @@
-"""Exercise the GGUF translator without llama.cpp or 7.7 GiB of weights.
+"""Exercise the GGUF translator without llama.cpp or 7.6 GiB of weights.
 
-Everything worth checking in `gemma_e4b_q8_llamacpp` is decided before a single
+The loader behavior in `gemma_e4b_llamacpp` can be checked before a single
 tensor is read: how many threads to ask for, which device keywords to pass, which
 file to hand over, and what to do with the text that comes back. So `llama_cpp`
 is stubbed with a class that records its keyword arguments, and the weights are
@@ -20,12 +20,12 @@ What this is protecting:
 
 The thread budget itself now lives in `fox_reader.device` -- the settings page
 offers it as a choice, and drawing that picker must not mean importing a
-translator. It is still exercised here, because this is the only model that reads
-it, and the count it passes to llama.cpp is what the choice comes to.
+translator. It is still exercised here because the count passed to llama.cpp
+is what the choice comes to.
 
-There are two of these translators, Q8 and Q6, and they are near-identical files.
-Q8 is the one exercised in full; the last section pins the twin to it, because a
-copied module is one that gets fixed in one copy.
+Q8 and Q6 share one implementation in gemma_e4b_llamacpp. Q8 is exercised in
+full here; the last section exercises the Q6 constructor, translation and
+unload through that same implementation.
 """
 
 from __future__ import annotations
@@ -34,10 +34,10 @@ import contextlib
 import io
 import os
 import pathlib
-import shutil
 import sys
 import tempfile
 import types
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -65,7 +65,7 @@ def check(label: str, condition: bool, detail: str = "") -> None:
 
 print("--- the module imports without llama-cpp-python ---")
 
-check("llama_cpp is not installed here", "llama_cpp" not in sys.modules)
+check("llama_cpp has not been imported here", "llama_cpp" not in sys.modules)
 
 from fox_reader.constants import (  # noqa: E402
     GEMMA_E4B_Q6_MODEL_DIR,
@@ -74,8 +74,7 @@ from fox_reader.constants import (  # noqa: E402
     GEMMA_E4B_Q8_MODEL_FILE,
     MTL_MODELS,
 )
-from fox_reader.translate.machine_translation import gemma_e4b_q6_llamacpp as gemma_q6  # noqa: E402
-from fox_reader.translate.machine_translation import gemma_e4b_q8_llamacpp as gemma  # noqa: E402
+from fox_reader.translate.machine_translation import gemma_e4b_llamacpp as gemma  # noqa: E402
 from fox_reader import device as fox_device  # noqa: E402
 
 Q8_ID = "gemma-4-e4b-q8-uncensored"
@@ -135,8 +134,8 @@ if imported:
     ids = [cls.model_id() for cls in manager.available_translators]
     check("the Q8 translator is registered", Q8_ID in ids, str(ids))
     check("and so is the Q6", Q6_ID in ids, str(ids))
-    check("the two gguf models are registered last, matching MTL_MODELS order",
-          ids[-2:] == [Q8_ID, Q6_ID], str(ids))
+    check("the translator registration matches MTL_MODELS order",
+          ids == [model["id"] for model in MTL_MODELS], str(ids))
     check("both are offered for all three languages", all(
         model_id in [c.model_id() for c in manager._compatible_translators(lang)]
         for model_id in (Q8_ID, Q6_ID)
@@ -198,8 +197,6 @@ check("the Q8 entry exists", entry is not None)
 check("the Q6 entry exists", q6_entry is not None)
 
 if entry and q6_entry:
-    check("they are the last two, so nothing else was displaced",
-          MTL_MODELS[-2:] == [entry, q6_entry], str([m["id"] for m in MTL_MODELS]))
     check("the repo is right", entry["repo"] == "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
           entry["repo"])
     check("both quants come from the one repo", q6_entry["repo"] == entry["repo"], q6_entry["repo"])
@@ -209,7 +206,7 @@ if entry and q6_entry:
           str(q6_entry["files"]))
     check("the type is gguf", entry["type"] == "gguf", entry["type"])
     check("for both of them", q6_entry["type"] == "gguf", q6_entry["type"])
-    check("the disk figure is the given one", entry["size_on_disk"] == "7.7 GiB", entry["size_on_disk"])
+    check("the disk figure matches the upstream GGUF", entry["size_on_disk"] == "7.6 GiB", entry["size_on_disk"])
     check("the ram figure is the given one", entry["cpu_ram_mib"] == 7000, str(entry["cpu_ram_mib"]))
     check("the vram figure is the given one", entry["gpu_vram_mib"] == 6800, str(entry["gpu_vram_mib"]))
     check("the display strings were derived", entry["cpu_ram"] == "6.8 GiB" and entry["gpu_vram"] == "6.6 GiB",
@@ -494,7 +491,8 @@ with contextlib.redirect_stderr(io.StringIO()):
 
 print("\n--- finding the weights ---")
 
-TMP = pathlib.Path(tempfile.mkdtemp(prefix="fox-gemma-"))
+temporary = tempfile.TemporaryDirectory(prefix="fox-gemma-")
+TMP = pathlib.Path(temporary.name)
 
 
 def mtl_dir(name: str, *files: str) -> pathlib.Path:
@@ -564,11 +562,11 @@ except Exception as exc:  # noqa: BLE001
     check("a missing directory raises FileNotFoundError", False, f"{type(exc).__name__}: {exc}")
 
 # The two quants are separate downloads under separate names, so the Q6 loader
-# must not find the Q8's file and load 7.7 GiB when 5.9 was asked for.
+# must not find the Q8's file and load 7.6 GiB when 5.8 was asked for.
 q6_root = TMP / "declared" / GEMMA_E4B_Q6_MODEL_DIR
 
 try:
-    gemma_q6.resolve_weights(declared)
+    gemma.resolve_weights(declared, model_dir=GEMMA_E4B_Q6_MODEL_DIR, model_file=GEMMA_E4B_Q6_MODEL_FILE)
     check("the Q6 loader does not pick up the Q8's weights", False, "found something")
 except FileNotFoundError:
     check("the Q6 loader does not pick up the Q8's weights", True)
@@ -579,8 +577,9 @@ q6_root.mkdir(parents=True, exist_ok=True)
 (q6_root / GEMMA_E4B_Q6_MODEL_FILE).write_bytes(b"GGUF")
 check(
     "and finds its own where it belongs",
-    gemma_q6.resolve_weights(declared).name == GEMMA_E4B_Q6_MODEL_FILE,
-    str(gemma_q6.resolve_weights(declared)),
+    gemma.resolve_weights(
+        declared, model_dir=GEMMA_E4B_Q6_MODEL_DIR, model_file=GEMMA_E4B_Q6_MODEL_FILE,
+    ) == q6_root / GEMMA_E4B_Q6_MODEL_FILE,
 )
 
 
@@ -714,12 +713,12 @@ with env(**{fox_device.MTL_THREADS_ENV: None, gemma.VERBOSE_ENV: None}), fake_cp
         check("it forbids markdown", "Do not wrap any text in markdown." in system["content"])
         check("and the text is the user turn", user == {"role": "user", "content": "こんにちは"})
 
-        with_context = translator._build_system_prompt({"tone": "casual", "glossary": {"鬼": "oni"}})
-        check("context becomes prompt lines", "Tone: casual" in with_context, with_context)
-        check("and a glossary becomes a list", "- 鬼 -> oni" in with_context, with_context)
+        with_context = translator._build_system_prompt([["鬼がいる", "There is an oni"]], lang="japanese")
+        check("source context becomes a prompt line", 'Japanese: "鬼がいる"' in with_context, with_context)
+        check("and keeps its paired translation", 'English: "There is an oni"' in with_context, with_context)
         check(
-            "the closing instructions stay last",
-            with_context.rstrip().endswith("Do not explain anything."),
+            "the context ends by asking for the new text only",
+            with_context.rstrip().endswith("Now translate the new text that follows into English."),
             with_context[-60:],
         )
 
@@ -807,14 +806,15 @@ with env(**{fox_device.MTL_THREADS_ENV: None, gemma.VERBOSE_ENV: None}), fake_cp
 
     print("\n--- without the package ---")
 
-    try:
-        gemma.GemmaE4BQ8Translator(declared, device="cpu")
-        check("a missing llama-cpp-python is reported", False, "constructed without it")
-    except RuntimeError as exc:
-        check("a missing llama-cpp-python is reported", True)
-        check("and the message names the extra", "gguf" in str(exc), str(exc))
-    except Exception as exc:  # noqa: BLE001
-        check("a missing llama-cpp-python is reported", False, f"{type(exc).__name__}: {exc}")
+    with patch.dict(sys.modules, {"llama_cpp": None}):
+        try:
+            gemma.GemmaE4BQ8Translator(declared, device="cpu")
+            check("a missing llama-cpp-python is reported", False, "constructed without it")
+        except RuntimeError as exc:
+            check("a missing llama-cpp-python is reported", True)
+            check("and the message names the extra", "gguf" in str(exc), str(exc))
+        except Exception as exc:  # noqa: BLE001
+            check("a missing llama-cpp-python is reported", False, f"{type(exc).__name__}: {exc}")
 
     print("\n--- with a count pinned on the settings page ---")
 
@@ -834,51 +834,44 @@ with env(**{fox_device.MTL_THREADS_ENV: None, gemma.VERBOSE_ENV: None}), fake_cp
         fox_device.configure_threads(fox_device.AUTO_THREADS)
 
 
-# --- the twin ----------------------------------------------------------------
+# --- Q6 through the shared implementation ----------------------------------
 
-print("\n--- the Q6 module is still the same module ---")
+print("\n--- the Q6 native lifecycle ---")
 
-# Two near-identical files, and the Q8 is the one exercised above. Anything fixed
-# in one and not the other is a bug that only shows up on whichever quant the
-# user picked, so the pair is pinned here rather than the Q6 being tested twice.
-for name in (
-    "llama_device_kwargs",
-    "resolve_weights",
-    "clean_translation",
-    "supports_gpu_offload",
-    "_validate_requested_device",
-    "_message_content",
-    "_cuda_index",
-    "_split_mode_none",
-    "N_CTX",
-    "MAX_NEW_TOKENS",
-    "VERBOSE_ENV",
-):
-    check(f"the Q6 module has {name} too", hasattr(gemma_q6, name))
-
-for device in ("cpu", "cuda", "cuda:0", "cuda:2", "mps", "", None, "cuda:x"):
-    with contextlib.redirect_stderr(io.StringIO()):
-        same = gemma_q6.llama_device_kwargs(device, llama_cpp_stub) == \
-            gemma.llama_device_kwargs(device, llama_cpp_stub)
-
-    check(f"and places {device!r} identically", same)
-
-check("the context window has not drifted", gemma_q6.N_CTX == gemma.N_CTX,
-      f"q6={gemma_q6.N_CTX} q8={gemma.N_CTX}")
-check("nor the token budget", gemma_q6.MAX_NEW_TOKENS == gemma.MAX_NEW_TOKENS,
-      f"q6={gemma_q6.MAX_NEW_TOKENS} q8={gemma.MAX_NEW_TOKENS}")
-check("they read the same verbose switch", gemma_q6.VERBOSE_ENV == gemma.VERBOSE_ENV)
-check("the fence stripper agrees", all(
-    gemma_q6.clean_translation(text) == gemma.clean_translation(text)
-    for text in ("```\nHi\n```", "  Hi  ", "", None, "He said ```run```")
-))
-check("they are different models, though", gemma_q6.GemmaE4BQ6Translator.model_id() == Q6_ID,
-      gemma_q6.GemmaE4BQ6Translator.model_id())
-check("offered for the same languages",
-      gemma_q6.GemmaE4BQ6Translator.model_langs() == gemma.GemmaE4BQ8Translator.model_langs())
+with stub_llama():
+    translator = gemma.GemmaE4BQ6Translator(declared, device="cpu")
+    handle = translator.model
+    check("Q6 keeps its model identity", translator.model_id() == Q6_ID, translator.model_id())
+    check(
+        "the Q6 constructor passes its own weight file to llama.cpp",
+        pathlib.Path(handle.kwargs["model_path"]) == q6_root / GEMMA_E4B_Q6_MODEL_FILE,
+        handle.kwargs["model_path"],
+    )
+    check("Q6 translates plain text", translator.translate("こんにちは") == "Translated")
+    check(
+        "Q6 accepts character guidance without earlier context",
+        translator.translate(
+            "愛子はどこ？",
+            character_info=[{"meta_id": "aiko", "name_en": "Aiko", "name_ja": "愛子", "gender": "female"}],
+            meta_id="aiko",
+        ) == "Translated",
+    )
+    system, user = handle.calls[-1]["messages"]
+    check("the Q6 prompt includes the supplied name", '"English name": "Aiko"' in system["content"])
+    check("and identifies the current speaker", "Speaker of the new text: Character 1." in system["content"])
+    check("Q6 keeps the source as a separate user turn", user == {"role": "user", "content": "愛子はどこ？"})
+    translator.unload()
+    check("Q6 unload closes the native context", handle.closed is True)
+    check("and detaches its handle", translator.model is None)
+    translator.unload()
+    try:
+        translator.translate("text")
+        check("Q6 refuses translation after unload", False)
+    except RuntimeError:
+        check("Q6 refuses translation after unload", True)
 
 
-shutil.rmtree(TMP, ignore_errors=True)
+temporary.cleanup()
 
 print(f"\n{failures} FAILURE(S)" if failures else "\nthe gguf translator holds up")
 sys.exit(1 if failures else 0)

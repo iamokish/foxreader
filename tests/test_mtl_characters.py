@@ -140,7 +140,11 @@ def test_normalize_links_pads_and_truncates():
 def test_capability_flags():
     assert model_supports_context("vntl-llama3-8b-v2") is True
     assert model_supports_characters("vntl-llama3-8b-v2") is True
-    assert model_supports_characters("gemma-4-e4b-q8-uncensored") is False
+    from fox_reader.constants import MTL_MODELS
+
+    for model in MTL_MODELS:
+        assert model_supports_characters(model["id"]) is True
+        assert model_supports_context(model["id"]) is True
     assert model_supports_characters("unknown-model") is False
     assert model_supports_characters(None) is False
 
@@ -196,6 +200,7 @@ def _vntl_without_weights():
     import threading
 
     tr.model = _StubLLM()
+    tr.n_ctx = vntl.N_CTX
     tr._role_tokens = {role: [ord(c) for c in role] for role in vntl._ROLES}
     tr._load_lock = threading.RLock()
     return vntl, tr

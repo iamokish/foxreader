@@ -169,7 +169,7 @@ def test_vl_engine_falls_back_to_classic_slot_without_one(monkeypatch):
 
 
 @pytest.mark.parametrize("module_name", [
-    "gemma_e4b_q8_llamacpp", "gemma_e4b_q6_llamacpp", "vntl_llama3_8b_llamacpp",
+    "gemma_e4b_llamacpp", "vntl_llama3_8b_llamacpp",
 ])
 def test_gguf_metal_offload_and_cpu_only_build_rejection(module_name):
     import importlib

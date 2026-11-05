@@ -1004,7 +1004,7 @@ function buildAlignRow(entry: Entry, ctx: OptionsContext): HTMLElement {
 }
 
 /**
- * Who speaks this bubble, for VNTL-style character metadata.
+ * Who speaks this bubble, for translation character metadata.
  *
  * A plain value change, not a structural one: picking a speaker only retags
  * future translations, so the panel stays put (`refresh`, not `rebuild`) and
@@ -1028,7 +1028,7 @@ function buildSpeakerSelect(entry: Entry, ctx: OptionsContext): HTMLSelectElemen
         },
     );
     select.classList.add("eo-speaker");
-    select.title = "Who speaks this bubble (character metadata for VNTL models)";
+    select.title = "Who speaks this bubble (helps translation use names and pronouns)";
     select.setAttribute("aria-label", "Speaker for this entry");
     return select;
 }
@@ -1575,7 +1575,7 @@ export function buildEntryOptions(entry: Entry, ctx: OptionsContext): HTMLElemen
             { label: "Align", fields: [buildAlignRow(entry, ctx)], hug: true },
             {
                 label: "Speaker",
-                title: "Who speaks this bubble (character metadata for VNTL models)",
+                title: "Who speaks this bubble (helps translation use names and pronouns)",
                 fields: [buildSpeakerSelect(entry, ctx)],
             },
         ),

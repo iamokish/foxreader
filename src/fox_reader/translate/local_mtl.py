@@ -32,21 +32,23 @@ from pathlib import Path
 from typing import Any
 
 from fox_reader.constants import mtl_model
-from fox_reader.device import CPU, CUDA, MPS, FOX_DEVICE
-from fox_reader.device import configure_threads
+from fox_reader.device import CPU, CUDA, FOX_DEVICE, MPS, configure_threads, torch_module
 from fox_reader.device import probe as probe_devices
-from fox_reader.device import torch_module
 from fox_reader.settings import SUPPORTED_MTL_LANGUAGES, SettingsManager
-from fox_reader.translate.characters import normalize_character_info, normalize_character_links, normalise_meta_id
+from fox_reader.translate.characters import normalise_meta_id, normalize_character_info
 from fox_reader.translate.context import (
     model_supports_characters,
     model_supports_context,
-    normalize_context,
+    normalize_context_with_links,
 )
-from fox_reader.translate.machine_translation.gemma_e4b_q6_llamacpp import GemmaE4BQ6Translator
-from fox_reader.translate.machine_translation.gemma_e4b_q8_llamacpp import GemmaE4BQ8Translator
-from fox_reader.translate.machine_translation.vntl_llama3_8b_llamacpp import VntlLlamaTranslator
-
+from fox_reader.translate.context_window import DEFAULT_CONTEXT_SIZE, resolve_context_size
+from fox_reader.translate.machine_translation.gemma_e4b_llamacpp import GemmaE4BQ6Translator, GemmaE4BQ8Translator
+from fox_reader.translate.machine_translation.qwen35_llamacpp import (
+    Qwen35_4BQ8Translator,
+    Qwen35_9BQ6Translator,
+    Qwen35_9BQ8Translator,
+)
+from fox_reader.translate.machine_translation.vntl_llama3_8b_llamacpp import VntlLlamaQ5Translator, VntlLlamaTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +205,9 @@ def effective_device(model_id: str, device: str | None = None) -> str:
     return target
 
 
-def check_memory(model_id: str, device: str | None = None) -> MemoryCheck | None:
+def check_memory(
+    model_id: str, device: str | None = None, *, context_size: int = DEFAULT_CONTEXT_SIZE,
+) -> MemoryCheck | None:
     """Whether `model_id` fits on `device` (the configured one by default).
 
     None means there is nothing to check — an unknown model id, or one with no
@@ -247,6 +251,15 @@ def check_memory(model_id: str, device: str | None = None) -> MemoryCheck | None
     if required_mib <= 0:
         logger.debug("No memory requirement recorded for %r; loading unchecked", model_id)
         return None
+
+    context_size = resolve_context_size(model_id, context_size)
+    # Only the cache/work buffers grow with the context; model weights do not.
+    # Catalogue increments conservatively estimate the extra F16 KV cache and
+    # workspace for one additional 8192-token block.
+    extra_blocks = max(0, context_size - DEFAULT_CONTEXT_SIZE) // DEFAULT_CONTEXT_SIZE
+    required_mib += extra_blocks * int(model.get("context_memory_mib_per_8192", 0))
+    if extra_blocks:
+        name = f"{name} ({context_size:,}-token context)"
 
     unit = "VRAM" if pool == "vram" else "RAM"
 
@@ -321,6 +334,10 @@ class LocalMTLManager:
             GemmaE4BQ8Translator,
             GemmaE4BQ6Translator,
             VntlLlamaTranslator,
+            VntlLlamaQ5Translator,
+            Qwen35_9BQ6Translator,
+            Qwen35_9BQ8Translator,
+            Qwen35_4BQ8Translator,
         ]
         # load / unload / translate all run in the threadpool now, so they can
         # overlap. Unloading while a generation is in flight would free the
@@ -422,7 +439,19 @@ class LocalMTLManager:
                 "lang": self.current_lang,
                 "model_id": model_id,
                 "languages": languages,
+                "context_size": getattr(model, "n_ctx", 8192),
             }
+
+    def context_status(self) -> dict:
+        """Read immutable load settings without waiting for native inference.
+
+        Capture one Python reference so both fields describe the same instance.
+        Neither field accesses llama.cpp, so this remains safe during unload.
+        """
+        model = self.model
+        if model is None:
+            return {}
+        return {"model_id": model.model_id(), "context_size": getattr(model, "n_ctx", 8192)}
 
     def _compatible_translators(self, lang: str):
         lang = lang.strip().lower()
@@ -453,9 +482,21 @@ class LocalMTLManager:
         except Exception as exc:
             logger.debug("Could not read the saved translator thread count: %s", exc)
 
-    def _ensure_fits(self, model_id: str) -> None:
+    def _context_preference(self, model_id: str) -> int:
+        getter = getattr(self.settings, "get_mtl_context_size", None)
+        requested = getter(model_id) if callable(getter) else DEFAULT_CONTEXT_SIZE
+        entry = mtl_model(model_id)
+        if entry is None:
+            return DEFAULT_CONTEXT_SIZE
+        path = self.mtl_dir / entry["dest"] / entry["files"][0]
+        return resolve_context_size(model_id, requested, path)
+
+    def _ensure_fits(self, model_id: str, context_size: int = DEFAULT_CONTEXT_SIZE) -> None:
         """Refuse the load when the model will not fit on its device."""
-        check = check_memory(model_id, self.device)
+        check = (
+            check_memory(model_id, self.device, context_size=context_size)
+            if context_size != DEFAULT_CONTEXT_SIZE else check_memory(model_id, self.device)
+        )
 
         if check is None:
             return
@@ -508,7 +549,17 @@ class LocalMTLManager:
         checks: list[dict] = []
 
         for model_id, langs in languages.items():
-            check = check_memory(model_id, device)
+            try:
+                context_size = self._context_preference(model_id)
+            except ValueError as exc:
+                # A bad/replaced GGUF is explained by Settings and the load
+                # path. It must not suppress memory warnings for other models.
+                logger.warning("Cannot check memory for %s: %s", model_id, exc)
+                continue
+            check = (
+                check_memory(model_id, device, context_size=context_size)
+                if context_size != DEFAULT_CONTEXT_SIZE else check_memory(model_id, device)
+            )
 
             if check is None:
                 continue
@@ -581,10 +632,15 @@ class LocalMTLManager:
 
         # Deliberately after the unload above: whatever was loaded was holding
         # the memory this measurement is about.
-        self._ensure_fits(target_class.model_id())
+        # Read only when constructing a native model. A saved preference must
+        # not reload a model that is already translating with its old window.
+        context_size = self._context_preference(target_class.model_id())
+        self._ensure_fits(target_class.model_id(), context_size)
         self._apply_thread_preference()
-
-        self.model = target_class(self.mtl_dir)
+        self.model = (
+            target_class(self.mtl_dir, n_ctx=context_size)
+            if context_size != DEFAULT_CONTEXT_SIZE else target_class(self.mtl_dir)
+        )
         self.current_lang = lang
 
     def translate(
@@ -607,9 +663,9 @@ class LocalMTLManager:
             # Context is only ever rendered by models that ask for it. Anything
             # else translates exactly as before, context or no context.
             try:
-                pairs = normalize_context(context)
+                pairs, context_links = normalize_context_with_links(context, context_character_links)
             except Exception:
-                pairs = []
+                pairs, context_links = [], []
 
             try:
                 model_id = self.model.model_id()
@@ -639,36 +695,22 @@ class LocalMTLManager:
                     characters = normalize_character_info(character_info)
                 except Exception:
                     characters = {}
-                try:
-                    links = normalize_character_links(context_character_links, len(pairs))
-                except Exception:
-                    links = [None] * len(pairs)
+                links = context_links
                 try:
                     speaker = normalise_meta_id(meta_id)
                 except Exception:
                     speaker = None
 
-                if pairs or characters or speaker:
-                    try:
-                        return self.model.translate(
-                            text,
-                            context=pairs,
-                            lang=lang,
-                            character_info=list(characters.values()),
-                            context_character_links=links,
-                            meta_id=speaker,
-                        )
-                    except TypeError:
-                        # A supporting model with an older signature: translate
-                        # without rather than fail the whole request.
-                        pass
+                return self.model.translate(
+                    text,
+                    context=pairs,
+                    lang=lang,
+                    character_info=list(characters.values()),
+                    context_character_links=links,
+                    meta_id=speaker,
+                )
 
             if ctx_supported and pairs:
-                try:
-                    return self.model.translate(text, context=pairs, lang=lang)
-                except TypeError:
-                    # A supporting model with an older signature: translate
-                    # without rather than fail the whole request.
-                    pass
+                return self.model.translate(text, context=pairs, lang=lang)
 
             return self.model.translate(text)

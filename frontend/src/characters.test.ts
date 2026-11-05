@@ -163,6 +163,31 @@ describe("buildTranslationCharacters", () => {
         expect(payload.character_info).toEqual(mockRoster);
     });
 
+    it("keeps the roster and current speaker with Context off", () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko" }];
+        const first = entry("おはよう", "Morning", "a");
+        const target = entry("さようなら", "", "a");
+        state.pageEntriesCache["p.png"] = [first, target];
+
+        expect(buildTranslationCharacters(target.id, false)).toEqual({
+            character_info: mockRoster,
+            context_character_links: [],
+            meta_id: "a",
+        });
+    });
+
+    it("carries name guidance even when the first bubble has no assigned speaker", () => {
+        mockRoster = [{ meta_id: "a", name_en: "Aiko", name_ja: "愛子" }];
+        const target = entry("愛子はどこ？", "");
+        state.pageEntriesCache["p.png"] = [target];
+
+        expect(buildTranslationCharacters(target.id)).toEqual({
+            character_info: mockRoster,
+            context_character_links: [],
+            meta_id: null,
+        });
+    });
+
     it("is empty without a roster, a page, or a match", () => {
         const target = entry("a", "");
         state.pageEntriesCache["p.png"] = [target];

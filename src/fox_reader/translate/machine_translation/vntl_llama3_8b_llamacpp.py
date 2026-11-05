@@ -54,8 +54,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fox_reader.constants import VNTL_LLAMA3_MODEL_DIR, VNTL_LLAMA3_MODEL_FILE
+from fox_reader.constants import (
+    VNTL_LLAMA3_MODEL_DIR,
+    VNTL_LLAMA3_MODEL_FILE,
+    VNTL_LLAMA3_Q5_MODEL_DIR,
+    VNTL_LLAMA3_Q5_MODEL_FILE,
+)
 from fox_reader.device import CPU, CUDA, FOX_DEVICE, MPS, thread_count
+from fox_reader.translate.context_window import resolve_context_size
 
 logger = logging.getLogger(__name__)
 
@@ -580,14 +586,15 @@ class _InputValidator:
 class VntlLlamaTranslator:
     """VNTL Llama3 8B v2 GGUF translator (Japanese -> English)."""
 
-    def __init__(self, mtl_dir: Path | str, device: str | None = None):
-        self.model_path = resolve_weights(mtl_dir)
-        self.device = _normalize_device(device if device is not None else FOX_DEVICE.translator)
+    def __init__(self, mtl_dir: Path | str, device: str | None = None, *, n_ctx: int = N_CTX):
         # Set before anything that can raise, so unload() on a half-built
         # object is safe.
         self.model: Any = None
         self._role_tokens: dict[str, list[int]] = {}
         self._load_lock = threading.RLock()
+        self.model_path = self._resolve_weights(mtl_dir)
+        self.n_ctx = resolve_context_size(self.model_id(), n_ctx, self.model_path)
+        self.device = _normalize_device(device if device is not None else FOX_DEVICE.translator)
 
         llama_cpp = _import_llama_cpp()
         llama_cls = _llama_class(llama_cpp)
@@ -605,7 +612,7 @@ class VntlLlamaTranslator:
             self.device,
             ", ".join(f"{key}={value}" for key, value in placement.items()),
             self.n_threads,
-            N_CTX,
+            self.n_ctx,
         )
         if self.on_gpu:
             logger.info("VNTL is using full accelerator offload (n_gpu_layers=-1)")
@@ -618,7 +625,7 @@ class VntlLlamaTranslator:
         try:
             llm = llama_cls(
                 model_path=str(self.model_path),
-                n_ctx=N_CTX,
+                n_ctx=self.n_ctx,
                 n_threads=self.n_threads,
                 verbose=verbose,
                 **placement,
@@ -643,6 +650,10 @@ class VntlLlamaTranslator:
         logger.info("VNTL model loaded (%s)", self.model_path.name)
 
     # -- labels ---------------------------------------------------------
+    @staticmethod
+    def _resolve_weights(mtl_dir: Path | str) -> Path:
+        return resolve_weights(mtl_dir)
+
     def _labels(self, prepared: _PreparedInput) -> dict[str, tuple[str | None, str | None]]:
         labels: dict[str, tuple[str | None, str | None]] = {}
         referenced = {link for link in prepared.context_links if link is not None}
@@ -689,9 +700,8 @@ class VntlLlamaTranslator:
             return prepared.text_ja
         return self._format_line(label, prepared.text_ja)
 
-    @staticmethod
-    def _answer_reserve() -> int:
-        return min(MAX_NEW_TOKENS, N_CTX // 2) + 4
+    def _answer_reserve(self) -> int:
+        return min(MAX_NEW_TOKENS, self.n_ctx // 2) + 4
 
     def _build_prompt(self, prepared: _PreparedInput) -> tuple[list[int], int]:
         llm = self.model
@@ -702,11 +712,12 @@ class VntlLlamaTranslator:
         head = [TOK_BEGIN_OF_TEXT] + _encode_body(ROLE_METADATA, self._metadata_body(prepared), llm, roles)
         tail = _encode_body(ROLE_JAPANESE, self._input_body(prepared, labels), llm, roles) + _encode_header(ROLE_ENGLISH, roles)
         fixed_cost = len(head) + len(tail) + self._answer_reserve()
-        if fixed_cost >= N_CTX:
+        if fixed_cost >= self.n_ctx:
             raise PromptBudgetError(
-                f"the input alone needs {fixed_cost} tokens but the window is {N_CTX}; shorten the line or clear characters"
+                f"the input alone needs {fixed_cost} tokens but the window is {self.n_ctx}; "
+                "shorten the line or clear characters"
             )
-        budget = N_CTX - fixed_cost
+        budget = self.n_ctx - fixed_cost
         encoded: list[list[int]] = []
         for (ja_text, en_text), link in zip(prepared.context, prepared.context_links):
             ja_label = self._label_for(labels, link, english=False)
@@ -729,7 +740,7 @@ class VntlLlamaTranslator:
                 "VNTL context trimmed: dropped the %d oldest of %d turns to fit %d tokens",
                 dropped,
                 len(encoded),
-                N_CTX,
+                self.n_ctx,
             )
         prompt = head + [tok for pair in chosen for tok in pair] + tail
         return prompt, dropped
@@ -851,7 +862,7 @@ class VntlLlamaTranslator:
                 prompt_ids, dropped = self._build_prompt(prepared)
             except PromptBudgetError as exc:
                 raise RuntimeError(
-                    f"This text is too long for the model's {N_CTX}-token context window: {exc}"
+                    f"This text is too long for the model's {self.n_ctx}-token context window: {exc}"
                 ) from exc
             output, _elapsed = self._generate(prompt_ids)
             return self._parse(output, prepared, dropped, len(prompt_ids), _elapsed)
@@ -880,3 +891,21 @@ class VntlLlamaTranslator:
     @classmethod
     def model_langs(cls) -> list[str]:
         return ["japanese"]
+
+
+class VntlLlamaQ5Translator(VntlLlamaTranslator):
+    """The Q5_K_M quantization shares VNTL's native prompt and tokenizer."""
+
+    @staticmethod
+    def _resolve_weights(mtl_dir: Path | str) -> Path:
+        path = Path(mtl_dir) / VNTL_LLAMA3_Q5_MODEL_DIR / VNTL_LLAMA3_Q5_MODEL_FILE
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Missing {VNTL_LLAMA3_Q5_MODEL_FILE} under {path.parent}. "
+                "Download VNTL Q5_K_M from the setup page."
+            )
+        return path
+
+    @classmethod
+    def model_id(cls) -> str:
+        return "vntl-llama3-8b-v2-q5-k-m"
