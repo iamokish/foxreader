@@ -27,6 +27,7 @@ int main(void)
         "<script>fetch('/ui-ready')</script></body></html>";
     FILE *file;
     int yes = 1, stop = 0;
+    unsigned int ready_pages = 0;
 #ifdef _WIN32
     SOCKET listener, peer;
     WSADATA data;
@@ -77,12 +78,17 @@ int main(void)
                 if (file) { fputs("loaded", file); fclose(file); }
             }
             if (strncmp(request, "GET /ui-ready ", 14) == 0) {
-                file = fopen("ui-ready", "wb");
+                /* Separate evidence for the owner's and attached view's page;
+                 * tests must not mistake the first view for a ready second one. */
+                char marker[32];
+                snprintf(marker, sizeof marker, "ui-ready-%u", ++ready_pages);
+                file = fopen(marker, "wb");
                 if (file) { fputs("javascript ready", file); fclose(file); }
             }
         }
         count = snprintf(reply, sizeof reply,
-            "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nContent-Length: %u\r\nConnection: close\r\n\r\n%s",
+            "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nContent-Length: %u\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n%s",
             code, body == html ? "text/html" : "application/json", (unsigned)strlen(body), body);
         send(peer, reply, count, 0);
         close_socket(peer);

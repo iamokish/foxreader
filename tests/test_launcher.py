@@ -19,15 +19,59 @@ from types import SimpleNamespace
 
 import pytest
 
+# The native host allows 30 seconds each for engine initialization and first
+# navigation. Include both phases and a little runner scheduling time; ordinary
+# backend/ownership waits retain their shorter deadline.
+NATIVE_PAGE_TIMEOUT = 65
 
-def wait_for(predicate, timeout=15):
+
+def wait_for(predicate, timeout=15, *, description="launcher"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(0.05)
-    raise AssertionError("Timed out waiting for launcher")
+    raise AssertionError(f"Timed out after {timeout}s waiting for {description}")
+
+
+def log_tail(path):
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 8192))
+            return stream.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"Log unavailable: {exc}"
+
+
+def launcher_diagnostics(root):
+    # Pytest displays captured teardown output on failure. Keep these bounded
+    # and confined to fixture logs, without printing inherited environment data.
+    print(f"\nLauncher fixture: {root}")
+    print("Readiness markers:", sorted(path.name for path in root.glob("ui-ready-*")))
+    for name in ("launcher.log", "backend-output.log"):
+        print(f"\n{name}:\n{log_tail(root / 'logs' / name)}")
+
+
+def wait_for_native_page(root, process, *, page=1):
+    def ready():
+        code = process.poll()
+        assert code is None, f"Launcher exited before native page {page} was ready (code {code})"
+        log = log_tail(root / "logs" / "launcher.log")
+        assert "WebView2 fallback" not in log, f"Native page {page} fell back to the browser:\n{log}"
+        return (root / f"ui-ready-{page}").is_file()
+
+    wait_for(ready, timeout=NATIVE_PAGE_TIMEOUT, description=f"native page {page} readiness")
+
+
+def post_window_message(hwnd, message, wparam=0, lparam=0):
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    post = user.PostMessageW
+    post.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    post.restype = ctypes.c_int
+    if not post(hwnd, message, wparam, lparam):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def window_for(pid):
@@ -74,18 +118,22 @@ def _installation(tmp_path, launcher_variable):
 
 @pytest.fixture
 def installation(tmp_path):
-    return _installation(tmp_path, "FOX_TEST_LAUNCHER")
+    result = _installation(tmp_path, "FOX_TEST_LAUNCHER")
+    yield result
+    launcher_diagnostics(result[0])
 
 
 @pytest.fixture
 def no_window_installation(tmp_path):
-    return _installation(tmp_path, "FOX_TEST_NO_WINDOW_LAUNCHER")
+    result = _installation(tmp_path, "FOX_TEST_NO_WINDOW_LAUNCHER")
+    yield result
+    launcher_diagnostics(result[0])
 
 
 def stop_launcher(process):
     if os.name == "nt":
         hwnd = wait_for(lambda: window_for(process.pid))
-        ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
+        post_window_message(hwnd, 0x0010)  # WM_CLOSE
     else:
         process.send_signal(signal.SIGTERM)
 
@@ -191,12 +239,12 @@ def test_owned_close_and_native_output(installation):
     try:
         wait_for(lambda: health(port))
         if os.name == "nt":
-            wait_for(lambda: (root / "ui-ready").exists())
+            wait_for_native_page(root, process)
             hwnd = wait_for(lambda: window_for(process.pid))
             user = ctypes.windll.user32
-            user.PostMessageW(ctypes.c_void_p(hwnd), 0x0100, 0x7A, 0)  # F11
+            post_window_message(hwnd, 0x0100, 0x7A)  # F11
             wait_for(lambda: not user.GetWindowLongW(ctypes.c_void_p(hwnd), -16) & 0x00C00000)
-            user.PostMessageW(ctypes.c_void_p(hwnd), 0x0100, 0x7A, 0)
+            post_window_message(hwnd, 0x0100, 0x7A)
             wait_for(lambda: user.GetWindowLongW(ctypes.c_void_p(hwnd), -16) & 0x00C00000)
         stop_launcher(process)
         assert process.wait(timeout=25) == 0
@@ -218,7 +266,13 @@ def test_windows_binary_uses_gui_subsystem(installation):
     assert struct.unpack_from("<H", data, header + 24 + 68)[0] == 2  # IMAGE_SUBSYSTEM_WINDOWS_GUI
 
 
-def test_closing_attached_launcher_preserves_owner(installation):
+@pytest.mark.parametrize("close_during_startup", [
+    pytest.param(False, id="ready"),
+    pytest.param(True, id="starting", marks=pytest.mark.skipif(
+        os.name != "nt", reason="Windows WebView startup",
+    )),
+])
+def test_closing_attached_launcher_preserves_owner(installation, close_during_startup):
     root, launcher, port, env = installation
     args = [] if os.name == "nt" else ["--cli"]
     owner = subprocess.Popen([str(launcher), *args], env=env, cwd=root,
@@ -226,11 +280,16 @@ def test_closing_attached_launcher_preserves_owner(installation):
     peer = None
     try:
         wait_for(lambda: health(port))
+        if os.name == "nt" and not close_during_startup:
+            wait_for_native_page(root, owner)
         peer = subprocess.Popen([str(launcher), *args], env=env, cwd=root,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         wait_for(lambda: "already running" in (root / "logs" / "launcher.log").read_text())
+        if os.name == "nt" and not close_during_startup:
+            # Separate normal attached close from closing during WebView startup.
+            wait_for_native_page(root, peer, page=2)
         stop_launcher(peer)
-        assert peer.wait(timeout=10) == 0
+        assert peer.wait(timeout=25) == 0
         assert health(port)
         assert not (root / "shutdown-ok").exists()
         stop_launcher(owner)
