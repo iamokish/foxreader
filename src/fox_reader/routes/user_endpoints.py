@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -23,8 +24,10 @@ from fox_reader.user_endpoints import (
 
 router = APIRouter(tags=["user-endpoints"])
 templates = assets.templates()
+logger = logging.getLogger(__name__)
 
 SAMPLE_TEXT = "こんにちは"
+_TRANSLATION_METADATA_FIELDS = ("context", "character_info", "context_character_links", "meta_id")
 
 
 def _error_message(exc: Exception) -> str:
@@ -62,6 +65,27 @@ async def _body(request: Request) -> dict[str, Any]:
 
 def _language_of(body: dict[str, Any]) -> str:
     return str(body.get("language") or "").strip().lower()
+
+
+def _translation_metadata(body: dict[str, Any]) -> dict[str, Any]:
+    # Preserve omission versus explicit null/empty input. Only a request with
+    # no metadata gets the complete sample conversation; real input must
+    # never acquire unrelated sample speakers.
+    return {key: body[key] for key in _TRANSLATION_METADATA_FIELDS if key in body}
+
+
+def _test_error_response(code: int, message: str, **details: Any) -> JSONResponse:
+    """Keep failures that prevent a test readable by the result dialog."""
+    return JSONResponse({
+        "status": False,
+        "code": code,
+        "error": message,
+        "message": message,
+        "translated": "",
+        "alternatives": [],
+        "request": {},
+        **details,
+    }, status_code=code)
 
 
 @router.get("/user_endpoints", response_class=HTMLResponse)
@@ -108,6 +132,30 @@ async def get_active_endpoints(request: Request):
     })
 
 
+@router.get("/api/user_endpoints/{endpoint_id}/key")
+async def reveal_user_endpoint_key(request: Request, endpoint_id: str):
+    """Read the saved key on demand for the editor's Show button."""
+    headers = {"Cache-Control": "no-store"}
+    store = getattr(request.app.state, "user_endpoints", None)
+    if store is None:
+        return JSONResponse(
+            {"error": "User endpoints are not configured"}, status_code=503, headers=headers,
+        )
+
+    endpoint = store.get(endpoint_id)
+    if endpoint is None:
+        return JSONResponse({"error": "Endpoint not found"}, status_code=404, headers=headers)
+    if not endpoint.encryption.key:
+        return JSONResponse(
+            {"error": "No encryption key is stored for this endpoint"}, status_code=404, headers=headers,
+        )
+
+    return JSONResponse({
+        "key": endpoint.encryption.key,
+        "key_encoding": endpoint.encryption.key_encoding,
+    }, headers=headers)
+
+
 @router.post("/api/user_endpoints/preview")
 async def preview_user_endpoint(request: Request):
     """Validate a draft endpoint and show the request it would send."""
@@ -119,8 +167,8 @@ async def preview_user_endpoint(request: Request):
     if not isinstance(draft, dict):
         return JSONResponse({"error": "endpoint must be an object"}, status_code=400)
 
-    # An edit form has no copy of the stored encryption key, so borrow it for
-    # the preview rather than failing on the blank field.
+    # An unchanged key is omitted by the editor, even after Show. Borrow the
+    # current stored key for the preview rather than failing on a blank field.
     store = getattr(request.app.state, "user_endpoints", None)
 
     if store is not None and draft.get("id"):
@@ -139,6 +187,7 @@ async def preview_user_endpoint(request: Request):
             endpoint,
             text=text,
             source_lang=language,
+            **_translation_metadata(body),
         )
     except Exception as exc:
         return JSONResponse({"error": _error_message(exc)}, status_code=400)
@@ -185,13 +234,21 @@ async def delete_user_endpoint(request: Request, endpoint_id: str):
 @router.post("/api/user_endpoints/{endpoint_id}/test")
 async def test_user_endpoint(request: Request, endpoint_id: str):
     """Send one real request through a saved endpoint."""
-    from fox_reader.translate.custom_endpoint import describe_request
+    from fox_reader.translate.custom_endpoint import (
+        preview_translation_inputs,
+        translate_by_custom_endpoint,
+    )
 
-    store = request.app.state.user_endpoints
+    store = getattr(request.app.state, "user_endpoints", None)
+    if store is None:
+        logger.warning("Custom endpoint test unavailable: endpoint store is not initialized")
+        return _test_error_response(503, "User endpoints are unavailable. Restart Fox Reader and try again.")
+
     endpoint = store.get(endpoint_id)
 
     if endpoint is None:
-        return JSONResponse({"error": "Endpoint not found"}, status_code=404)
+        logger.warning("Custom endpoint test could not find endpoint %r", endpoint_id)
+        return _test_error_response(404, "Endpoint not found. Refresh the page and try again.")
 
     body = await _body(request)
     text = str(body.get("text") or SAMPLE_TEXT).strip() or SAMPLE_TEXT
@@ -200,22 +257,40 @@ async def test_user_endpoint(request: Request, endpoint_id: str):
     if language not in endpoint.languages:
         language = endpoint.languages[0]
 
+    request_preview: dict[str, Any] = {}
     try:
-        # Explicit empties: this preview describes the real request sent
-        # below, which carries no history -- unlike the editor preview, which
-        # fills the lists with samples to show their shape.
-        request_preview = describe_request(
+        # A saved endpoint can be tested before local model setup is complete,
+        # when app.state.translate is None. Execute this validated snapshot
+        # directly, using the same HTTP executor as the reader's translator.
+        result = await translate_by_custom_endpoint(
             endpoint,
             text=text,
             source_lang=language,
-            context=[],
-            character_info=[],
-            context_character_links=[],
+            **preview_translation_inputs(**_translation_metadata(body)),
+            on_request=request_preview.update,
         )
     except Exception as exc:
-        return JSONResponse({"error": _error_message(exc)}, status_code=400)
+        # Exception text can contain request bodies or credentials. Keep the
+        # normal log concise and safe, and never let a failed test become an
+        # unhandled ASGI error page.
+        logger.error(
+            "Custom endpoint test could not complete (endpoint=%r, error=%s)",
+            endpoint_id, type(exc).__name__,
+        )
+        return _test_error_response(
+            500,
+            "An internal error prevented the endpoint test from completing. "
+            "Try again; if it persists, check the server log.",
+            language=language, sent=text, request=request_preview,
+        )
 
-    result = await request.app.state.translate.custom(text, endpoint_id, language)
+    if result.code != 200:
+        # The detailed remote error is available in the dialog. Do not copy
+        # upstream response bodies (which may echo secrets) into the log.
+        logger.warning(
+            "Custom endpoint test failed (endpoint=%r, code=%s); see the test result for details",
+            endpoint_id, result.code,
+        )
 
     return JSONResponse({
         "status": result.code == 200,

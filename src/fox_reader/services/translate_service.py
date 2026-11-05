@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
+from typing import Any
 
 from fox_reader.config import FoxConfig
 from fox_reader.models.responses import TranslationResult
 from fox_reader.settings import SettingsManager
-from fox_reader.user_endpoints import UserEndpointStore
 from fox_reader.translate.local_mtl import LocalMTLManager
+from fox_reader.user_endpoints import UserEndpointStore
 from fox_reader.utils import PROJECT_ROOT
 
 
@@ -85,6 +87,9 @@ class TranslateService:
         context: object = None,
         character_info: object = None,
         context_character_links: object = None,
+        meta_id: object = None,
+        *,
+        on_request: Callable[[dict[str, Any]], None] | None = None,
     ) -> TranslationResult:
         """Translate through a user-defined endpoint.
 
@@ -95,7 +100,9 @@ class TranslateService:
         request schema carries a Context node. `character_info` (the roster
         snapshot) and `context_character_links` (one meta_id or None per
         pair) behave the same way for the Character Info and Context Links
-        nodes.
+        nodes. `meta_id` identifies the current speaker, independently of
+        history. The editor's test observes the prepared request through
+        `on_request`, so UUIDs and encrypted values are generated only once.
         """
         selector = (selector or "").strip()
         language = (language or "").strip().lower()
@@ -143,6 +150,8 @@ class TranslateService:
             context=context,
             character_info=character_info,
             context_character_links=context_character_links,
+            meta_id=meta_id,
+            on_request=on_request,
         )
 
     def ml(

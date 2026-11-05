@@ -27,6 +27,7 @@ ValueSource = Literal[
     "context",
     "character_info",
     "context_character_links",
+    "meta_id",
     "error",
     "alt",
 ]
@@ -146,6 +147,7 @@ REQUEST_SOURCES: tuple[ValueSource, ...] = (
     "context",
     "character_info",
     "context_character_links",
+    "meta_id",
 )
 
 RESPONSE_SOURCES: tuple[ValueSource, ...] = (
@@ -232,9 +234,9 @@ class EndpointSchemaNode(BaseModel):
     Dynamic sources:
       * request  — exactly one ``text``, at most one ``src_lang`` /
         ``target_lang`` / ``context`` / ``character_info`` /
-        ``context_character_links``
+        ``context_character_links`` / ``meta_id`` (the current speaker)
       * response — exactly one ``text``, at most one ``error`` / ``alt``
-        (``context``, ``character_info`` and ``context_character_links`` are
+        (``context``, ``character_info``, ``context_character_links`` and ``meta_id`` are
         request-only: they travel out, never back)
 
     Static ``string`` values are placeholder-expanded, so a literal
@@ -297,6 +299,9 @@ class EndpointSchemaNode(BaseModel):
 
         if self.source in {"src_lang", "target_lang"} and self.type != "string":
             raise ValueError(f"{self.source} source must use a string node")
+
+        if self.source == "meta_id" and self.type != "string":
+            raise ValueError("Current Speaker source must use a string node")
 
         if self.source == "error" and self.type not in {"string", "null"}:
             raise ValueError("Error source must use a string or null node")
@@ -398,6 +403,7 @@ class EndpointSchemaNode(BaseModel):
         context: list[list[str]] | None = None,
         character_info: list[dict[str, Any]] | None = None,
         context_character_links: list[str | None] | None = None,
+        meta_id: str | None = None,
     ) -> Any:
         if self.source == "text":
             return text
@@ -420,6 +426,10 @@ class EndpointSchemaNode(BaseModel):
             # One meta_id (or None) per context pair, positionally aligned.
             # Schemas without a Context Links node never see it.
             return list(context_character_links or [])
+        if self.source == "meta_id":
+            # No assigned/known speaker is represented by JSON null, never
+            # by an unrelated character or an empty invented identifier.
+            return meta_id
         if self.source in {"error", "alt"}:
             raise ValueError(
                 f"{self.source} is a response-only source and cannot be sent"
@@ -434,6 +444,7 @@ class EndpointSchemaNode(BaseModel):
                     context=context,
                     character_info=character_info,
                     context_character_links=context_character_links,
+                    meta_id=meta_id,
                 )
                 for key, child in self.children.items()
             }
@@ -448,6 +459,7 @@ class EndpointSchemaNode(BaseModel):
                     context=context,
                     character_info=character_info,
                     context_character_links=context_character_links,
+                    meta_id=meta_id,
                 )
                 for child in self.items
             ]
@@ -652,6 +664,8 @@ class EndpointSchemaNode(BaseModel):
             return ["<CHARACTER_INFO>"]
         if self.source == "context_character_links":
             return ["<CONTEXT_LINKS>"]
+        if self.source == "meta_id":
+            return "<CURRENT_SPEAKER>"
 
         if self.type == "dict":
             return {key: child.example() for key, child in self.children.items()}
@@ -718,18 +732,21 @@ def validate_request_schema(schema: EndpointSchemaNode) -> None:
             "Request schema can contain at most one Context Links node."
         )
 
-    # The two lists describe one thing -- a roster and which entry each
-    # history turn belongs to -- so one without the other is a misconfigured
-    # endpoint, not a partial feature. Node keys are free-form; only the
-    # sources have to travel together.
+    if schema.count_source("meta_id") > 1:
+        raise ValueError("Request schema can contain at most one Current Speaker node.")
+
+    # A roster is useful even without history (names/aliases or the current
+    # speaker). Speaker references need that roster to have a meaning.
+    # Legacy schemas with links but no Context remain loadable: request
+    # preparation emits empty links when no history travels on the wire.
     info_count = schema.count_source("character_info")
     links_count = schema.count_source("context_character_links")
 
-    if (info_count == 0) != (links_count == 0):
-        raise ValueError(
-            "Character Info and Context Links go together: the request "
-            "schema must contain both or neither."
-        )
+    if links_count and not info_count:
+        raise ValueError("Context Links requires a Character Info node.")
+
+    if schema.count_source("meta_id") and not info_count:
+        raise ValueError("Current Speaker requires a Character Info node.")
 
     if schema.count_source("error"):
         raise ValueError("Request schema cannot contain an Error node.")
@@ -784,6 +801,9 @@ def validate_response_schema(schema: EndpointSchemaNode) -> None:
         raise ValueError(
             "Response schema cannot contain a Context Links node."
         )
+
+    if schema.count_source("meta_id"):
+        raise ValueError("Response schema cannot contain a Current Speaker node.")
 
     if schema.has_uuid():
         raise ValueError(

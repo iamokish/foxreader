@@ -3,8 +3,8 @@
  *
  * The page's JavaScript lives inside the Jinja template, so this renders the
  * template, lifts the <script> out of it and runs it against a stub DOM. That
- * is enough to exercise the parts with real logic in them — the uuid node type
- * and the encryption block — without a browser.
+ * is enough to exercise schema editing, saved keys and async feedback/test
+ * behavior without a browser.
  *
  * Run it after rendering the template to $TMPDIR/ue-page.js:
  *
@@ -27,6 +27,7 @@ const script = fs.readFileSync(SCRIPT_PATH, "utf8");
  * ------------------------------------------------------------------ */
 
 function makeEl(id, extra = {}) {
+  const listeners = new Map();
   const target = {
     id,
     value: "",
@@ -35,10 +36,25 @@ function makeEl(id, extra = {}) {
     type: "text",
     checked: false,
     disabled: false,
+    open: false,
+    modalShows: 0,
     tagName: "DIV",
     style: {},
     dataset: {},
     classList: { contains: () => false, add() {}, remove() {}, toggle() {} },
+    addEventListener(type, listener) {
+      const handlers = listeners.get(type) || [];
+      handlers.push(listener);
+      listeners.set(type, handlers);
+    },
+    dispatch(type, event = {}) {
+      for (const listener of listeners.get(type) || []) {
+        listener({ target: this, preventDefault() {}, ...event });
+      }
+    },
+    showModal() { this.open = true; this.modalShows += 1; },
+    close() { this.open = false; this.dispatch("close"); },
+    getBoundingClientRect() { return { left: 100, top: 100, right: 500, bottom: 400 }; },
     ...extra,
   };
 
@@ -96,6 +112,7 @@ const sandbox = {
   BroadcastChannel,
   console,
   crypto: globalThis.crypto,
+  AbortController,
   btoa,
   CSS: { escape: (value) => value },
   confirm: () => false,
@@ -122,7 +139,11 @@ const expose = `
   TYPES, RESPONSE_TYPES, generateFernetKey, checkKeyMaterial,
   collectEncryption, encryptionSummary, syncEncryptionFields,
   setType, setValue, addField, nodeAt, schemas, makePayload,
-  defaultSchema, renderNode,
+  defaultSchema, renderNode, dynamicNode, setSource, availableSources,
+  validateEditor, updatePreview,
+  revealKey, fillGeneratedKey, resetDialog, openEdit, closeDialog,
+  status, closeFeedback, testEndpoint, renderCards,
+  get state() { return state },
   get storedKeyPresent() { return storedKeyPresent },
   set storedKeyPresent(value) { storedKeyPresent = value },
   el: (id) => document.getElementById(id),
@@ -228,6 +249,59 @@ check(
   api.nodeAt("request", lastPath).source === "static",
 );
 
+console.log("\n--- character and context schema ---");
+api.schemas.request = api.defaultSchema("request");
+const rosterNode = api.dynamicNode("list", "roster", "character_info");
+api.schemas.request.children.push(rosterNode);
+api.validateEditor("request");
+console.log("ok   a roster works without history or speaker links");
+
+const speakerNode = api.newNode("string", "speaker");
+api.schemas.request.children.push(speakerNode);
+const speakerPath = [`c:${api.schemas.request.children.length - 1}`];
+check("current speaker offered on request strings", api.availableSources("request", speakerNode).includes("meta_id"));
+check("current speaker withheld from arrays", !api.availableSources("request", api.newNode("list")).includes("meta_id"));
+check("current speaker withheld from responses", !api.availableSources("response", speakerNode).includes("meta_id"));
+api.setSource("request", speakerPath, "meta_id");
+api.validateEditor("request");
+console.log("ok   current speaker and roster work without context");
+check("current speaker preview identifies its dynamic value", api.example(speakerNode) === "<CURRENT_SPEAKER>");
+check(
+  "current speaker survives model round trip under a custom key",
+  api.fromModel(api.toModel(api.schemas.request)).children.some((child) => child.key === "speaker" && child.source === "meta_id"),
+);
+check(
+  "selected current speaker remains available on its own node",
+  api.availableSources("request", speakerNode).includes("meta_id"),
+);
+const duplicateNode = api.newNode("string", "other_speaker");
+api.schemas.request.children.push(duplicateNode);
+const duplicatePath = [`c:${api.schemas.request.children.length - 1}`];
+check("current speaker is withheld from a second node", !api.availableSources("request", duplicateNode).includes("meta_id"));
+api.setSource("request", duplicatePath, "meta_id");
+check("duplicate current speaker selection is refused", duplicateNode.source === "static");
+duplicateNode.source = "meta_id";
+throws("duplicate current speaker is rejected on save", () => api.validateEditor("request"), "at most one Current Speaker");
+api.schemas.request.children.pop();
+
+api.schemas.request.children.push(api.dynamicNode("list", "speakers", "context_character_links"));
+api.validateEditor("request");
+api.updatePreview("request");
+check("legacy links without context show a warning", el("requestWarning").textContent.includes("links will be empty"));
+api.schemas.request.children.push(api.dynamicNode("list", "history", "context"));
+api.updatePreview("request");
+check("adding context clears the legacy warning", el("requestWarning").textContent === "");
+api.schemas.request.children = api.schemas.request.children.filter((child) => child !== rosterNode);
+throws("history links require a roster", () => api.validateEditor("request"), "Context Links requires a Character Info");
+api.schemas.request.children = api.schemas.request.children.filter((child) => child.source !== "context_character_links");
+throws("current speaker requires a roster", () => api.validateEditor("request"), "Current Speaker requires a Character Info");
+api.schemas.response = api.defaultSchema("response");
+api.schemas.response.children.push(api.dynamicNode("string", "speaker", "meta_id"));
+throws("current speaker is request-only", () => api.validateEditor("response"), "cannot contain a Current Speaker");
+api.schemas.request = api.defaultSchema("request");
+api.schemas.response = api.defaultSchema("response");
+api.updatePreview("request");
+
 console.log("\n--- key generation ---");
 const keys = Array.from({ length: 5 }, () => api.generateFernetKey());
 check("44 characters", keys.every((key) => key.length === 44), keys[0]);
@@ -330,13 +404,13 @@ api.storedKeyPresent = false;
 api.syncEncryptionFields();
 check("fields shown when on", encFields.every((field) => field.style.display === ""));
 check("generate offered for fernet", el("encGenerate").style.display === "");
-check("fresh hint says it is never returned", el("encKeyHint").innerHTML.includes("never returned"));
+check("fresh hint explains how to reveal after saving", el("encKeyHint").innerHTML.includes("use Show to reveal"));
 check("hint names the rotation cap", el("encKeyHint").innerHTML.includes("Up to 4"));
 check("fernet hint names generate_key", el("encEncodingHint").innerHTML.includes("generate_key()"));
 
 api.storedKeyPresent = true;
 api.syncEncryptionFields();
-check("stored-key hint says leave it empty", el("encKeyHint").innerHTML.includes("Leave the box empty"));
+check("stored-key hint explains preserving the key and type", el("encKeyHint").innerHTML.includes("Leave the box empty") && el("encKeyHint").innerHTML.includes("reveal or enter the key first"));
 
 el("encEncoding").value = "passphrase";
 api.syncEncryptionFields();
@@ -415,6 +489,244 @@ check(
     },
   }) === "On · text sent · passphrase · 300s max age",
 );
+
+console.log("\n--- saved key Show/Hide ---");
+// Let the page's initial async list fetch finish before installing fixtures.
+await new Promise((resolve) => setTimeout(resolve, 0));
+api.state.endpoints = ["saved", "other"].map((id) => ({
+  id, name: id, hostname: "example.invalid", languages: [],
+  encryption: { enabled: true, has_key: true, key_encoding: "fernet" },
+}));
+let revealCalls = [];
+const keyResponse = (value = keys[0], encoding = "fernet") => ({
+  ok: true, json: async () => ({ key: value, key_encoding: encoding }),
+});
+sandbox.fetch = async (url, options) => {
+  revealCalls.push({ url, options });
+  return keyResponse();
+};
+api.openEdit("saved");
+check("reopen leaves saved key blank and hidden", el("encKey").value === "" && el("encKey").type === "password");
+check("opening does not fetch the saved key", revealCalls.length === 0);
+const revealing = api.revealKey();
+await api.revealKey();
+check("pending reveal disables Show and deduplicates requests", el("encReveal").disabled && revealCalls.length === 1);
+await revealing;
+check("Show loads saved key visibly", el("encKey").value === keys[0] && el("encKey").type === "text");
+check("Show fetch targets only current endpoint without caching", revealCalls[0].url === "/api/user_endpoints/saved/key" && revealCalls[0].options.cache === "no-store");
+check("loaded key can be hidden", el("encReveal").textContent === "Hide" && !el("encReveal").disabled);
+check("unchanged revealed key is not resubmitted", api.collectEncryption().key === "");
+await api.revealKey();
+check("Hide masks the loaded key", el("encKey").type === "password" && el("encKey").value === keys[0]);
+await api.revealKey();
+check("repeated Show reuses this dialog's loaded key", el("encKey").type === "text" && revealCalls.length === 1);
+el("encEncoding").value = "passphrase";
+el("dialog").dispatch("change", { target: el("encEncoding") });
+check("changing encoding submits the revealed value explicitly", api.collectEncryption().key === keys[0]);
+api.closeDialog();
+check("close clears the revealed value and masks input", el("encKey").value === "" && el("encKey").type === "password");
+api.openEdit("saved");
+await api.revealKey();
+check("a reopened dialog retrieves a fresh saved key", revealCalls.length === 2);
+el("dialog").dispatch("cancel");
+check("Escape clears the revealed key", el("encKey").value === "" && el("encKey").type === "password");
+await api.revealKey();
+el("dialog").close();
+check("native close also clears the revealed key", el("encKey").value === "" && el("encKey").type === "password");
+
+api.openEdit("saved");
+el("encKey").value = keys[1];
+el("dialog").dispatch("input", { target: el("encKey") });
+const beforeLocal = revealCalls.length;
+await api.revealKey();
+await api.revealKey();
+check("typed replacement shows and hides without fetching", revealCalls.length === beforeLocal && el("encKey").type === "password");
+check("typed replacement is submitted", api.collectEncryption().key === keys[1]);
+api.fillGeneratedKey();
+const generatedKey = el("encKey").value;
+await api.revealKey();
+await api.revealKey();
+check("generated key stays local and is submitted", revealCalls.length === beforeLocal && api.collectEncryption().key === generatedKey);
+
+for (const [label, fetchResult] of [
+  ["HTTP failure", async () => ({ ok: false, json: async () => ({ error: "Key not found" }) })],
+  ["network failure", async () => { throw new Error("Connection failed"); }],
+  ["invalid JSON", async () => ({ ok: true, json: async () => { throw new Error("Invalid JSON"); } })],
+  ["null response", async () => ({ ok: true, json: async () => null })],
+]) {
+  api.openEdit("saved");
+  sandbox.fetch = fetchResult;
+  await api.revealKey();
+  check(`${label} keeps key hidden and permits retry`, el("encKey").value === "" && el("encKey").type === "password" && !el("encReveal").disabled);
+  check(`${label} is shown in the dialog`, Boolean(el("dialogStatus").textContent));
+}
+
+// Resolving aborted requests anyway exercises stale-response checks even if
+// a transport or test double ignores AbortSignal.
+for (const [label, interrupt] of [
+  ["typed replacement", () => {
+    el("encKey").value = keys[1];
+    el("dialog").dispatch("input", { target: el("encKey") });
+  }],
+  ["generated replacement", () => api.fillGeneratedKey()],
+  ["encoding change", () => {
+    el("encEncoding").value = "passphrase";
+    el("dialog").dispatch("change", { target: el("encEncoding") });
+  }],
+  ["encryption disabled", () => {
+    el("encEnabled").value = "false";
+    el("dialog").dispatch("change", { target: el("encEnabled") });
+  }],
+  ["dialog close", () => api.closeDialog()],
+  ["Escape", () => el("dialog").dispatch("cancel")],
+  ["native close", () => el("dialog").close()],
+  ["same endpoint reopened", () => { api.closeDialog(); api.openEdit("saved"); }],
+  ["another endpoint opened", () => api.openEdit("other")],
+]) {
+  api.openEdit("saved");
+  let finish;
+  let signal;
+  sandbox.fetch = (_url, options) => {
+    signal = options.signal;
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  const pending = api.revealKey();
+  interrupt();
+  const expectedValue = el("encKey").value;
+  const expectedEncoding = el("encEncoding").value;
+  check(`${label} cancels pending reveal`, signal.aborted);
+  finish(keyResponse());
+  await pending;
+  check(`${label} is not overwritten by the stale response`, el("encKey").value === expectedValue && el("encEncoding").value === expectedEncoding);
+  check(`${label} leaves the reveal button usable`, !el("encReveal").disabled);
+}
+
+api.openEdit("saved");
+const pendingResponses = [];
+sandbox.fetch = () => new Promise((resolve) => pendingResponses.push(resolve));
+const oldReveal = api.revealKey();
+api.closeDialog();
+api.openEdit("other");
+const newReveal = api.revealKey();
+el("dialog").dispatch("close");
+check("queued old close does not cancel a reopened dialog", el("dialog").open && el("encReveal").disabled);
+pendingResponses[0](keyResponse(keys[0]));
+await oldReveal;
+check("old request completion leaves the new reveal pending", el("encKey").value === "" && el("encReveal").disabled);
+pendingResponses[1](keyResponse(keys[1]));
+await newReveal;
+check("only the new endpoint's key becomes visible", el("encKey").value === keys[1] && !el("encReveal").disabled);
+
+api.openEdit("saved");
+sandbox.fetch = async () => keyResponse("saved passphrase", "passphrase");
+await api.revealKey();
+check("revealed key uses its saved encoding", el("encKey").value === "saved passphrase" && el("encEncoding").value === "passphrase");
+check("unchanged revealed passphrase remains server-managed", api.collectEncryption().key === "");
+api.closeDialog();
+
+console.log("\n--- visible page feedback ---");
+const feedback = el("resultDialog");
+const firstShow = feedback.modalShows;
+api.status("Endpoint saved.");
+check("page feedback opens a native modal", feedback.open && feedback.modalShows === firstShow + 1);
+check("page feedback states the outcome", el("resultMessage").textContent === "Endpoint saved.");
+el("resultBody").scrollTop = 180;
+api.status("<b>Activation failed</b>", true);
+check("new feedback reuses the open modal", feedback.modalShows === firstShow + 1);
+check("replacement feedback scrolls its message into view", el("resultBody").scrollTop === 0);
+check("error text is displayed literally", el("resultMessage").textContent === "<b>Activation failed</b>" && el("resultMessage").className.includes("error"));
+const closeButton = makeEl("close-feedback", {
+  closest: (selector) => selector === '[data-act="close-result"]' ? closeButton : null,
+});
+feedback.dispatch("click", { target: closeButton });
+check("Close dismisses page feedback", !feedback.open);
+
+api.status("An endpoint message.");
+feedback.dispatch("pointerdown", { clientX: 150, clientY: 150 });
+feedback.dispatch("click", { clientX: 150, clientY: 150 });
+check("clicking inside the dialog keeps it open", feedback.open);
+feedback.dispatch("pointerdown", { clientX: 150, clientY: 150 });
+feedback.dispatch("click", { clientX: 50, clientY: 50 });
+check("dragging from inside to outside does not dismiss feedback", feedback.open);
+feedback.dispatch("pointerdown", { clientX: 50, clientY: 50 });
+feedback.dispatch("pointercancel");
+feedback.dispatch("click", { clientX: 50, clientY: 50 });
+check("a cancelled pointer gesture cannot dismiss feedback", feedback.open);
+feedback.dispatch("pointerdown", { clientX: 50, clientY: 50 });
+feedback.dispatch("click", { clientX: 50, clientY: 50 });
+check("clicking outside dismisses feedback", !feedback.open);
+api.status("Escape can close this.");
+let escapePrevented = false;
+feedback.dispatch("cancel", { preventDefault() { escapePrevented = true; } });
+check("native Escape dismissal remains enabled", !escapePrevented);
+feedback.close();
+
+console.log("\n--- Send test feedback and request lifecycle ---");
+const testButtons = ["saved", "other"].map((id) => makeEl(`test-${id}`, {
+  dataset: { card: "test", id },
+}));
+el("list").querySelectorAll = (selector) => selector === '[data-card="test"]' ? testButtons : [];
+const testResponse = (body, status = 200, statusText = "OK") => ({
+  ok: status >= 200 && status < 300,
+  status,
+  statusText,
+  text: async () => typeof body === "string" ? body : JSON.stringify(body),
+});
+let finishTest;
+let testCalls = 0;
+sandbox.fetch = () => {
+  testCalls += 1;
+  return new Promise((resolve) => { finishTest = resolve; });
+};
+const pendingTest = api.testEndpoint("saved");
+await api.testEndpoint("saved");
+await api.testEndpoint("other");
+check("duplicate and competing tests share one pending request", testCalls === 1);
+check("test progress is visible and explains dismissal", feedback.open && el("resultTitle").textContent === "Testing endpoint" && el("resultMessage").textContent.includes("result will appear"));
+check("test buttons are disabled while a request is pending", testButtons.every((button) => button.disabled));
+check("the current endpoint's test button shows progress", testButtons[0].textContent === "Testing…");
+api.renderCards();
+check("rerendered cards retain the pending-test guard", (el("list").innerHTML.match(/data-card="test"[^>]* disabled/g) || []).length === 2);
+api.closeFeedback();
+el("resultBody").scrollTop = 350;
+await api.testEndpoint("saved");
+check("dismissing progress does not start another test", !feedback.open && testCalls === 1);
+finishTest(testResponse({
+  status: true, code: 200, sent: "こんにちは", language: "japanese",
+  translated: "Hello", alternatives: ["Hi"],
+  request: { body: '{"text":"actual prepared token"}' },
+}));
+await pendingTest;
+check("a dismissed pending test still delivers its result", feedback.open && el("resultTitle").textContent === "Test succeeded");
+check("reopened test results start at the visible message", el("resultBody").scrollTop === 0);
+check("the result retains translation and actual request details", el("resultOut").textContent.includes("Hello") && el("resultOut").textContent.includes("actual prepared token"));
+check("completed tests reenable every test button", testButtons.every((button) => !button.disabled && button.textContent === "Send test"));
+
+for (const [label, fetchResult, expectedMessage, expectedDetail] of [
+  ["structured HTTP error", async () => testResponse({ status: false, code: 404, message: "Endpoint no longer exists", error: "legacy fallback" }, 404, "Not Found"), "Endpoint no longer exists", "status:     404"],
+  ["HTTP 200 endpoint failure", async () => testResponse({ status: false, code: 503, message: "Could not reach the endpoint", request: { url: "https://example.invalid/test" } }), "Could not reach the endpoint", "https://example.invalid/test"],
+  ["error-only HTTP response", async () => testResponse({ error: "Service unavailable" }, 503, "Service Unavailable"), "Service unavailable", "HTTP status: 503"],
+  ["non-JSON HTTP error", async () => testResponse("<html>Bad gateway</html>", 502, "Bad Gateway"), "HTTP 502 Bad Gateway", "<html>Bad gateway</html>"],
+  ["non-JSON successful HTTP response", async () => testResponse("not JSON"), "unexpected response", "not JSON"],
+  ["empty HTTP response", async () => testResponse("", 503, "Service Unavailable"), "empty response", "HTTP status: 503"],
+  ["null JSON response", async () => testResponse(null), "unexpected response", "null"],
+  ["array JSON response", async () => testResponse([]), "unexpected response", "[]"],
+  ["network failure", async () => { throw new Error("Connection refused"); }, "Connection refused", ""],
+  ["response read failure", async () => ({ ok: true, status: 200, text: async () => { throw new Error("Connection closed"); } }), "Connection closed", ""],
+]) {
+  sandbox.fetch = fetchResult;
+  const showsBefore = feedback.modalShows;
+  await api.testEndpoint("saved");
+  check(`${label} stays in the same visible result modal`, feedback.open && feedback.modalShows === showsBefore && el("resultTitle").textContent !== "Test succeeded");
+  check(`${label} shows a useful message`, el("resultMessage").textContent.includes(expectedMessage), el("resultMessage").textContent);
+  check(`${label} preserves available details without undefined values`, el("resultOut").textContent.includes(expectedDetail) && !el("resultOut").textContent.includes("undefined"));
+  check(`${label} allows another test`, testButtons.every((button) => !button.disabled));
+}
+
+api.status("Endpoint deleted.");
+check("ordinary feedback clears test-only content", el("resultOut").textContent === "" && el("resultHint").hidden);
+api.status("");
+check("clearing feedback closes the modal", !feedback.open);
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nall editor checks passed");
 process.exit(failures ? 1 : 0);

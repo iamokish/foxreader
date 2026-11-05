@@ -103,14 +103,14 @@ async def translate_custom(request: Request, payload: TranslationRequest):
         return JSONResponse(content=_empty_response("No text provided!"))
 
     translate = request.app.state.translate
-    context, links = normalize_context_with_links(payload.context, payload.context_character_links)
     result = await translate.custom(
         text,
         payload.source_lang.strip(),
         (payload.lang_group or "").strip().lower(),
-        context,
+        payload.context,
         getattr(payload, "character_info", None),
-        links,
+        payload.context_character_links,
+        getattr(payload, "meta_id", None),
     )
     resp = result.to_dict()
     error = f"Error: {resp.get('message', 'Unknown')}" if result.code != 200 else None

@@ -281,110 +281,13 @@ device support.
 
 ## Custom Endpoints (User Translation APIs)
 
-Any HTTP translation API can become a translator button. Open the editor at `/user_endpoints` (linked from `/settings` as “Manage endpoints →”). Each language holds up to `20` endpoints, of which `3` can be active at once — active endpoints become translator buttons in the reader next to DeepL/JPDB/MTL. Changes save immediately; endpoints persist in `config/user_endpoints.yaml`.
+Connect an HTTP translation service through **Settings > Manage endpoints**, or open `/user_endpoints`. Define its connection, request schema, response schema, and optional authentication/encryption, then save, test, and activate it for a reader language. Each language supports up to 20 saved endpoints and 3 active translator buttons.
 
-### Lifecycle: from API docs to a button
+See the **[Custom endpoints guide](docs/custom-endpoints.md)** for the complete field reference, setup steps, request/response examples, context and character support, current-speaker IDs, saved-key Show/Hide, key rotation, troubleshooting, and management API.
 
-1. **Add Endpoint** — starts a blank draft (default request `{text, src_lang, target_lang}`, default response `{text, error}`).
-2. **Fill the blocks** below (connection → wire format → languages → request schema → response schema → query/headers → encryption).
-3. **Preview request** — `POST /api/user_endpoints/preview`. No network: the server validates the draft and returns exactly what would be sent (`method/url/headers/body`) plus schema examples. List fields are filled with samples (`[[こんにちは, Hello], …]`, one roster entry + links) so you see their shape. When editing a saved endpoint, the form has no copy of the stored key, so the preview borrows it rather than failing.
-4. **Save Endpoint** — `POST` (new) / `PUT` (edit). Validation errors come back as `error` with dotted paths (e.g. `request_schema.children.text: …`). The key is write-only and stripped from every browser-visible response.
-5. **Test** — per-endpoint Test sends one **real** request with `こんにちは` (or your text), empty history, and shows `sent / translated / alternatives / message` plus the exact request. Use it before activating.
-6. **Activate per language** — `PUT /api/user_endpoints/{id}/active` with `{"language": "japanese"}` (DELETE deactivates). The reader fetches `GET /api/user_endpoints/active` and renders one button per active language.
-7. **Translate** — in the reader, select text and click your endpoint’s button (or Auto TL if it routes there). History and roster ride only when the schema carries those nodes (and the Context/Characters switches are on). Selections over `max_text_length` are refused client-side (`413`) before anything is billed or rate-limited.
-8. **Manage** — edit, delete (`DELETE /api/user_endpoints/{id}`), or swap actives at any time.
+Context and character data are sent through the schema nodes you configure. **Current Speaker** sends the new text's `meta_id`; **Context Links** identifies speakers of earlier pairs. **Preview request** builds a draft without contacting the service; **Send test** sends a real request with sample data and displays the actual request used. Saved encryption keys can be revealed explicitly with **Show** when reopening the editor.
 
-### Connection block
-
-| Field | Meaning |
-|---|---|
-| Name | Button label — max `6` chars, sits beside the built-in engines |
-| Method | `GET/POST/PUT/PATCH/DELETE` |
-| Hostname / URL | Host with optional path; a pasted `https://` prefix is fine. `<TEXT>`, `<SOURCE_LANG>`, `<TARGET_LANG>` are substituted — e.g. `api.example.com/<SOURCE_LANG>/translate` |
-| Scheme / Port / HTTP | `http/https`, optional port `1–65535`, HTTP version `Default/2` (HTTP/2 via httpx) |
-| Timeout | Seconds per attempt (`> 0`, default `20`) |
-| Retries | `0–5`. Retries timeouts and `408/425/429/500/502/503/504` with exponential backoff (`0.4s → 4s` cap, honours `Retry-After`) |
-| Max text length | `100–10000` chars (default `2000`). Longer selections fail before sending |
-| Target language | Sent wherever the schema uses Target Language (default `en`) |
-
-### Wire format block
-
-- **Request body** (`body_format`): `json` (JSON body), `form` (urlencoded body), `query` (payload appended to URL, no body), `text` (raw body). `Auto` = `query` for `GET/DELETE`, else `json`. `form`/`query` need a flat object at the request root.
-- **Response body** (`response_format`): `json` (decoded + read through the response schema) or `text` (the whole body **is** the translation; the response schema is then unused).
-- **Repeat list keys (doseq)**: `false` sends a list as one joined value; `true` repeats the key (`dt=t&dt=at`). Applies to `form`/`query` payloads.
-- **Join response chunks with** (`text_join`): separator when a repeat template yields several fragments (`\n`, `\t` understood, else `""`).
-- **Static query parameters**: always appended to the URL (placeholders substituted); a `query`-format body overrides same-named keys.
-- **Request headers**: sent as entered (placeholders substituted); an explicit `Content-Type` overrides the body-format default (`application/json`, `application/x-www-form-urlencoded`, `text/plain; charset=utf-8`).
-
-### Languages block
-
-Tick the languages this endpoint serves (editor suggests `japanese/korean/chinese`; the list itself is free-form lowercase). The optional per-language **code** is what the API expects (`japanese → ja`); it is sent wherever the schema uses Source Language. One translator button is created per active language.
-
-### Request schema tree
-
-Typed JSON nodes: `dict` (named `children`), `list` (`items` and/or response-only `each`), and primitives `string/int/float/bool/null` plus `uuid` (request-only; mints a fresh id per request — variant `uuid1/uuid2/uuid4`, prefer `uuid4` since `uuid1` embeds this machine’s MAC).
-
-Dynamic **sources** (the only moving parts; everything `static` is sent verbatim):
-
-| Source | Sends |
-|---|---|
-| `text` | The selection (exactly one required) |
-| `src_lang` / `target_lang` | Language codes (at most one each, optional) |
-| `context` | Earlier `[[source, english], …]` pairs, oldest first (at most one; only when the node exists — otherwise requests are byte-identical with or without history) |
-| `character_info` + `context_character_links` | Roster `[{meta_id, name_en, name_ja, gender, alias_en, alias_ja}, …]` + one speaker id (or `null`) per context pair. Always **both or neither** |
-| `error` / `alt` | Response-only — rejected in a request schema |
-
-Rules enforced on save: exactly one `Text`; repeat templates (`each`) and `uuid` only in requests where documented; `Text`/`src_lang`/`target_lang` must be `string` nodes; list-array sources must be bare `list` nodes (they consume the whole array, no `items`/`each` inside).
-
-**Placeholders** work inside any static string, header, query value, or the hostname itself:
-
-| Token | Expands to |
-|---|---|
-| `<TEXT>` | The selection (sealed first when request encryption is on — even in the URL, which is the most-logged part) |
-| `<SOURCE_LANG>` | Source code for the ticked language |
-| `<TARGET_LANG>` | Target language field |
-
-### Response schema tree
-
-- Exactly one **Translated Text** node (any shape — string, chunk list, or `[text, meta]` pairs are flattened and joined with `text_join`).
-- Optional **Error** node (string/null): an API error message beats a bare HTTP status.
-- Optional **Alternatives** node (string/list): extra candidates, deduplicated, minus the main text.
-- **Repeat template** (`each`) on a list collects an unknown number of chunks (e.g. per-sentence arrays) into one translation.
-- With `response_format: text`, skip the tree: non-2xx returns `HTTP <code> — <snippet>`, empty bodies and undecryptable replies are `502`s, never silent.
-
-### Encryption block (optional, Fernet)
-
-Off unless a key is given. When on, the selection is sealed before it leaves this machine and the reply is opened on arrival — proxies, middleboxes, and request logs carry opaque tokens instead of the text. The endpoint holds the same key and reverses it: this hides content **from the network, not from the API itself**. Token length still tracks plaintext length, and timing/count are visible.
-
-- **Key types**: `fernet` (paste the 44-char `Fernet.generate_key()` string) or `passphrase` (words stretched with scrypt, fixed salt `fox-reader/user-endpoint/v1`, `N=16384, R=8, P=1` — a compatible server must use these verbatim, then base64url the 32 bytes).
-- **Directions are independent**: encrypt-before-sending and/or decrypt-on-arrival (at least one must be chosen). Names/aliases seal per-field (`meta_id`/`gender` stay plaintext so links still join); context pairs seal per side; response fragments open one by one, then join.
-- **Rotation**: up to `4` keys, whitespace/comma-separated — first encrypts, all are tried for decrypt. Add new-first, migrate the server, drop the old.
-- **Replay guard** (`max_age`, `30–86400`s, blank = off): sealed replies carry a timestamp; refuse stale ones only when both clocks are trusted.
-- Requires the `cryptography` package; the editor disables the switch without it. The key never reaches the browser except for encryption (edit previews borrow the stored secret server-side).
-
-### Copy-paste starters
-
-**1. Minimal JSON POST** (`https://api.example.com/v2/translate`):
-
-```json
-// request root (dict): {"text": Text, "source": Source Language, "target": Target Language}
-{"text": {"type": "string", "source": "text"},
- "source": {"type": "string", "source": "src_lang"},
- "target": {"type": "string", "source": "target_lang"}}
-// response root (dict): {"translatedText": Translated Text, "message": Error}
-{"translatedText": {"type": "string", "source": "text"},
- "message": {"type": "string", "source": "error"}}
-```
-
-**2. GET query API** (method `GET`, body `query`): same request tree; add static query `{"key": "<YOUR_KEY>"}` and a header if needed. The payload rides in the URL; over-long selections hit `max_text_length` first.
-
-**3. Chunked reply with alternatives**: response root `dict` → `data: dict` → `sentences: list(each: string→Translated Text)` plus `candidates: list→Alternatives`, `err: string→Error`, `text_join: "\n"`.
-
-### Limits & errors at a glance
-
-- `20` endpoints / language, `3` active / language, name ≤ `6` chars, `max_text_length 100–10000`, `retries 0–5`, `timeout > 0`, `max_age 30–86400` or blank.
-- `400` empty text · `404` unknown endpoint · `409` never (endpoints overwrite by id) · `413` selection too long · `500` unbuildable request · `502` bad JSON / missing Translated Text / undecryptable · `503/504` unreachable / timeout · `429/5xx` retried per policy.
-- Automatable: `GET /api/user_endpoints`, `GET …/active`, `POST …/preview`, `POST /`, `PUT /{id}`, `DELETE /{id}`, `POST /{id}/test`, `PUT|DELETE /{id}/active`.
+Configurations and language activation persist in `config/user_endpoints.yaml`.
 
 ## Hotkeys
 

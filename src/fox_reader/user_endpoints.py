@@ -121,9 +121,9 @@ class EndpointEncryption(BaseModel):
     The two directions are separate settings because an endpoint may well
     support only one of them — read a sealed request but answer in plain JSON.
 
-    `key` is write-only. It is persisted so requests can be encrypted, and it
-    is stripped from every response the browser can see; see
-    `UserEndpoint.public_dict`.
+    `key` is persisted so requests can be encrypted. Routine API responses
+    omit it; the editor retrieves it separately when the user clicks Show.
+    See `UserEndpoint.public_dict`.
     """
 
     model_config = ConfigDict(
@@ -473,9 +473,8 @@ class UserEndpoint(BaseModel):
     def public_dict(self) -> dict[str, Any]:
         """`model_dump`, minus the encryption key.
 
-        Every browser-facing surface goes through this. The key is write-only:
-        it is stored and used, and never sent back out — only whether one is
-        set, so the editor can say so without revealing it.
+        Routine management responses include only whether a key is set.
+        The editor's explicit Show action retrieves the key separately.
         """
         data = self.model_dump(mode="json")
 
@@ -934,8 +933,8 @@ class UserEndpointStore:
     ) -> dict[str, Any]:
         """A draft payload with the stored encryption key filled back in.
 
-        The editor never receives the key, so validating or previewing a saved
-        endpoint would otherwise fail on the blank field.
+        The editor omits an unchanged key, so validating or previewing a saved
+        endpoint must fill it from storage even if it was previously revealed.
         """
         endpoint_id = (endpoint_id or "").strip()
 
@@ -1033,9 +1032,10 @@ class UserEndpointStore:
     ) -> dict[str, Any]:
         """Carry a stored encryption key across an update that omits it.
 
-        The key is never sent to the browser, so the edit form necessarily
-        posts it back blank. Blank therefore means "leave it alone"; switching
-        encryption off is what clears it.
+        The editor posts an unchanged key back blank, including after Show.
+        Preserve the key and its encoding together so a stale editor cannot
+        reinterpret a rotated key. An encoding change requires an explicit
+        key; switching encryption off clears it.
         """
         raw = payload.get("encryption")
 
@@ -1048,6 +1048,7 @@ class UserEndpointStore:
 
         if not incoming and current.encryption.key:
             block["key"] = current.encryption.key
+            block["key_encoding"] = current.encryption.key_encoding
 
         payload["encryption"] = block
 

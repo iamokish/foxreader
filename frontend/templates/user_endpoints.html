@@ -33,8 +33,6 @@ h1{margin:0 0 7px;font-size:1.7rem}
 .btn:hover,.mini:hover{border-color:var(--accent)}
 .btn:disabled,.mini:disabled,.primary:disabled{opacity:.5;cursor:not-allowed}
 .danger{color:var(--danger)}
-.status{min-height:22px;margin-bottom:10px;font-size:.82rem}
-.status.ok{color:var(--ok)}.status.error{color:var(--danger)}
 
 /* Per-language capacity summary above the list. */
 .tally{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
@@ -89,6 +87,11 @@ dialog::backdrop{background:rgba(0,0,0,.76)}
 .dialog-status.show{display:block}
 .dialog-status.error{border:1px solid rgba(255,113,133,.4);background:rgba(255,113,133,.1);color:#ffb3bf}
 .dialog-status.ok{border:1px solid rgba(78,204,163,.4);background:rgba(78,204,163,.1);color:#9be3ca}
+.feedback-dialog{width:min(560px,calc(100% - 24px))}
+.feedback-dialog.has-details{width:min(940px,calc(100% - 24px))}
+.feedback-message{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.9rem;line-height:1.5}
+.feedback-message.ok{color:var(--ok)}.feedback-message.error{color:var(--danger)}
+.feedback-dialog .preview{max-height:none;overflow-wrap:anywhere}
 
 .block{margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid var(--border)}
 .block:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
@@ -154,6 +157,8 @@ input::placeholder{color:#5e6673}
 .dynamic-value.plain{color:#6e7684}
 .schema-error{min-height:0;margin-top:8px;color:var(--danger);font-size:.7rem}
 .schema-error:empty{display:none}
+.schema-warning{margin-top:8px;color:var(--warn);font-size:.7rem}
+.schema-warning:empty{display:none}
 .source-note{margin-top:7px;color:#757c89;font-size:.68rem;line-height:1.45}
 .preview{margin-top:9px;padding:9px;border:1px solid var(--border);border-radius:8px;background:#101319;color:#87909e;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow:auto;max-height:190px}
 .preview:empty{display:none}
@@ -209,7 +214,6 @@ input::placeholder{color:#5e6673}
   </header>
 
   <div id="tally" class="tally"></div>
-  <div id="status" class="status"></div>
   <section id="list"></section>
 </main>
 
@@ -401,13 +405,17 @@ input::placeholder{color:#5e6673}
                   are optional. A <b>Context</b> list node is optional too: when
                   present it sends the earlier [[source, english], ...] pairs
                   with the request, so the API can keep tone and names
-                  consistent. <b>Character Info</b> and <b>Context Links</b>
-                  list nodes are optional as well: the first sends the
-                  character roster ([{meta_id, name_en, name_ja, gender,
-                  alias_en, alias_ja}, ...]), the second one speaker id (or
-                  null) per context pair, so the API can attribute each turn.
-                  The two always go together — a schema with one must have the
-                  other — and either node can sit under any field name.
+                  consistent. The optional <b>Character Info</b> list sends
+                  the character roster ([{meta_id, name_en, name_ja, gender,
+                  alias_en, alias_ja}, ...]). <b>Context Links</b> sends one
+                  speaker id (or null) per context pair and needs Character
+                  Info; without a Context node its list is empty.
+                  A <b>Current Speaker</b> string node sends the speaker id
+                  for the new Text, or null when unassigned. It needs
+                  Character Info and works without Context. Choose Current
+                  Speaker as the node's value source; its preview label is
+                  not a static-string placeholder. These nodes can use any
+                  field name.
                   Static strings accept the placeholder tokens. A
                   <b>uuid</b> field mints a fresh identifier per request — pick
                   the variant in its value box. Prefer <b>uuid4</b>: it is pure
@@ -424,6 +432,7 @@ input::placeholder{color:#5e6673}
             </div>
             <div id="requestTree"></div>
             <div id="requestError" class="schema-error"></div>
+            <div id="requestWarning" class="schema-warning" role="status"></div>
             <div class="preview" id="requestPreview"></div>
             <div class="source-note">Dynamic nodes are filled in per request; static values are sent unchanged.</div>
           </div>
@@ -583,7 +592,7 @@ input::placeholder{color:#5e6673}
         <div class="block" id="previewBlock" style="display:none">
           <div class="block-head">
             <div class="block-title">Outgoing request</div>
-            <div class="block-note">Exactly what would be sent, built by the server from this draft.</div>
+            <div class="block-note">Built from this draft using sample dialogue and speakers for configured context and character fields.</div>
           </div>
           <div class="preview" id="previewOut"></div>
         </div>
@@ -598,13 +607,15 @@ input::placeholder{color:#5e6673}
   </div>
 </dialog>
 
-<dialog id="resultDialog">
+<dialog id="resultDialog" class="feedback-dialog" aria-labelledby="resultTitle" aria-describedby="resultMessage">
   <div class="modal">
     <div class="modal-top">
       <div class="modal-title" id="resultTitle">Test result</div>
-      <button class="btn" type="button" data-act="close-result">Close</button>
+      <button class="btn" type="button" data-act="close-result" autofocus>Close</button>
     </div>
-    <div class="modal-body">
+    <div class="modal-body" id="resultBody">
+      <p id="resultMessage" class="feedback-message" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="resultHint" class="hint" hidden>Tests use sample text, dialogue and speakers for the fields configured in the request schema.</p>
       <div class="preview" id="resultOut"></div>
     </div>
   </div>
@@ -642,7 +653,7 @@ const TYPES = ["dict", "list", "string", "int", "float", "bool", "null", "uuid"]
    backend rejects one in a response schema outright. */
 const RESPONSE_TYPES = TYPES.filter((type) => type !== "uuid");
 
-const REQUEST_SOURCES = ["static", "text", "src_lang", "target_lang", "context", "character_info", "context_character_links"];
+const REQUEST_SOURCES = ["static", "text", "src_lang", "target_lang", "context", "character_info", "context_character_links", "meta_id"];
 const RESPONSE_SOURCES = ["static", "text", "error", "alt"];
 
 /* Which node types each dynamic source is allowed on. Mirrors
@@ -656,6 +667,7 @@ const SOURCE_TYPES = {
   context: ["list"],
   character_info: ["list"],
   context_character_links: ["list"],
+  meta_id: ["string"],
   error: ["string", "null"],
   alt: ["string", "list"],
 };
@@ -675,10 +687,12 @@ let state = {
 };
 let editing = null;
 
-/* Whether the endpoint being edited already has a key on the server. The key
-   itself never reaches this page, so this is what tells the difference between
-   "no key yet" and "a key is stored, leave the box blank to keep it". */
+/* The list only says whether a key exists. Show loads it on demand for the
+   current dialog; an untouched revealed value still means "keep stored key". */
 let storedKeyPresent = false;
+let revealedStoredKey = null;
+let keyRevealRequest = null;
+let testRequest = null;
 
 const schemas = { request: null, response: null };
 
@@ -702,13 +716,36 @@ function langName(value) {
 }
 
 function status(message, error = false) {
-  const el = $("status");
-  el.textContent = message || "";
-  el.className = "status " + (message ? (error ? "error" : "ok") : "");
+  if (!message) {
+    closeFeedback();
+    return;
+  }
+  showFeedback({
+    title: error ? "Endpoint error" : "Endpoint updated",
+    message,
+    kind: error ? "error" : "ok",
+  });
 }
 
-/* Errors raised while the dialog is open must appear inside the dialog: the
-   page-level status line sits under the backdrop and cannot be read. */
+/* One native modal keeps page feedback visible at any scroll position, and
+   test progress/results replace its contents instead of stacking dialogs. */
+function showFeedback({ title, message, kind = "", details = "", test = false }) {
+  const dialog = $("resultDialog");
+  $("resultTitle").textContent = title;
+  $("resultMessage").textContent = message;
+  $("resultMessage").className = "feedback-message" + (kind ? ` ${kind}` : "");
+  $("resultHint").hidden = !test;
+  $("resultOut").textContent = details;
+  dialog.classList.toggle("has-details", Boolean(details));
+  if (!dialog.open) dialog.showModal();
+  $("resultBody").scrollTop = 0;
+}
+
+function closeFeedback() {
+  if ($("resultDialog").open) $("resultDialog").close();
+}
+
+/* Editor validation stays beside the form being corrected. */
 function dialogStatus(message, error = true) {
   const el = $("dialogStatus");
   el.textContent = message || "";
@@ -992,6 +1029,7 @@ function sourceLabel(kind, source) {
     case "context": return "Context";
     case "character_info": return "Character Info";
     case "context_character_links": return "Context Links";
+    case "meta_id": return "Current Speaker";
     case "error": return "Error";
     case "alt": return "Alternatives";
     default: return source;
@@ -1020,6 +1058,7 @@ function example(node) {
   if (node.source === "text") return "<TEXT>";
   if (node.source === "src_lang") return "<SOURCE_LANG>";
   if (node.source === "target_lang") return "<TARGET_LANG>";
+  if (node.source === "meta_id") return "<CURRENT_SPEAKER>";
   if (node.source === "error") return "<ERROR>";
   if (node.source === "alt") {
     return node.type === "list" ? ["<ALTERNATIVE>"] : "<ALTERNATIVE>";
@@ -1216,6 +1255,13 @@ function render(kind) {
 function updatePreview(kind) {
   const el = $(kind === "request" ? "requestPreview" : "responsePreview");
   el.textContent = JSON.stringify(example(schemas[kind]), null, 2);
+  if (kind === "request") {
+    const root = schemas.request;
+    $("requestWarning").textContent =
+      countSource(root, "context_character_links") > 0 && countSource(root, "context") === 0
+        ? "Context Links needs a Context node to send earlier speakers; links will be empty."
+        : "";
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1422,11 +1468,14 @@ function validateEditor(kind) {
     if (countSource(root, "context_character_links") > 1) {
       throw new Error("The request schema can contain at most one Context Links node.");
     }
-    // The roster and the per-turn speaker ids describe one thing, so one
-    // without the other is a misconfigured endpoint. Node names are
-    // free-form; only the sources have to travel together.
-    if ((countSource(root, "character_info") === 0) !== (countSource(root, "context_character_links") === 0)) {
-      throw new Error("Character Info and Context Links go together: the request schema must contain both or neither.");
+    if (countSource(root, "meta_id") > 1) {
+      throw new Error("The request schema can contain at most one Current Speaker node.");
+    }
+    if (countSource(root, "context_character_links") > 0 && countSource(root, "character_info") === 0) {
+      throw new Error("Context Links requires a Character Info node.");
+    }
+    if (countSource(root, "meta_id") > 0 && countSource(root, "character_info") === 0) {
+      throw new Error("Current Speaker requires a Character Info node.");
     }
     if (hasRepeat(root)) {
       throw new Error("Repeat templates only apply when reading a response.");
@@ -1446,6 +1495,9 @@ function validateEditor(kind) {
     }
     if (countSource(root, "context_character_links") > 0) {
       throw new Error("The response schema cannot contain a Context Links node.");
+    }
+    if (countSource(root, "meta_id") > 0) {
+      throw new Error("The response schema cannot contain a Current Speaker node.");
     }
   }
 }
@@ -1650,22 +1702,87 @@ function syncEncryptionFields() {
     "endpoint without a flag day.";
 
   $("encKeyHint").innerHTML = storedKeyPresent
-    ? `A ${noun} is stored for this endpoint and is never sent back to this ` +
-      `page. Leave the box empty to keep it, or type a new ${noun} to ` +
-      `replace it. ${rotation}`
-    : `Shown only while you type it — after saving it stays on this machine ` +
-      `and is never returned to the browser. ${rotation}`;
+    ? `A ${noun} is stored for this endpoint. Show reveals it. ` +
+      `Leave the box empty to keep it and its key type, or type a new ${noun} to ` +
+      `replace it. To change the key type, reveal or enter the key first. ${rotation}`
+    : `After saving, reopen this endpoint and use Show to reveal the ${noun}. ${rotation}`;
 }
 
-function revealKey() {
-  const input = $("encKey");
-  const hidden = input.type === "password";
+function cancelKeyReveal() {
+  const pending = keyRevealRequest;
+  keyRevealRequest = null;
+  if (pending) pending.controller.abort();
+  $("encReveal").disabled = false;
+  $("encReveal").textContent = $("encKey").type === "text" ? "Hide" : "Show";
+}
 
-  input.type = hidden ? "text" : "password";
-  $("encReveal").textContent = hidden ? "Hide" : "Show";
+function clearRevealedKey() {
+  cancelKeyReveal();
+  revealedStoredKey = null;
+  $("encKey").value = "";
+  $("encKey").type = "password";
+  $("encReveal").textContent = "Show";
+}
+
+async function revealKey() {
+  const input = $("encKey");
+  if (keyRevealRequest) return;
+
+  if (input.type === "text" || input.value.trim() || !editing || !storedKeyPresent) {
+    const hidden = input.type === "password";
+    input.type = hidden ? "text" : "password";
+    $("encReveal").textContent = hidden ? "Hide" : "Show";
+    return;
+  }
+
+  const pending = {
+    controller: new AbortController(),
+    endpointId: editing,
+    value: input.value,
+    encoding: $("encEncoding").value,
+  };
+  keyRevealRequest = pending;
+  const current = () => keyRevealRequest === pending &&
+    editing === pending.endpointId && $("dialog").open &&
+    input.value === pending.value && $("encEncoding").value === pending.encoding &&
+    $("encEnabled").value === "true";
+  clearDialogStatus();
+  $("encReveal").disabled = true;
+  $("encReveal").textContent = "Loading…";
+
+  try {
+    const response = await fetch(`/api/user_endpoints/${encodeURIComponent(pending.endpointId)}/key`, {
+      cache: "no-store",
+      signal: pending.controller.signal,
+    });
+    const data = await readJson(response);
+    if (!current()) return;
+    if (!response.ok) throw new Error(data?.error || "Could not load the saved key.");
+    if (!data || typeof data.key !== "string" || !data.key.trim() || !KEY_ENCODINGS.includes(data.key_encoding)) {
+      throw new Error("The server did not return a valid saved key.");
+    }
+    checkKeyMaterial(data.key, data.key_encoding);
+    revealedStoredKey = { value: data.key.trim(), encoding: data.key_encoding };
+    input.value = revealedStoredKey.value;
+    input.type = "text";
+    $("encEncoding").value = data.key_encoding;
+    syncEncryptionFields();
+  } catch (error) {
+    if (current() && error?.name !== "AbortError") {
+      dialogStatus(error?.message || "Could not load the saved key.");
+    }
+  } finally {
+    if (keyRevealRequest === pending) {
+      keyRevealRequest = null;
+      $("encReveal").disabled = false;
+      $("encReveal").textContent = input.type === "text" ? "Hide" : "Show";
+    }
+  }
 }
 
 function fillGeneratedKey() {
+  cancelKeyReveal();
+  revealedStoredKey = null;
   const input = $("encKey");
 
   input.value = generateFernetKey();
@@ -1675,8 +1792,8 @@ function fillGeneratedKey() {
   syncEncryptionFields();
 
   dialogStatus(
-    "New key generated. Copy it to the endpoint as well — it is not shown " +
-    "again once this endpoint is saved.",
+    "New key generated. Copy it to the endpoint as well, then save. " +
+    "You can reveal it again with Show after reopening this endpoint.",
     false
   );
 }
@@ -1727,9 +1844,10 @@ function collectEncryption() {
 
   return {
     enabled,
-    // Blank means "keep whatever is stored" — the server carries the old key
-    // across an update, and clears it when encryption is switched off.
-    key,
+    // Merely viewing a key is not a replacement. Keep the server's current
+    // value when it is unchanged, including if another editor rotated it.
+    key: revealedStoredKey && key === revealedStoredKey.value && encoding === revealedStoredKey.encoding
+      ? "" : key,
     key_encoding: encoding,
     encrypt_request: encryptRequest,
     decrypt_response: decryptResponse,
@@ -1759,6 +1877,7 @@ function encryptionSummary(endpoint) {
  * ------------------------------------------------------------------ */
 
 function resetDialog() {
+  clearRevealedKey();
   editing = null;
   storedKeyPresent = false;
 
@@ -1844,7 +1963,7 @@ function openEdit(id) {
   $("doseq").value = String(Boolean(endpoint.doseq));
   $("textJoin").value = encodeJoin(endpoint.text_join ?? "");
 
-  // `has_key` stands in for the key itself, which the API never returns.
+  // Keys are retrieved only when Show is clicked, not with the endpoint list.
   const encryption = endpoint.encryption || {};
 
   storedKeyPresent = Boolean(encryption.has_key);
@@ -1909,6 +2028,7 @@ function addUnknownLanguageChip(language) {
 }
 
 function closeDialog() {
+  clearRevealedKey();
   $("dialog").close();
 }
 
@@ -2246,7 +2366,7 @@ function renderCards() {
 
         <div class="actions">
           <button class="btn" data-card="edit" data-id="${esc(endpoint.id)}">Edit</button>
-          <button class="btn" data-card="test" data-id="${esc(endpoint.id)}">Send test</button>
+          <button class="btn" data-card="test" data-id="${esc(endpoint.id)}"${testRequest ? " disabled" : ""}>${testRequest?.id === endpoint.id ? "Testing…" : "Send test"}</button>
           <button class="btn danger" data-card="delete" data-id="${esc(endpoint.id)}">Delete</button>
         </div>
       </article>`;
@@ -2300,10 +2420,71 @@ async function toggleActive(id, language, active) {
   }
 }
 
-async function testEndpoint(id) {
-  const endpoint = state.endpoints.find((item) => item.id === id);
+function syncTestButtons() {
+  $("list").querySelectorAll('[data-card="test"]').forEach((button) => {
+    button.disabled = Boolean(testRequest);
+    button.textContent = testRequest?.id === button.dataset.id ? "Testing…" : "Send test";
+  });
+}
 
-  status(`Testing ${endpoint ? endpoint.name : id}…`);
+async function testResponseFeedback(response) {
+  const raw = (await response.text()).trim();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // A proxy or unavailable backend may send text/HTML instead of JSON.
+  }
+  const object = data !== null && typeof data === "object" && !Array.isArray(data);
+  const message = object
+    ? [data.message, data.error, data.detail].find((value) => typeof value === "string" && value.trim())?.trim()
+    : "";
+  const httpStatus = [response.status, response.statusText].filter(Boolean).join(" ");
+
+  if (!object || typeof data.status !== "boolean") {
+    const excerpt = raw.slice(0, 2000);
+    return {
+      title: "Test could not run",
+      message: message || `The test service returned ${raw ? "an unexpected response" : "an empty response"} (HTTP ${httpStatus}).`,
+      kind: "error",
+      details: `HTTP status: ${httpStatus}` + (excerpt ? `\n\nresponse:\n${excerpt}${raw.length > 2000 ? "…" : ""}` : ""),
+      test: true,
+    };
+  }
+
+  const success = response.ok && data.status;
+  const code = Number.isInteger(data.code) ? data.code : response.status;
+  return {
+    title: success ? "Test succeeded" : `Test failed (${code})`,
+    message: message || (success
+      ? "The endpoint returned a translation."
+      : response.ok ? "The endpoint did not return a translation." : `The test could not run (HTTP ${httpStatus}).`),
+    kind: success ? "ok" : "error",
+    details: [
+      data.sent != null ? `sent:       ${data.sent}` : null,
+      data.language != null ? `language:   ${data.language}` : null,
+      `status:     ${code}`,
+      data.translated != null ? `translated: ${data.translated || "(nothing)"}` : null,
+      Array.isArray(data.alternatives) && data.alternatives.length
+        ? `alternates: ${data.alternatives.join(" | ")}`
+        : null,
+      data.request != null ? `\nrequest:\n${JSON.stringify(data.request, null, 2)}` : null,
+    ].filter((line) => line !== null).join("\n"),
+    test: true,
+  };
+}
+
+async function testEndpoint(id) {
+  // One result surface, one outstanding test, including while it is dismissed.
+  if (testRequest) return;
+  const endpoint = state.endpoints.find((item) => item.id === id);
+  testRequest = { id };
+  syncTestButtons();
+  showFeedback({
+    title: "Testing endpoint",
+    message: `Sending a test to ${endpoint ? endpoint.name : id}…\nYou can close this box; the result will appear when the test finishes.`,
+    test: true,
+  });
 
   try {
     const response = await fetch(
@@ -2315,32 +2496,17 @@ async function testEndpoint(id) {
       }
     );
 
-    const data = await readJson(response);
-
-    if (!response.ok) throw new Error(data.error || "The test could not run.");
-
-    $("resultTitle").textContent = data.status
-      ? "Test succeeded"
-      : `Test failed (${data.code})`;
-
-    $("resultOut").textContent = [
-      `sent:       ${data.sent}`,
-      `language:   ${data.language}`,
-      `status:     ${data.code}`,
-      `translated: ${data.translated || "(nothing)"}`,
-      data.alternatives && data.alternatives.length
-        ? `alternates: ${data.alternatives.join(" | ")}`
-        : null,
-      data.message ? `message:    ${data.message}` : null,
-      "",
-      "request:",
-      JSON.stringify(data.request, null, 2),
-    ].filter((line) => line !== null).join("\n");
-
-    $("resultDialog").showModal();
-    status(data.status ? "Test succeeded." : "Test failed.", !data.status);
+    showFeedback(await testResponseFeedback(response));
   } catch (error) {
-    status(error.message, true);
+    showFeedback({
+      title: "Test could not run",
+      message: error?.message ? `Could not run the test: ${error.message}` : "Could not connect to the test service.",
+      kind: "error",
+      test: true,
+    });
+  } finally {
+    testRequest = null;
+    syncTestButtons();
   }
 }
 
@@ -2431,6 +2597,11 @@ $("dialog").addEventListener("change", (event) => {
   }
 
   if (el.id === "encEnabled" || el.id === "encEncoding") {
+    cancelKeyReveal();
+    if (el.id === "encEnabled" && el.value !== "true") {
+      $("encKey").type = "password";
+      $("encReveal").textContent = "Show";
+    }
     syncEncryptionFields();
     return;
   }
@@ -2479,6 +2650,10 @@ $("dialog").addEventListener("change", (event) => {
 });
 
 $("dialog").addEventListener("input", (event) => {
+  if (event.target.id === "encKey") {
+    cancelKeyReveal();
+    return;
+  }
   const el = event.target.closest("[data-act]");
   if (!el) return;
 
@@ -2519,14 +2694,44 @@ $("list").addEventListener("click", async (event) => {
   }
 });
 
+// Native dialog backdrops target the dialog itself. Check coordinates as
+// well so clicks on its border/padding do not count as outside clicks, and
+// require an outside pointer-down so selecting text cannot dismiss it.
+function outsideFeedback(event) {
+  const dialog = $("resultDialog");
+  if (event.target !== dialog) return false;
+  const rect = dialog.getBoundingClientRect();
+  return event.clientX < rect.left || event.clientX > rect.right
+    || event.clientY < rect.top || event.clientY > rect.bottom;
+}
+
+let feedbackPointerOutside = false;
+$("resultDialog").addEventListener("pointerdown", (event) => {
+  feedbackPointerOutside = outsideFeedback(event);
+});
+$("resultDialog").addEventListener("pointercancel", () => {
+  feedbackPointerOutside = false;
+});
 $("resultDialog").addEventListener("click", (event) => {
-  if (event.target.closest('[data-act="close-result"]')) {
-    $("resultDialog").close();
-  }
+  const dismiss = event.target.closest('[data-act="close-result"]')
+    || (feedbackPointerOutside && outsideFeedback(event));
+  feedbackPointerOutside = false;
+  if (dismiss) closeFeedback();
+});
+$("resultDialog").addEventListener("close", () => {
+  feedbackPointerOutside = false;
+});
+$("resultDialog").addEventListener("cancel", () => {
+  feedbackPointerOutside = false;
 });
 
 $("addEndpointButton").addEventListener("click", openCreate);
 $("endpointForm").addEventListener("submit", save);
+$("dialog").addEventListener("cancel", clearRevealedKey);
+$("dialog").addEventListener("close", () => {
+  // A delayed close event from a prior edit must not clear a reopened form.
+  if (!$("dialog").open) clearRevealedKey();
+});
 
 /* ------------------------------------------------------------------ *
  * boot

@@ -740,8 +740,10 @@ chars_ep = UserEndpoint.model_validate(ctx_base | {
         "type": "dict",
         "children": {
             "text": {"type": "string", "source": "text"},
+            "context": {"type": "list", "source": "context"},
             "character_info": {"type": "list", "source": "character_info"},
             "context_character_links": {"type": "list", "source": "context_character_links"},
+            "meta_id": {"type": "string", "source": "meta_id"},
         },
     },
 })
@@ -754,7 +756,7 @@ links = ["a1", None]
 
 prepared = prepare_request(
     chars_ep, text="さようなら", source_lang="ja", target_lang="en",
-    context=pairs, character_info=roster, context_character_links=links,
+    context=pairs, character_info=roster, context_character_links=links, meta_id="b2",
 )
 sent = json.loads(prepared["body"])
 equals(
@@ -766,6 +768,7 @@ equals(
     ],
 )
 equals("links ride aligned, nulls kept", sent["context_character_links"], ["a1", None])
+equals("new text has its own speaker", sent["meta_id"], "b2")
 
 prepared = prepare_request(chars_ep, text="さようなら", source_lang="ja", target_lang="en")
 sent = json.loads(prepared["body"])
@@ -928,18 +931,18 @@ rejects_lists(
     "cannot contain a Context Links node",
 )
 
-rejects_lists(
-    "character info without links is rejected",
-    {
+roster_only = UserEndpoint.model_validate(ctx_base | {
+    "request_schema": {
         "type": "dict",
         "children": {
             "text": {"type": "string", "source": "text"},
             "roster": list_node("character_info"),
         },
     },
-    text_response,
-    "go together",
-)
+})
+equals("roster works without history links", json.loads(prepare_request(
+    roster_only, text="hi", source_lang="ja", target_lang="en", character_info=roster,
+)["body"])["roster"], roster)
 
 rejects_lists(
     "links without character info are rejected",
@@ -951,7 +954,7 @@ rejects_lists(
         },
     },
     text_response,
-    "go together",
+    "requires a Character Info",
 )
 
 # Field names are free-form: the sources can sit under any key.
@@ -960,18 +963,21 @@ renamed = UserEndpoint.model_validate(ctx_base | {
         "type": "dict",
         "children": {
             "text": {"type": "string", "source": "text"},
+            "history": list_node("context"),
             "roster": list_node("character_info"),
             "speakers": list_node("context_character_links"),
+            "speaker": {"type": "string", "source": "meta_id"},
         },
     },
 })
 prepared = prepare_request(
     renamed, text="hi", source_lang="ja", target_lang="en",
-    context=pairs, character_info=roster, context_character_links=links,
+    context=pairs, character_info=roster, context_character_links=links, meta_id="b2",
 )
 sent = json.loads(prepared["body"])
 equals("roster under a custom key", [c["name_en"] for c in sent["roster"]], ["Aiko", None])
 equals("links under a custom key", sent["speakers"], ["a1", None])
+equals("current speaker under a custom key", sent["speaker"], "b2")
 equals(
     "paired nodes preview under custom keys",
     (renamed.request_schema.example()["roster"], renamed.request_schema.example()["speakers"]),
@@ -1006,8 +1012,10 @@ else:
             "type": "dict",
             "children": {
                 "text": {"type": "string", "source": "text"},
+                "context": {"type": "list", "source": "context"},
                 "character_info": {"type": "list", "source": "character_info"},
                 "context_character_links": {"type": "list", "source": "context_character_links"},
+                "meta_id": {"type": "string", "source": "meta_id"},
             },
         },
         "encryption": {"enabled": True, "key": key},
@@ -1015,7 +1023,7 @@ else:
 
     prepared = prepare_request(
         sealed_chars, text="さようなら", source_lang="ja", target_lang="en",
-        context=pairs, character_info=roster, context_character_links=links,
+        context=pairs, character_info=roster, context_character_links=links, meta_id="b2",
     )
     sent = json.loads(prepared["body"])
     sealed_names = [
@@ -1029,6 +1037,7 @@ else:
         and sent["character_info"][0]["meta_id"] == "a1"
         and sent["character_info"][0]["gender"] == "female"
         and sent["character_info"][1]["meta_id"] == "b2"
+        and sent["meta_id"] == "b2"
         and sent["context_character_links"] == ["a1", None],
         json.dumps(sent["character_info"], ensure_ascii=False)[:200],
     )
@@ -1050,6 +1059,7 @@ from fox_reader.translate.custom_endpoint import (  # noqa: E402
     PREVIEW_CHARACTER_INFO,
     PREVIEW_CONTEXT,
     PREVIEW_CONTEXT_CHARACTER_LINKS,
+    PREVIEW_META_ID,
 )
 
 full_ep = UserEndpoint.model_validate(ctx_base | {
@@ -1060,6 +1070,7 @@ full_ep = UserEndpoint.model_validate(ctx_base | {
             "context": {"type": "list", "source": "context"},
             "character_info": {"type": "list", "source": "character_info"},
             "context_character_links": {"type": "list", "source": "context_character_links"},
+            "meta_id": {"type": "string", "source": "meta_id"},
         },
     },
 })
@@ -1069,6 +1080,7 @@ preview_body = json.loads(previewed["body"])
 equals("preview shows sample pairs", preview_body["context"], PREVIEW_CONTEXT)
 equals("preview shows a sample roster entry", preview_body["character_info"], PREVIEW_CHARACTER_INFO)
 equals("preview shows sample links", preview_body["context_character_links"], PREVIEW_CONTEXT_CHARACTER_LINKS)
+equals("preview shows sample current speaker", preview_body["meta_id"], PREVIEW_META_ID)
 check(
     "sample links align to sample pairs",
     len(PREVIEW_CONTEXT_CHARACTER_LINKS) == len(PREVIEW_CONTEXT),
@@ -1085,7 +1097,8 @@ equals("explicit roster wins over samples", explicit_body["character_info"], [
     {"meta_id": "a1", "name_en": "Aiko", "name_ja": "愛子", "gender": "female", "alias_en": "Sis", "alias_ja": None},
     {"meta_id": "b2", "name_en": None, "name_ja": "先生", "gender": "male", "alias_en": None, "alias_ja": None},
 ])
-equals("explicit links win over samples", explicit_body["context_character_links"], ["x"])
+equals("unknown explicit links become null", explicit_body["context_character_links"], [None])
+equals("custom roster does not acquire a sample current speaker", explicit_body["meta_id"], None)
 
 emptied = describe_request(
     full_ep, text="こんにちは", source_lang="japanese",
@@ -1101,6 +1114,71 @@ live_body = json.loads(live["body"])
 equals("live path sends no sample pairs", live_body["context"], [])
 equals("live path sends no sample roster", live_body["character_info"], [])
 equals("live path sends no sample links", live_body["context_character_links"], [])
+equals("live path sends no sample speaker", live_body["meta_id"], None)
+
+# ---------------------------------------------------------------------------
+print("\n[11] Current speaker, dangling links, and legacy schema compatibility")
+# ---------------------------------------------------------------------------
+
+speaker_node = {"type": "string", "source": "meta_id"}
+for label, children, fragment in (
+    ("current speaker requires roster", {"speaker": speaker_node}, "requires a Character Info"),
+    ("duplicate current speaker rejected", {
+        "roster": list_node("character_info"), "one": speaker_node, "two": speaker_node,
+    }, "at most one Current Speaker"),
+    ("current speaker requires string node", {
+        "roster": list_node("character_info"), "speaker": {"type": "int", "source": "meta_id"},
+    }, "must use a string node"),
+):
+    rejects_lists(label, {
+        "type": "dict", "children": {"text": {"type": "string", "source": "text"}, **children},
+    }, text_response, fragment)
+
+rejects_lists("current speaker is request-only", {"type": "string", "source": "text"}, {
+    "type": "dict", "children": {"text": {"type": "string", "source": "text"}, "speaker": speaker_node},
+}, "cannot contain a Current Speaker")
+
+equals("current speaker preview token", chars_ep.request_schema.example()["meta_id"], "<CURRENT_SPEAKER>")
+
+legacy_schema = chars_ep.request_schema.model_dump()
+del legacy_schema["children"]["context"]
+legacy = UserEndpoint.model_validate(ctx_base | {"request_schema": legacy_schema})
+legacy_body = json.loads(prepare_request(
+    legacy, text="hi", source_lang="ja", target_lang="en",
+    context=pairs, character_info=roster, context_character_links=links, meta_id="b2",
+)["body"])
+equals("legacy schema without history sends no historical links", legacy_body["context_character_links"], [])
+equals("current speaker works independently of context", legacy_body["meta_id"], "b2")
+
+for invalid_id in (None, "", "unknown", ["a1"], {"id": "a1"}):
+    body = json.loads(prepare_request(
+        full_ep, text="hi", source_lang="ja", target_lang="en",
+        context=pairs, character_info=roster, context_character_links=["unknown", "a1"], meta_id=invalid_id,
+    )["body"])
+    equals(f"invalid speaker {invalid_id!r} becomes null", body["meta_id"], None)
+    equals("dangling history links become null without losing valid links", body["context_character_links"], [None, "a1"])
+
+trim_pairs = [[str(i), f"English {i}"] for i in range(13)]
+trim_pairs[5] = ["", "skip"]
+trim_links = ["a1" if i % 2 else "b2" for i in range(13)]
+trimmed = json.loads(prepare_request(
+    full_ep, text="hi", source_lang="ja", target_lang="en",
+    context=trim_pairs, character_info=roster, context_character_links=trim_links, meta_id=" b2 ",
+)["body"])
+kept = [i for i in range(13) if i != 5][-10:]
+equals("latest valid context pairs retained", trimmed["context"], [trim_pairs[i] for i in kept])
+equals("speaker links stay aligned through filtering and cap", trimmed["context_character_links"], [trim_links[i] for i in kept])
+equals("current speaker whitespace normalized", trimmed["meta_id"], "b2")
+
+partial_preview = json.loads(describe_request(
+    full_ep, text="hi", context=[["actual", "Actual"]],
+)["body"])
+equals("actual history does not acquire a sample roster", partial_preview["character_info"], [])
+equals("actual history does not acquire sample speaker IDs", partial_preview["context_character_links"], [None])
+equals("actual history does not acquire a sample current speaker", partial_preview["meta_id"], None)
+empty_preview = json.loads(describe_request(full_ep, text="hi", context=None)["body"])
+equals("explicit null history is empty", empty_preview["context"], [])
+equals("explicit null history does not inject a sample roster", empty_preview["character_info"], [])
 
 print()
 if failures:

@@ -5,15 +5,16 @@ import json
 import logging
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from fox_reader import endpoint_crypto
-from fox_reader.endpoint_schema import apply_placeholders
 from fox_reader.models.responses import TranslationResult
 from fox_reader.translate._http import decompress_response, parse_json_response
 from fox_reader.translate.characters import (
+    normalise_meta_id,
     normalize_character_info,
 )
 from fox_reader.translate.context import normalize_context_with_links
@@ -58,6 +59,41 @@ PREVIEW_CHARACTER_INFO: list[dict[str, Any]] = [
 
 #: One entry per preview context pair, positionally aligned.
 PREVIEW_CONTEXT_CHARACTER_LINKS: list[str | None] = ["a1b2c3d4", None]
+PREVIEW_META_ID = "a1b2c3d4"
+
+_UNSET = object()
+
+
+def preview_translation_inputs(
+    *,
+    context: object = _UNSET,
+    character_info: object = _UNSET,
+    context_character_links: object = _UNSET,
+    meta_id: object = _UNSET,
+) -> dict[str, Any]:
+    """Use one coherent sample, or the caller's data with empty defaults.
+
+    Supplying any field switches to caller data. Mixing a real conversation
+    with sample speaker IDs would make the preview attribute lines to people
+    the caller never selected. Explicit None/empty lists are always honoured.
+    """
+    values = {
+        "context": context,
+        "character_info": character_info,
+        "context_character_links": context_character_links,
+        "meta_id": meta_id,
+    }
+    if all(value is _UNSET for value in values.values()):
+        return {
+            "context": [list(pair) for pair in PREVIEW_CONTEXT],
+            "character_info": [dict(character) for character in PREVIEW_CHARACTER_INFO],
+            "context_character_links": list(PREVIEW_CONTEXT_CHARACTER_LINKS),
+            "meta_id": PREVIEW_META_ID,
+        }
+    return {
+        name: value if value is not _UNSET else (None if name == "meta_id" else [])
+        for name, value in values.items()
+    }
 
 
 def _scalar_to_str(value: Any) -> str:
@@ -275,6 +311,7 @@ def prepare_request(
     context: object = None,
     character_info: object = None,
     context_character_links: object = None,
+    meta_id: object = None,
 ) -> dict[str, Any]:
     """Resolve an endpoint into the exact HTTP request it will send.
 
@@ -296,7 +333,10 @@ def prepare_request(
     Links respectively -- and malformed rows degrade to empty lists, never to
     a failed request. When the endpoint encrypts requests, the four
     name/alias fields are sealed (see ``_encrypt_characters``); the ids stay
-    plaintext so the API can still join links to roster entries.
+    plaintext so the API can still join links to roster entries. ``meta_id``
+    identifies the current text's speaker through a Current Speaker node.
+    Unknown speaker IDs become null. History links are empty when the schema
+    has no Context node, so they never refer to dialogue that was not sent.
 
     When the endpoint encrypts requests, the text is sealed here — once, at the
     top — so every place a selection can surface carries the token instead of
@@ -308,12 +348,29 @@ def prepare_request(
     if endpoint.encrypts_request:
         text = _encrypt_text(endpoint, text)
 
-    pairs, links = normalize_context_with_links(context, context_character_links)
+    schema = endpoint.request_schema
+    uses_context = bool(schema.count_source("context"))
+    uses_characters = _schema_uses_character_lists(schema)
+    uses_speaker = bool(schema.count_source("meta_id"))
 
-    try:
-        characters = list(normalize_character_info(character_info).values())
-    except Exception:
-        characters = []
+    # Do not normalize or encrypt payloads the endpoint does not consume.
+    # In particular a legacy schema with links but no Context must not send
+    # references to earlier lines that are absent from its request.
+    pairs, links = (
+        normalize_context_with_links(context, context_character_links)
+        if uses_context else ([], [])
+    )
+    characters_by_id: dict[str, dict] = {}
+    if uses_characters or uses_speaker:
+        try:
+            characters_by_id = normalize_character_info(character_info)
+        except Exception:
+            pass
+    characters = list(characters_by_id.values())
+    links = [link if link in characters_by_id else None for link in links]
+    speaker = normalise_meta_id(meta_id) if uses_speaker else None
+    if speaker not in characters_by_id:
+        speaker = None
 
     if endpoint.encrypts_request and pairs:
         pairs = _encrypt_pairs(endpoint, pairs)
@@ -321,26 +378,20 @@ def prepare_request(
     if endpoint.encrypts_request and characters:
         characters = _encrypt_characters(endpoint, characters)
 
-    if _schema_uses_character_lists(endpoint.request_schema):
-        payload = endpoint.request_schema.build(
-            text=text,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            context=pairs,
-            character_info=characters,
-            context_character_links=links,
-        )
-    else:
-        # Legacy shape: schemas without the new nodes build byte-identical
-        # requests with or without them -- and the old keywords are never
-        # passed at all, so this also stays working against a schema build
-        # that predates the list sources.
-        payload = endpoint.request_schema.build(
-            text=text,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            context=pairs,
-        )
+    extras: dict[str, Any] = {}
+    if uses_characters:
+        extras.update(character_info=characters, context_character_links=links)
+    if uses_speaker:
+        extras["meta_id"] = speaker
+    # Only pass new keywords to schemas that advertise their sources, keeping
+    # the call compatible with a partially updated install's older schema.
+    payload = schema.build(
+        text=text,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        context=pairs,
+        **extras,
+    )
 
     url = endpoint.build_url(
         text=text,
@@ -424,39 +475,33 @@ def describe_request(
     text: str = "",
     source_lang: str = "",
     target_lang: str | None = None,
-    context: object = None,
-    character_info: object = None,
-    context_character_links: object = None,
+    context: object = _UNSET,
+    character_info: object = _UNSET,
+    context_character_links: object = _UNSET,
+    meta_id: object = _UNSET,
 ) -> dict[str, Any]:
     """A preview of the outgoing request, with no network activity.
 
-    List sources the caller leaves out are filled with the preview samples,
-    so the preview shows the shape the API will actually receive (pairs, a
-    roster entry, per-pair speaker ids) instead of empty arrays. Explicitly
-    passed lists -- including empty ones -- are honoured as given.
+    With no history/character inputs, use a coherent sample conversation,
+    roster and current speaker. Supplied data is never mixed with samples;
+    explicit empty lists and None are honoured as given.
     """
     language = (source_lang or "").strip().lower()
 
     if not language and endpoint.languages:
         language = endpoint.languages[0]
 
-    if context is None:
-        context = PREVIEW_CONTEXT
-
-    if character_info is None:
-        character_info = PREVIEW_CHARACTER_INFO
-
-    if context_character_links is None:
-        context_character_links = PREVIEW_CONTEXT_CHARACTER_LINKS
-
     return prepare_request(
         endpoint,
         text=text,
         source_lang=endpoint.source_code(language),
         target_lang=target_lang or endpoint.target_language,
-        context=context,
-        character_info=character_info,
-        context_character_links=context_character_links,
+        **preview_translation_inputs(
+            context=context,
+            character_info=character_info,
+            context_character_links=context_character_links,
+            meta_id=meta_id,
+        ),
     )
 
 
@@ -526,6 +571,8 @@ async def translate_by_custom_endpoint(
     context: object = None,
     character_info: object = None,
     context_character_links: object = None,
+    meta_id: object = None,
+    on_request: Callable[[dict[str, Any]], None] | None = None,
 ) -> TranslationResult:
     request_id = int(time.time() * 1000)
 
@@ -564,7 +611,12 @@ async def translate_by_custom_endpoint(
             context=context,
             character_info=character_info,
             context_character_links=context_character_links,
+            meta_id=meta_id,
         )
+        if on_request is not None:
+            # The test UI displays this exact request, including its generated
+            # UUIDs and encrypted tokens, without building it a second time.
+            on_request(request)
     except Exception as exc:
         return fail(500, f"Could not build the request: {exc}")
 
@@ -577,6 +629,19 @@ async def translate_by_custom_endpoint(
 
         try:
             response = await _send(endpoint, request)
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol):
+            return fail(
+                400,
+                "The endpoint URL is invalid. Check Hostname / URL, scheme, and port.",
+            )
+        except (httpx.LocalProtocolError, ValueError):
+            # Invalid header values and non-ASCII HTTP fields fail before a
+            # usable request can be sent. Retrying the same configuration
+            # cannot fix them. UnicodeEncodeError is a ValueError too.
+            return fail(
+                400,
+                "The endpoint request is invalid. Check the URL and header names/values.",
+            )
         except httpx.TimeoutException:
             response = None
             last_error = (
@@ -586,7 +651,12 @@ async def translate_by_custom_endpoint(
             continue
         except httpx.HTTPError as exc:
             response = None
-            last_error = f"Could not reach the endpoint: {exc}"
+            detail = str(exc).strip()
+            last_error = (
+                f"Could not reach the endpoint: {detail}"
+                if detail else
+                "Could not reach the endpoint. Check the hostname, port, and whether the service is running."
+            )
             continue
 
         if response.status_code in _RETRY_STATUSES and attempt < endpoint.retries:
