@@ -36,19 +36,21 @@ jobs:
         env:
           FOX_TEST_LAUNCHER: ${{ github.workspace }}/native/launcher${{ runner.os == 'Windows' && '.exe' || '' }}
           FOX_TEST_BACKEND: ${{ github.workspace }}/native/backend${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: python -m pytest tests/test_launcher.py tests/test_release_manifest.py tests/test_webview_sdk.py tests/test_desktop_packaging.py tests/test_window_recovery_policy.py tests/test_linux_terminal.py -q --basetemp "${{ runner.temp }}/fox-native-checks/ownership"
+        # Pytest creates --basetemp itself, but does not create missing parents.
+        run: python -m pytest tests/test_launcher.py tests/test_release_manifest.py tests/test_webview_sdk.py tests/test_desktop_packaging.py tests/test_window_recovery_policy.py tests/test_linux_terminal.py -q --basetemp "${{ runner.temp }}/fox-native-ownership"
       - name: Check WebView2 startup recovery
         if: runner.os == 'Windows'
-        run: python -m pytest tests/test_window_recovery.py -q --basetemp "${{ runner.temp }}/fox-native-checks/recovery"
+        run: python -m pytest tests/test_window_recovery.py -q --basetemp "${{ runner.temp }}/fox-native-recovery"
       - name: Check WebKit recovery and GTK-only browser control
         if: runner.os == 'Linux'
-        run: xvfb-run -a python -m pytest tests/test_window_recovery.py tests/test_linux_browser_controller.py -q --basetemp "${{ runner.temp }}/fox-native-checks/recovery"
+        run: xvfb-run -a python -m pytest tests/test_window_recovery.py tests/test_linux_browser_controller.py -q --basetemp "${{ runner.temp }}/fox-native-recovery"
       - name: Upload failed launcher diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: native-launcher-logs-${{ matrix.os }}
           path: |
-            ${{ runner.temp }}/fox-native-checks/**/logs/*.log
-            ${{ runner.temp }}/fox-native-checks/recovery/**/window.log
+            ${{ runner.temp }}/fox-native-ownership/**/logs/*.log
+            ${{ runner.temp }}/fox-native-recovery/**/logs/*.log
+            ${{ runner.temp }}/fox-native-recovery/**/window.log
           if-no-files-found: ignore

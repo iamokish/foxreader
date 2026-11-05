@@ -7,6 +7,7 @@ import ctypes
 import importlib.util
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -399,6 +400,61 @@ def test_toolchain_command_line_propagates_no_window(launcher_toolchain, monkeyp
     assert toolchain.main(["--no-window", "--out", str(tmp_path / "launcher")]) == 0
     assert len(calls) == 1
     assert calls[0][1]["no_window"] is True
+
+
+def test_workflow_temp_directories_start_clean_and_preserve_logs(tmp_path):
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/launcher.yml").read_text(
+        encoding="utf-8",
+    )
+    commands = [shlex.split(line.strip()[5:]) for line in workflow.splitlines()
+                if line.strip().startswith("run: ") and " -m pytest " in line]
+    paths = {command[command.index("--basetemp") + 1] for command in commands}
+    ownership_paths = {command[command.index("--basetemp") + 1] for command in commands
+                       if "tests/test_launcher.py" in command}
+    recovery_paths = {command[command.index("--basetemp") + 1] for command in commands
+                      if "tests/test_window_recovery.py" in command}
+    patterns = [line.strip() for line in workflow.splitlines()
+                if line.strip().startswith("${{ runner.temp }}/")]
+    assert paths and patterns, "Workflow test paths and diagnostics must be configured"
+    assert ownership_paths and recovery_paths
+    assert ownership_paths.isdisjoint(recovery_paths), "Recovery must not clear ownership test logs"
+
+    runner_temp = tmp_path / "fresh runner temp"
+    runner_temp.mkdir()
+    probe = tmp_path / "test_probe.py"
+    probe.write_text(
+        "def test_temp_directory(tmp_path):\n"
+        "    logs = tmp_path / 'logs'\n"
+        "    logs.mkdir()\n"
+        "    (logs / 'launcher.log').write_text('fixture log')\n"
+        "    (tmp_path / 'window.log').write_text('recovery fixture log')\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "pytest.ini"
+    config.write_text("[pytest]\n", encoding="utf-8")
+    evidence = []
+    for template in sorted(paths):
+        assert template.startswith("${{ runner.temp }}/")
+        base = Path(template.replace("${{ runner.temp }}", runner_temp.as_posix())).resolve()
+        # Pytest clears --basetemp. Confine this regression check to its fixture.
+        assert runner_temp.resolve() in base.parents
+        assert not base.exists()
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-c", str(config), "--confcutdir", str(tmp_path),
+             str(probe), "--basetemp", str(base), "-p", "no:cacheprovider", "-q"],
+            cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+        assert result.returncode == 0, f"{template}:\n{result.stdout}\n{result.stderr}"
+        logs = list(base.rglob("launcher.log"))
+        assert logs, "The real pytest tmp_path fixture must create its log"
+        evidence.extend(logs)
+        if template in recovery_paths:
+            evidence.extend(base.rglob("window.log"))
+        assert all(path.is_file() for path in evidence), "Later test runs must preserve earlier logs"
+
+    uploaded = {path.resolve() for pattern in patterns
+                for path in runner_temp.glob(pattern.removeprefix("${{ runner.temp }}/"))}
+    assert set(evidence) <= uploaded, "The failure artifact must include logs from every pytest directory"
 
 
 @pytest.mark.parametrize("argument", ["--help", "--version"])
