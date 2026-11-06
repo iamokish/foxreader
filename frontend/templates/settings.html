@@ -6,6 +6,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fox Reader — Settings</title>
+  <link rel="stylesheet" href="/static/form-controls.css">
+  <link rel="stylesheet" href="/static/desktop.css">
   <style>
     :root {
       --bg: #111318;
@@ -851,7 +853,7 @@
         Keep the previous folder until the new version starts correctly.
       </div>
     </section>
-    <div id="message"></div>
+    <div id="message" data-selectable></div>
   </main>
 
   <!-- Toast stack: fixed top-left, filled by showToast(). Kept outside the
@@ -1701,7 +1703,7 @@
       } else if (ocr.llama_cpp === true && ocr.vl_downloaded === false) {
         note = `<div class="device-note info">llama-cpp-python is installed${ocr.llama_cpp_version ? " (" + esc(ocr.llama_cpp_version) + ")" : ""}, but the VL weights are not downloaded yet — see Setup.</div>`;
       } else if (ocr.last_error) {
-        note = `<div class="device-note">${esc(ocr.last_error)}</div>`;
+        note = `<div class="device-note" data-selectable>${esc(ocr.last_error)}</div>`;
       }
       root.innerHTML = `<div class="models">${cards}</div>${note}`;
     }
@@ -1754,7 +1756,7 @@
           <span>${contextTokens(size)} tokens</span>
         </label>`;
       }).join("");
-      const limit = context.error ? `<span class="context-error">${esc(context.error)}</span>`
+      const limit = context.error ? `<span class="context-error" data-selectable>${esc(context.error)}</span>`
         : !supported.includes(16384) || Number(context.max) < 16384
           ? `<span>Model limit: ${contextTokens(context.max)} tokens.</span>` : "";
       const running = Number(context.running) > 0

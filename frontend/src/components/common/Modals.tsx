@@ -20,7 +20,7 @@ export function InpaintModal() {
                 <div id="inpaintModalStatus" class="inpaint-status">
                     <div id="inpaintModalLoader" class="modal-spinner" />
                     <div class="inpaint-status__body">
-                        <div id="inpaintProgressMessage" class="inpaint-status__msg">Preparing…</div>
+                        <div id="inpaintProgressMessage" class="inpaint-status__msg" data-selectable>Preparing…</div>
                         <div class="inpaint-progress">
                             <span id="inpaintProgressFill" class="inpaint-progress__fill" />
                         </div>
@@ -34,7 +34,7 @@ export function InpaintModal() {
                     style="display: none; width: 100%; height: auto; object-fit: contain; border-radius: 4px; box-sizing: border-box;"
                 />
                 <div id="inpaintPreviewActions" class="inpaint-actions" style="display: none;">
-                    <span id="inpaintPreviewHint" class="inpaint-actions__hint" />
+                    <span id="inpaintPreviewHint" class="inpaint-actions__hint" data-selectable />
                     <button
                         id="savePreviewBtn"
                         class="btn-success"
@@ -88,6 +88,7 @@ export function ConfirmModal() {
             >
                 <p
                     id="confirmModalMessage"
+                    data-selectable
                     style="color: var(--text-primary); font-size: 15px; margin: 0 0 20px 0; line-height: 1.5; white-space: pre-wrap;"
                 ></p>
                 <div style="display: flex; gap: 10px; justify-content: flex-end;">

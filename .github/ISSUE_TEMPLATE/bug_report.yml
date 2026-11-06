@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a problem with the reader, native window, OCR, translation, rendering, or setup.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the README and existing issues first. Include only the details relevant to your problem; screenshots or a short recording are especially useful for UI issues.
+  - type: input
+    id: version
+    attributes:
+      label: Fox Reader version or commit
+      description: Include the release archive name if using a packaged build, or the commit ID if running from source.
+      placeholder: "0.3.0, archive filename, or commit ID"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Include the version and architecture. On Linux, include the distribution and X11/Wayland if known.
+      placeholder: "Windows 11 x64 / Ubuntu 24.04 x86_64, Wayland / macOS 15, Apple Silicon"
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Where does the problem occur?
+      options:
+        - Native app window
+        - Web browser
+        - Both native window and browser
+        - Command line or backend only
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - Installation, startup, or updates
+        - Setup or model downloads
+        - Reader, gallery, or folder handling
+        - Layout, controls, or native window
+        - Capture, bubble detection, or OCR
+        - Local translation, context, or characters
+        - DeepL, JPDB, or custom endpoints
+        - Fonts, typesetting, cleaning, or export
+        - Not sure
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Describe the smallest sequence that reproduces the problem, including any settings that matter.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      placeholder: |
+        Expected:
+
+        Actual:
+    validations:
+      required: true
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Relevant configuration
+      description: Fill in what applies. For UI issues, include the layout, theme, display scaling, and browser or WebKitGTK version if known. For model issues, include the model/engine, language, hardware, and compute backend.
+      placeholder: |
+        Installation (release / source / local build):
+        Layout and theme (Basic / Vulpes, light / dark):
+        Browser or WebView, display scaling:
+        OCR engine or translation model/provider:
+        Source language, context-window size:
+        CPU, GPU, RAM/VRAM, CPU/CUDA/ROCm/MPS/Metal:
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots, recording, or sample
+      description: Attach an example if useful. For native-window UI problems, describe whether the same action works in a browser, if you have checked. Share only sample pages or text you are comfortable making public.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant error output
+      description: Paste the relevant terminal or logs/ output, with API keys, tokens, and private content removed.
+      render: text

@@ -268,7 +268,7 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
                     restart.
                 </p>
 
-                {error && <p class="ch-error">{error}</p>}
+                {error && <p class="ch-error" data-selectable>{error}</p>}
 
                 <div class="ch-add">
                     {field(draft.name_en ?? "", "Name (EN)", "add", "name_en")}

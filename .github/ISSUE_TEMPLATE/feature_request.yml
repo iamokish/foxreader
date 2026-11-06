@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an improvement to Fox Reader's reading, translation, or editing workflow.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check existing requests first. For a specific OCR, translation, bubble-detection, or text-segmentation model, use the model support request form.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe your workflow and the limitation you encounter in Fox Reader.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the behavior you would like and how it would help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Mention any existing settings, tools, or approaches you have tried.
+  - type: textarea
+    id: context
+    attributes:
+      label: Examples and context
+      description: Add screenshots, sketches, or examples if useful. Include the operating system, native window/browser, language, or model when relevant.

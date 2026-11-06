@@ -399,7 +399,7 @@ window.addEventListener("keydown", (e) => {
 
     // Reader mode: navigation/zoom take over; editor hotkeys are suppressed.
     if (document.body.classList.contains("workspace-reader")) {
-        if (e.ctrlKey || e.altKey || state.isDrawing || state.isCaptureMode) return;
+        if (e.ctrlKey || e.metaKey || e.altKey || state.isDrawing || state.isCaptureMode) return;
         // The reader has four views and a spread that moves two pages at a time, so
         // it gets first refusal. It returns false for the keys that mean the same
         // thing everywhere (Escape, F), which fall through below, and it registers
@@ -446,7 +446,7 @@ window.addEventListener("keydown", (e) => {
         return;
     }
 
-    if (e.ctrlKey || e.shiftKey || e.altKey || state.isDrawing || state.isCaptureMode) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || state.isDrawing || state.isCaptureMode) return;
 
     switch (e.key.toLowerCase()) {
         case "h":

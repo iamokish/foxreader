@@ -234,6 +234,9 @@ describe("Vulpes vertical panel limits", () => {
             const panel = element(id);
             Object.defineProperty(panel, "style", {
                 value: new Proxy(panel.style, {
+                    get(target, property) {
+                        return Reflect.get(target, property, target);
+                    },
                     set(target, property, value) {
                         if (property === "height") writes[id]++;
                         return Reflect.set(target, property, value);

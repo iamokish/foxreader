@@ -1,0 +1,39 @@
+name: Model support request
+description: Suggest an OCR, translation, bubble-detection, or text-segmentation model.
+title: "[Model]: "
+body:
+  - type: dropdown
+    id: purpose
+    attributes:
+      label: Intended use in Fox Reader
+      options:
+        - Text recognition (OCR)
+        - Local translation
+        - Speech-bubble detection
+        - Text segmentation for image cleaning
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model repository and weights
+      description: Link to the upstream model. Identify the exact weights, quantization, and file format if known.
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: Model license or terms
+      description: Link to the license or usage terms if available.
+  - type: textarea
+    id: use_case
+    attributes:
+      label: What would this improve?
+      description: Describe the benefit over existing options, such as a missing language, better manga OCR, translation quality, speed, or lower memory use.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Known compatibility and testing
+      description: Include any verified language support, inference engine, prompt format, context limit, hardware requirements, or test results. Unverified details and links are welcome; label them clearly.

@@ -69,6 +69,7 @@ export function BackendStatusOverlay() {
                 ></h2>
                 <p
                     id="backendStatusMessage"
+                    data-selectable
                     style="color: var(--text-secondary); font-size: 14px; margin: 0 0 20px 0; line-height: 1.5;"
                 ></p>
                 <button id="backendStatusActionBtn" class="btn-primary" style="padding: 8px 20px; cursor: pointer;">

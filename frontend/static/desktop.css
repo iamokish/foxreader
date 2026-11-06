@@ -1,0 +1,28 @@
+/* Native window chrome should not start a text-selection gesture. Inherit this
+   default so rich text inside an editable/copyable region remains selectable. */
+html.fox-native {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* :read-write includes contenteditable (also inherited and plaintext-only).
+   Inputs/textareas stay copyable when read-only. Mark other useful output with
+   data-selectable; semantic diagnostics and code already opt in here. */
+html.fox-native :where(input, textarea, :read-write, pre, code, output,
+    [role="alert"], [role="status"], [data-selectable]) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Controls inside a copyable message are still controls. Selection remains
+   available in their text fields, including fields nested inside a label. */
+html.fox-native :where(button, select, option, label, summary, .material-icons,
+    input:is([type="button"], [type="submit"], [type="reset"], [type="image"],
+      [type="checkbox"], [type="radio"], [type="range"], [type="color"],
+      [type="file"], [type="hidden"])) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* No !important: the splitter's temporary drag guard must win even in fields
+   and diagnostics, then restore this policy when the drag ends. */

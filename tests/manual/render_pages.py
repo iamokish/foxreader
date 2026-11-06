@@ -55,7 +55,11 @@ CONTEXTS: dict[str, dict] = {
         "jpdb_available": False,
         "bubble_available": True,
     },
-    "setup.html": {"mtl_dir": "models"},
+    "setup.html": {
+        "mtl_dir": "models",
+        "mtl_default_dir": str(ROOT / "models"),
+        "mtl_resolved_dir": str(ROOT / "models"),
+    },
     "settings.html": {},
     "user_endpoints.html": {
         "known_languages": ["japanese", "korean", "chinese"],
@@ -202,7 +206,8 @@ for stale in ("#1a1a2e", "#16213e", "#0f3460", "#1a4a7a", "#e0e0e0", "#274a6c"):
 
 bodies = rule_bodies(setup, "body")
 
-check("setup.html has a body rule to check", len(bodies) == 1, f"{len(bodies)} matched")
+# Responsive overrides can add body rules; check all of them for clipping.
+check("setup.html has a body rule to check", bool(bodies), f"{len(bodies)} matched")
 check(
     "and its <body> no longer clips a tall card",
     not any("align-items" in body for body in bodies),

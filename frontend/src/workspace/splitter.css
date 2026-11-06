@@ -1,0 +1,24 @@
+.ws-splitter {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+/* WebKit's editable controls and explicit user-select:text descendants can
+   bypass a rule on body alone. Apply both spellings directly during the drag;
+   removing the class restores normal editing without touching selections. */
+body.ws-resizing,
+body.ws-resizing * {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+}
+
+body.ws-resizing--vertical,
+body.ws-resizing--vertical * {
+    cursor: col-resize !important;
+}
+
+body.ws-resizing--horizontal,
+body.ws-resizing--horizontal * {
+    cursor: row-resize !important;
+}

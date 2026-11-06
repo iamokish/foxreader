@@ -5,6 +5,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Fox Reader — User Endpoints</title>
+<link rel="stylesheet" href="/static/form-controls.css">
+<link rel="stylesheet" href="/static/desktop.css">
 <style>
 :root{
   --bg:#111318;--surface:#1a1d24;--surface2:#20242d;--panel:#14171d;
@@ -431,9 +433,9 @@ input::placeholder{color:#5e6673}
               </div>
             </div>
             <div id="requestTree"></div>
-            <div id="requestError" class="schema-error"></div>
+            <div id="requestError" class="schema-error" data-selectable></div>
             <div id="requestWarning" class="schema-warning" role="status"></div>
-            <div class="preview" id="requestPreview"></div>
+            <div class="preview" id="requestPreview" data-selectable></div>
             <div class="source-note">Dynamic nodes are filled in per request; static values are sent unchanged.</div>
           </div>
         </div>
@@ -459,8 +461,8 @@ input::placeholder{color:#5e6673}
               </div>
             </div>
             <div id="responseTree"></div>
-            <div id="responseError" class="schema-error"></div>
-            <div class="preview" id="responsePreview"></div>
+            <div id="responseError" class="schema-error" data-selectable></div>
+            <div class="preview" id="responsePreview" data-selectable></div>
             <div class="source-note">The Translated Text node becomes the translation; Alternatives are listed under it.</div>
           </div>
         </div>
@@ -594,7 +596,7 @@ input::placeholder{color:#5e6673}
             <div class="block-title">Outgoing request</div>
             <div class="block-note">Built from this draft using sample dialogue and speakers for configured context and character fields.</div>
           </div>
-          <div class="preview" id="previewOut"></div>
+          <div class="preview" id="previewOut" data-selectable></div>
         </div>
       </div>
 
@@ -616,7 +618,7 @@ input::placeholder{color:#5e6673}
     <div class="modal-body" id="resultBody">
       <p id="resultMessage" class="feedback-message" role="status" aria-live="polite" aria-atomic="true"></p>
       <p id="resultHint" class="hint" hidden>Tests use sample text, dialogue and speakers for the fields configured in the request schema.</p>
-      <div class="preview" id="resultOut"></div>
+      <div class="preview" id="resultOut" data-selectable></div>
     </div>
   </div>
 </dialog>
@@ -2286,7 +2288,7 @@ function renderCards() {
         <div class="card-top">
           <div>
             <div class="title">${esc(endpoint.name)}</div>
-            <div class="url">${esc(endpoint.method)} ${esc(endpoint.url)}</div>
+            <div class="url" data-selectable>${esc(endpoint.method)} ${esc(endpoint.url)}</div>
           </div>
 
           <div class="badges">

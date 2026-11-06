@@ -2,6 +2,11 @@
 const MAX_QUEUE = 20;
 const MAX_BATCH = 10;
 
+/** All three native hosts inject this bridge before page scripts execute. */
+export function isNativeViewer() {
+    return typeof window !== "undefined" && typeof window.foxReaderNativeFullscreen === "function";
+}
+
 function redact(value) {
     return value
         .replace(/(https?:\/\/[^\s?#]+)[?#][^\s]*/gi, "$1?[redacted]")
@@ -28,6 +33,8 @@ export function toggleFullscreen() {
 
 export function installDesktopIntegration() {
     if (window.__FOX_DESKTOP__) return window.__FOX_DESKTOP__;
+    const nativeViewer = isNativeViewer();
+    if (nativeViewer) document.documentElement.classList.add("fox-native");
     let queue = [];
     let timer = 0;
     let sending = false;
@@ -125,6 +132,7 @@ export function installDesktopIntegration() {
         window.removeEventListener("keydown", onKey, true);
         if (console.warn === warn) console.warn = oldWarn;
         if (console.error === error) console.error = oldError;
+        if (nativeViewer) document.documentElement.classList.remove("fox-native");
         delete window.__FOX_DESKTOP__;
     };
     window.__FOX_DESKTOP__ = cleanup;

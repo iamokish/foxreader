@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Setup and usage guide
+    url: https://github.com/iamokish/foxreader/blob/master/README.md
+    about: Read the installation, reader, OCR, translation, and typesetting guide.
+  - name: Troubleshooting
+    url: https://github.com/iamokish/foxreader/blob/master/README.md#troubleshooting
+    about: Check common startup, model, and rendering problems before opening an issue.

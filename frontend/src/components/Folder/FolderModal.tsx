@@ -86,7 +86,7 @@ function Status({ tone, text }: { tone: Tone; text: string }) {
     return (
         <div class={`folder-modal__status is-${tone}`}>
             <span class="material-icons">{TONE_ICONS[tone]}</span>
-            <span>{text}</span>
+            <span data-selectable>{text}</span>
         </div>
     );
 }

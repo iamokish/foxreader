@@ -509,6 +509,7 @@ button,
 
 #languageSelect {
   min-width: 110px;
+  padding-right: 1.8em;
   /* Standardizes the internal line height so text isn't "below" the button text */
   line-height: 38px;
   vertical-align: middle;
@@ -1072,6 +1073,7 @@ button:disabled {
 }
 
 .entry-checkbox {
+  --checkbox-accent: currentColor;
   width: 16px;
   height: 16px;
   cursor: pointer;
@@ -1928,11 +1930,18 @@ body.no-bubble #bubCapture {
 }
 
 .eo-check input {
+    --checkbox-accent: var(--color-green);
     width: 12px;
     height: 12px;
     margin: 0;
     accent-color: var(--color-green);
     cursor: pointer;
+}
+
+/* Dark ticks stay legible on the bright per-entry colors and green toggles. */
+.entry-checkbox,
+.eo-check input {
+    --checkbox-tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 8 3 3 7-7' fill='none' stroke='%23121212' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* A switch that is stored and honoured, but has nothing to act on at

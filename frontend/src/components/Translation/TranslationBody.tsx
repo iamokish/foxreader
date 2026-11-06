@@ -21,7 +21,7 @@ export function TranslationBody() {
             id="translationContainer"
             style="flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; box-sizing: border-box; justify-content: center; position: relative;"
         >
-            <div id="translatedText" class="panel error" data-state="error">
+            <div id="translatedText" class="panel error" data-state="error" data-selectable>
                 <strong>Select a translator</strong>
             </div>
         </div>

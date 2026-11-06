@@ -40,6 +40,7 @@ export function showNotify(message: string): void {
     `;
 
     const text = document.createElement("span");
+    text.setAttribute("data-selectable", "");
     text.style.cssText = "flex:1;word-break:break-word;";
     text.textContent = message;
 

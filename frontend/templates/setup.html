@@ -6,6 +6,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fox Reader</title>
+  <link rel="stylesheet" href="/static/form-controls.css">
+  <link rel="stylesheet" href="/static/desktop.css">
   <style>
     /* Same palette as settings.html, so the wizard and the settings page do
        not look like two different applications. */
@@ -1160,14 +1162,14 @@
         <h2 class="copyright-title" id="copyrightTitle">Before you process manga</h2>
       </div>
 
-      <p class="copyright-lede" id="copyrightLede">
+      <p class="copyright-lede" id="copyrightLede" data-selectable>
         Fox Reader is a tool for manga <strong>you own or hold rights to
         process</strong> — your own scans, licensed volumes, public-domain
         works, or works whose rights holders permit it. The tool grants you no
         rights in anyone else's manga.
       </p>
 
-      <ul class="copyright-rules">
+      <ul class="copyright-rules" data-selectable>
         <li>
           <b>Do not redistribute what is not yours.</b> Fox Reader is not for
           stripping, re-lettering, or redistributing pages you have no right to
@@ -1193,7 +1195,7 @@
         </li>
       </ul>
 
-      <p class="copyright-foot">
+      <p class="copyright-foot" data-selectable>
         Summary only — the binding text is <b>TERMS.md §4</b> (manga copyright)
         and <b>NOTICE §4</b> (dataset terms), both shipped beside the Fox Reader
         launcher. You can reopen this notice from the
@@ -1221,7 +1223,7 @@
         <span class="terms-licence" id="termsLicence"></span>
       </div>
 
-      <div class="terms-body" id="termsBody" tabindex="0"></div>
+      <div class="terms-body" id="termsBody" tabindex="0" data-selectable></div>
 
       <div class="terms-more hidden" id="termsMore" aria-hidden="true">
         Scroll to the end to continue
@@ -1347,7 +1349,7 @@
       Skip & Close
     </button>
 
-    <div class="error-msg" id="errorMsg" style="display:none"></div>
+    <div class="error-msg" id="errorMsg" style="display:none" data-selectable></div>
     <div class="error-msg" id="connectionMsg" role="status" aria-live="polite" style="display:none"></div>
     <div class="done-msg" id="doneMsg" style="display:none"></div>
     <div class="closed-msg" id="closedMsg" style="display:none"></div>

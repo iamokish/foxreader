@@ -243,6 +243,9 @@ describe("VulpesLayout sections", () => {
 
         let writes = 0;
         const observed = new Proxy(rail.style, {
+            get(target, prop) {
+                return Reflect.get(target, prop, target);
+            },
             set(target, prop, value) {
                 if (prop === "width") writes += 1;
                 return Reflect.set(target, prop, value);

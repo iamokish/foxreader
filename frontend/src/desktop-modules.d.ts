@@ -1,4 +1,5 @@
 declare module "*static/desktop.js" {
+    export function isNativeViewer(): boolean;
     export function toggleFullscreen(): void;
     export function installDesktopIntegration(): () => void;
 }
