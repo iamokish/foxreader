@@ -384,7 +384,12 @@ smoke test. The runner's macOS version does not raise the release's macOS
    and start a Mac-only build. Download its artifacts from the completed run.
 3. For a full release, push a new Git tag for the intended release commit.
    **Build Executables** builds Windows, Linux and Mac variants; after the
-   whole tagged run succeeds, **Release** publishes their artifacts together.
+   whole tagged run succeeds, **Release** prepares and verifies a draft containing
+   their artifacts together.
+4. After **Release** succeeds, open the draft from its workflow summary, review
+   it, and click **Publish release** on GitHub. Publication requires this manual
+   approval; see [the release workflow](../docs/updating.md#release-workflow) for
+   details.
 
 No repository enablement variable is needed. The former
 `FOX_MACOS_RUNNER_ENABLED` variable is no longer read and can be removed if

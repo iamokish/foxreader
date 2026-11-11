@@ -42,16 +42,32 @@ archive or all of its numbered parts. The release workflow:
 3. Checks file coverage, hashes, contiguous part numbering, complete joined hashes,
    archive version, platform, and format. Missing Windows, Linux, or macOS outputs
    fail the release.
-4. Generates `latest.json` and the combined `SHA256SUMS.txt`.
-5. Uploads the assets to a draft, with `latest.json` last. Before publishing, checks
-   the complete remote inventory, sizes, and GitHub's SHA256 digests.
-6. Publishes only after verification. Prereleases do not update the stable release
-   pointer. Reruns can resume a draft; published releases cannot be overwritten.
+4. Uses the matching `CHANGELOG.md` version entry for **What's new**, followed by
+   download instructions, and generates `latest.json` and the combined
+   `SHA256SUMS.txt`. If there is no matching entry, **What's new** is omitted.
+   GitHub's generated **What's Changed**, **New Contributors**, and
+   **Contributors** sections are not added.
+5. Uploads the assets to a draft, with `latest.json` last, and checks the complete
+   remote inventory, sizes, and GitHub's SHA256 digests.
+6. Leaves the verified release as a draft and links to it in the workflow summary.
+   CI never publishes it automatically. After **Release** succeeds, review the
+   draft on GitHub and click **Publish release** to approve publication.
+
+The workflow marks non-stable version tags as prereleases so they do not update
+the stable release pointer when published. Keep that designation when reviewing
+the draft. Reruns can resume a draft; published releases cannot be overwritten.
 
 Version tags must agree with the version embedded in archive names. Use a new tag
 and version to replace a published release. A failed upload leaves a draft that
 the updater cannot discover. The manifest describes archive bytes, not user
 configuration, fonts, downloaded model weights, or caches.
+
+To recover the failed **0.3.0** release, open **Actions → Release → Run workflow**,
+select the branch containing the release fix, and enter `run_id: 42878638201` and
+`tag: 0.3.0`. This resumes the draft using the existing successful build, provided
+its artifacts have not expired; no rebuild or tag change is needed. Rerunning the
+original failed workflow uses its old definition, so start a new manual run.
+Wait for it to succeed before reviewing and publishing the draft.
 
 The stable discovery URL is:
 

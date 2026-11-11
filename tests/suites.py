@@ -311,6 +311,7 @@ BACKEND = Domain(
 BUILD = Domain(
     name="build",
     modules=("test_macos_build", "test_llamacpp_macos", "test_release_manifest",
+             "test_release_notes", "test_release_workflow",
              "test_webview_sdk", "test_desktop_packaging", "test_launcher",
              "test_window_recovery_policy", "test_window_recovery",
              "test_linux_browser_controller", "test_linux_terminal"),

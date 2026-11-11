@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   release:
-    name: Publish Release
+    name: Prepare Release Draft
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
@@ -142,12 +142,11 @@ jobs:
 
       - name: Prepare release notes
         if: steps.target.outputs.is_tag == 'true'
+        env:
+          TAG: ${{ steps.target.outputs.tag }}
         run: |
+          set -euo pipefail
           cat << 'EOF' > release_body.md
-          ## What's new
-
-          - See release commit notes.
-
           ## What to download
 
           Pick the archive matching your OS and GPU, extract it anywhere,
@@ -218,6 +217,8 @@ jobs:
           into a new folder and copy your config, fonts, and models; keep the
           previous installation until the new version works.
           EOF
+          python packaging/release_notes.py --changelog CHANGELOG.md --tag "$TAG" \
+            --download-notes release_body.md --output complete_release_body.md
 
       - name: Validate downloads and generate latest.json
         if: steps.target.outputs.is_tag == 'true'
@@ -228,8 +229,6 @@ jobs:
           RUN_ID: ${{ steps.target.outputs.run_id }}
         run: |
           set -euo pipefail
-          gh api --method POST "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > changes.md
-          cat changes.md release_body.md > complete_release_body.md
           gh api --paginate --slurp "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > build-jobs.json
           gh api --paginate --slurp "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" > build-artifacts.json
           python packaging/release_manifest.py generate \
@@ -247,20 +246,33 @@ jobs:
         run: |
           set -euo pipefail
           TITLE="Fox Reader v${TAG#v}"
+          # Classify the draft now so manual publication keeps prereleases
+          # out of the stable /releases/latest pointer.
+          release_flags=(--prerelease=false)
+          if ! [[ "${TAG#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            release_flags=(--prerelease --latest=false)
+          fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]; then
               echo "Published releases are immutable. Create a new version to replace assets." >&2
               exit 1
             fi
-            gh release edit "$TAG" --title "$TITLE" -F complete_release_body.md
+            gh release edit "$TAG" --title "$TITLE" -F complete_release_body.md \
+              --draft "${release_flags[@]}"
           else
             gh release create "$TAG" \
               --title "$TITLE" \
               -F complete_release_body.md \
               --verify-tag \
-              --draft
+              --draft "${release_flags[@]}"
           fi
+
+          # The REST release-by-tag endpoint does not return drafts. The CLI
+          # can find them and supplies the numeric ID for the assets endpoint.
+          RELEASE_ID=$(gh release view "$TAG" --json databaseId --jq .databaseId)
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid draft release ID" >&2; exit 1; }
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Upload assets sequentially
         if: steps.target.outputs.is_tag == 'true'
@@ -308,20 +320,23 @@ jobs:
           echo "===================================================="
           echo "All release assets uploaded successfully."
 
-      - name: Verify uploaded assets and publish
+      - name: Verify uploaded assets and leave draft for review
         if: steps.target.outputs.is_tag == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.target.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
         run: |
           set -euo pipefail
-          RELEASE_ID=$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq .id)
           gh api --paginate --slurp "repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > uploaded-assets.json
           python packaging/release_manifest.py verify-assets --manifest artifacts/latest.json --assets-json uploaded-assets.json
-          # Prereleases never replace the stable /releases/latest pointer.
-          if [[ "${TAG#v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            gh release edit "$TAG" --draft=false
-          else
-            gh release edit "$TAG" --draft=false --prerelease --latest=false
-          fi
+          RELEASE_URL=$(gh release view "$TAG" --json url --jq .url)
+          {
+            echo "## Release draft ready for review"
+            echo
+            echo "All release assets passed inventory, size, and SHA256 verification."
+            echo
+            echo "[Review the $TAG draft]($RELEASE_URL), then select **Publish release** when you approve it."
+            echo "The workflow leaves the release as a draft; publication is manual."
+          } >> "$GITHUB_STEP_SUMMARY"
