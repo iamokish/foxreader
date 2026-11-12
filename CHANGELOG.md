@@ -4,6 +4,8 @@ Notable changes to Fox Reader are recorded here. Version entries are summarized
 from the repository's Git tags. Unreleased changes have not yet been included
 in a tagged version.
 
+## [Unreleased]
+
 ## [0.3.0]
 
 ### Added
@@ -101,6 +103,7 @@ in a tagged version.
 - Per-entry typesetting, image cleaning, live previews, and export.
 - Character rosters, custom fonts, dark/light themes, and standalone builds.
 
+[Unreleased]: https://github.com/iamokish/GrihaLekha/compare/0.3.0...master
 [0.3.0]: https://github.com/iamokish/foxreader/compare/0.2.2...0.3.0
 [0.2.2]: https://github.com/iamokish/foxreader/compare/0.2.1...0.2.2
 [0.2.1]: https://github.com/iamokish/foxreader/compare/0.2.0...0.2.1
