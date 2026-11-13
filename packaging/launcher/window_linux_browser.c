@@ -1,5 +1,6 @@
 /* Browser controller: GTK3 only, with no dependency on WebKit/JavaScriptCore. */
 #include "window.h"
+#include "window_gtk_close.h"
 #include <gtk/gtk.h>
 
 static GtkWidget *window, *state_label, *message_label, *url_label;
@@ -9,6 +10,7 @@ static void (*browser_callback)(const char *);
 static char *app_url, *last_status;
 static gboolean closing, finished, owns_backend, browser_opened;
 static int result_code;
+static FoxGtkCloseConfirmation close_confirmation;
 
 /* The lifecycle worker publishes to one idle source. Only the main thread
  * touches GTK widgets. Removing the source on destroy also clears late work. */
@@ -18,13 +20,9 @@ static guint dispatch_id;
 static char *pending_message, *pending_url;
 static int pending_owner, pending_code;
 
-static void request_close(void)
+static void begin_close(void)
 {
-    if (finished) {
-        gtk_main_quit();
-        return;
-    }
-    if (closing) return;
+    if (closing || finished) return;
     closing = TRUE;
     gtk_widget_set_sensitive(open_button, FALSE);
     gtk_widget_set_sensitive(close_button, FALSE);
@@ -34,6 +32,16 @@ static void request_close(void)
         "Stopping Fox Reader. Waiting for the backend to finish safely." :
         "Closing this controller. The existing Fox Reader session will keep running.");
     if (stop_callback) stop_callback();
+}
+
+static void request_close(void)
+{
+    if (finished) {
+        gtk_main_quit();
+        return;
+    }
+    if (!closing)
+        fox_gtk_close_show(&close_confirmation, GTK_WINDOW(window), app_url != NULL, owns_backend, begin_close);
 }
 
 static gboolean close_requested(GtkWidget *widget, GdkEvent *event, gpointer data)
@@ -79,6 +87,7 @@ static gboolean dispatch_on_main(gpointer unused)
             g_free(app_url);
             app_url = g_strdup(url);
             owns_backend = owned != 0;
+            fox_gtk_close_update(&close_confirmation, TRUE, owns_backend);
             gtk_label_set_text(GTK_LABEL(state_label), "Running");
             gtk_label_set_text(GTK_LABEL(message_label), owns_backend ?
                 "Fox Reader is running in your browser. Closing the browser leaves this controller open.\n"
@@ -102,6 +111,7 @@ static gboolean dispatch_on_main(gpointer unused)
     }
     if (finish && !finished) {
         finished = TRUE;
+        fox_gtk_close_dismiss(&close_confirmation);
         result_code = code;
         gtk_widget_set_sensitive(open_button, FALSE);
         if (closing || code == 0) gtk_main_quit();
@@ -243,6 +253,7 @@ void fox_window_destroy(void)
     g_mutex_unlock(&pending_lock);
     if (source) g_source_remove(source);
     finished = TRUE;
+    fox_gtk_close_dismiss(&close_confirmation);
     if (window) gtk_widget_destroy(window);
     window = NULL;
     g_clear_pointer(&app_url, g_free);

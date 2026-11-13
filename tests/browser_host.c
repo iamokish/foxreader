@@ -36,6 +36,8 @@ static int command_pending(const char *name)
     return 1;
 }
 
+#include "close_confirmation.h"
+
 static GtkWidget *find_named(GtkWidget *widget, const char *name)
 {
     GList *children, *item;
@@ -109,6 +111,7 @@ static gboolean control_tick(gpointer unused)
     if (command_pending("quit-view")) click(window, "fox-browser-close");
     if (command_pending("close-view")) gtk_window_close(GTK_WINDOW(window));
     if (command_pending("inspect")) snapshot(window);
+    confirmation_tick();
     return G_SOURCE_CONTINUE;
 }
 

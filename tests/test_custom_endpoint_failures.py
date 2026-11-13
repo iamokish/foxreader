@@ -179,7 +179,7 @@ def test_unexpected_exception_returns_generic_error_and_logs_no_secret_or_traceb
 
 
 @pytest.mark.parametrize("overrides", [
-    pytest.param({"hostname": "example.invalid:bad/translate"}, id="invalid-url"),
+    pytest.param({"hostname": "[invalid]/translate"}, id="invalid-url"),
     pytest.param({"headers": {"X-Name": "\u3053\u3093\u306b\u3061\u306f"}}, id="non-ascii-header"),
 ])
 def test_http_configuration_errors_are_reported_without_retry_or_network(endpoint_api, monkeypatch, overrides):

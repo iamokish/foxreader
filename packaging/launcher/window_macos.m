@@ -27,15 +27,21 @@
 @property(nonatomic, strong) NSURL *readyURL;
 @property(nonatomic, strong) id keyMonitor;
 @property(nonatomic, strong) NSTimer *navigationDeadline;
+@property(nonatomic, strong) NSAlert *closeConfirmation;
 @property(nonatomic, strong) NSMutableSet<WKDownload *> *downloads;
 @property(nonatomic, strong) NSMapTable<WKDownload *, NSDictionary<NSString *, NSURL *> *> *downloadTargets;
 @property(nonatomic) void (*requestStop)(void);
 @property(nonatomic) void (*openBrowser)(const char *);
 @property(nonatomic) void (*logMessage)(const char *);
 @property(nonatomic) BOOL browserMode, browserOpened, stopping, finished, fullscreenTransition;
+@property(nonatomic) BOOL closeConfirmationPending, ownsBackend;
 @property(nonatomic) int exitCode;
 - (void)requestClose;
-- (void)showReadyURL:(NSString *)url;
+- (void)beginClose;
+- (void)showCloseConfirmation;
+- (void)updateCloseConfirmation;
+- (void)dismissCloseConfirmation;
+- (void)showReadyURL:(NSString *)url ownsBackend:(BOOL)ownsBackend;
 - (void)finish:(int)code;
 - (void)stopView;
 - (void)stopRecovery;
@@ -135,6 +141,73 @@ static void wakeApplication(void)
 {
     if (self.finished) { [self.window close]; return; }
     if (self.stopping) return;
+    self.closeConfirmationPending = YES;
+    [self showCloseConfirmation];
+}
+
+- (void)updateCloseConfirmation
+{
+    self.closeConfirmation.informativeText = !self.readyURL ?
+        @"Startup will be cancelled and this window will close." : self.ownsBackend ?
+        @"Fox Reader will stop and this window will close." :
+        @"Only this window will close. The existing Fox Reader session will keep running.";
+}
+
+- (void)showCloseConfirmation
+{
+    if (!self.closeConfirmationPending || self.stopping || self.finished) return;
+    if (self.closeConfirmation) {
+        [self.closeConfirmation.window makeKeyAndOrderFront:nil];
+        return;
+    }
+    if (self.window.attachedSheet) {
+        // Let the existing file/error sheet finish without cancelling work.
+        // windowDidEndSheet retries this request after its completion callback.
+        [self.window.attachedSheet makeKeyAndOrderFront:nil];
+        return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Close Fox Reader?";
+    alert.alertStyle = NSAlertStyleWarning;
+    NSButton *no = [alert addButtonWithTitle:@"No"];
+    NSButton *yes = [alert addButtonWithTitle:@"Yes"];
+    no.keyEquivalent = @"\r";
+    yes.keyEquivalent = @"";
+    alert.window.defaultButtonCell = (NSButtonCell *)no.cell;
+    self.closeConfirmation = alert;
+    [self updateCloseConfirmation];
+    __weak FoxWindowHost *weakHost = self;
+    __weak NSAlert *weakAlert = alert;
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        FoxWindowHost *host = weakHost;
+        NSAlert *completed = weakAlert;
+        if (!host || !completed || host.closeConfirmation != completed) return;
+        host.closeConfirmation = nil;
+        host.closeConfirmationPending = NO;
+        if (response == NSAlertSecondButtonReturn) [host beginClose];
+    }];
+}
+
+- (void)dismissCloseConfirmation
+{
+    self.closeConfirmationPending = NO;
+    NSAlert *alert = self.closeConfirmation;
+    self.closeConfirmation = nil;
+    if (alert.window.sheetParent)
+        [alert.window.sheetParent endSheet:alert.window returnCode:NSModalResponseCancel];
+    [alert.window orderOut:nil];
+}
+
+- (void)windowDidEndSheet:(NSNotification *)notification
+{
+    (void)notification;
+    __weak FoxWindowHost *weakHost = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakHost showCloseConfirmation]; });
+}
+
+- (void)beginClose
+{
+    if (self.stopping || self.finished) return;
     self.stopping = YES;
     [self stopRecovery];
     if (self.window.attachedSheet)
@@ -202,7 +275,7 @@ static void wakeApplication(void)
 - (void)windowDidFailToExitFullScreen:(NSWindow *)window
 { (void)window; self.fullscreenTransition = NO; }
 
-- (void)showReadyURL:(NSString *)url
+- (void)showReadyURL:(NSString *)url ownsBackend:(BOOL)ownsBackend
 {
     if (self.stopping || self.finished || self.readyURL) return;
     NSURL *address = [NSURL URLWithString:url];
@@ -211,6 +284,8 @@ static void wakeApplication(void)
         return;
     }
     self.readyURL = address;
+    self.ownsBackend = ownsBackend;
+    [self updateCloseConfirmation];
     if (self.browserMode) {
         if (!self.browserOpened && self.openBrowser) {
             self.browserOpened = YES;
@@ -251,6 +326,7 @@ static void wakeApplication(void)
 {
     if (self.finished) return;
     self.finished = YES;
+    [self dismissCloseConfirmation];
     [self stopRecovery];
     self.exitCode = code;
     [self stopView];
@@ -408,8 +484,9 @@ static void wakeApplication(void)
     // Claim fallback before teardown: WebKit can deliver cancellations while
     // stopping. A late success or failure cannot bring back the hidden view.
     [self stopView];
-    if (self.window.attachedSheet)
-        [self.window endSheet:self.window.attachedSheet returnCode:NSModalResponseCancel];
+    NSWindow *sheet = self.window.attachedSheet;
+    if (sheet && sheet != self.closeConfirmation.window)
+        [self.window endSheet:sheet returnCode:NSModalResponseCancel];
     for (WKDownload *download in self.downloads.allObjects) [download cancel:nil];
     [self.downloads removeAllObjects];
     self.title.stringValue = @"The app window could not load";
@@ -566,6 +643,15 @@ int fox_window_create(const char *root_utf8, void (*request_stop)(void),
         host.keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
             FoxWindowHost *current = weakHost;
             if (!current || current.stopping || current.finished) return event;
+            if (current.closeConfirmation && event.window == current.closeConfirmation.window) {
+                // No is the Return default; Escape is also a cancellation.
+                if (event.keyCode == 53) {
+                    [current.closeConfirmation.buttons[0] performClick:nil];
+                    return nil;
+                }
+                return event;
+            }
+            if (current.window.attachedSheet || event.window != current.window) return event;
             BOOL toggle = event.keyCode == 103 || (event.keyCode == 36 &&
                           (event.modifierFlags & NSEventModifierFlagOption));
             BOOL leave = event.keyCode == 53 && (current.window.styleMask & NSWindowStyleMaskFullScreen);
@@ -597,10 +683,9 @@ void fox_window_status(const char *message)
 
 void fox_window_ready(const char *url, int owns_backend)
 {
-    (void)owns_backend;
     @autoreleasepool {
         NSString *text = url ? [NSString stringWithUTF8String:url] : @"";
-        dispatch_async(dispatch_get_main_queue(), ^{ [activeHost showReadyURL:text]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [activeHost showReadyURL:text ownsBackend:owns_backend != 0]; });
     }
 }
 
@@ -621,6 +706,7 @@ void fox_window_destroy(void)
         activeHost = nil;
         if (!host) return;
         host.finished = YES;
+        [host dismissCloseConfirmation];
         [host stopRecovery];
         if (host.keyMonitor) [NSEvent removeMonitor:host.keyMonitor];
         for (WKDownload *download in host.downloads.allObjects) [download cancel:nil];

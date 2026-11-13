@@ -287,6 +287,8 @@ See the **[Custom endpoints guide](docs/custom-endpoints.md)** for the complete 
 
 Context and character data are sent through the schema nodes you configure. **Current Speaker** sends the new text's `meta_id`; **Context Links** identifies speakers of earlier pairs. **Preview request** builds a draft without contacting the service; **Send test** sends a real request with sample data and displays the actual request used. Saved encryption keys can be revealed explicitly with **Show** when reopening the editor.
 
+Use **Export YAML** to copy one endpoint from its overlay, or **Import YAML** to paste and validate an editable draft before saving. Shared encryption keys are excluded; enter your own key for an encrypted import. Check headers, query values, and static fields for other credentials before sharing. Enter the hostname/path without `http://` or `https://` and choose the protocol using **Scheme**.
+
 Configurations and language activation persist in `config/user_endpoints.yaml`.
 
 ## Hotkeys

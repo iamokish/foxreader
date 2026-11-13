@@ -77,14 +77,28 @@ The reader's existing F shortcut and fullscreen button use the same native
 window action. Window chrome follows the system theme. Icons come from the
 existing Fox Reader artwork, with multiple Windows icon sizes.
 
+The reader, setup, settings, and custom-endpoint pages monitor backend health in
+both native and browser windows. An offline notice offers **Retry** and clears
+when the same backend recovers. A restart requires an explicit **Refresh**; it
+does not automatically reload the page or discard unsaved forms. These themed
+notices stay above open editor dialogs.
+
 On macOS, open `Fox Reader.app` in the extracted distribution; keep `bin`,
 `config`, `fonts`, `models`, and `cache` beside it. The root `launcher` also
 remains available. After choosing a permanent location on Linux, run
 `./install-desktop.sh` to install a per-user menu entry with `Terminal=false`.
 
-Closing a window that started the backend sends its shutdown token, waits up to
-20 seconds for cleanup, then uses the existing process/job backstop. Closing a
-second, attached window leaves the owner running. Errors remain visible until
+The title-bar close button asks **Close Fox Reader?** in a native **Yes / No**
+dialog on Windows, Linux, and macOS. The dialog follows the system theme and
+stays above its parent window, including during startup and browser fallback.
+**No** is selected by default; **No** or Escape returns to the current session.
+Repeated close requests reuse the same dialog. The browser controller's close
+action and macOS **Quit Fox Reader** use the same confirmation.
+
+Choosing **Yes** in a window that started the backend sends its shutdown token,
+waits up to 20 seconds for cleanup, then uses the existing process/job backstop. Closing a
+second, attached window leaves the owner running. Backend completion and OS
+shutdown signals do not wait for confirmation. Errors remain visible until
 dismissed. An unwritable installation lock is an error, not permission to start
 another backend.
 
@@ -147,15 +161,20 @@ each OS. The automated tests do not replace these runtime checks:
 
 1. Start from a path containing spaces and non-ASCII characters. Confirm the
    banner appears immediately, then the setup wizard or reader loads without a
-   blank page. Close during startup, then relaunch.
+   blank page. Close during startup, choose No, and confirm loading continues.
+   Close again, choose Yes, then relaunch.
 2. Complete setup, open settings, load a folder, import/export characters, open
    an image and run OCR/translation. Confirm websocket progress and image URLs
    work. Confirm export cancellation does not overwrite an existing file.
 3. Toggle F11 and Alt+Enter in the reader, settings, and text inputs. Restore the
    window's size and position. Change the system theme, move between monitors,
    and check title bars and icons.
-4. Open a second launcher and close it. Confirm reading continues in the first.
-   Close the first during a backend operation; confirm its processes exit and
+4. In each system theme, open the close dialog and confirm it stays above its
+   window, including in fullscreen. Repeat the close request; only one dialog
+   should appear. Test No, Return on the default No, and Escape; reading and
+   any running work should continue. Open a second launcher and confirm its
+   closure; reading should continue in the first. Confirm closing the first
+   during a backend operation; confirm its processes exit and
    its cache cleanup runs. Test an occupied port and a backend startup failure.
 5. On Linux, repeat file pickers, drag/drop, and fullscreen on both Wayland and
    X11. Launch from the applications menu without WebKitGTK and with `--browser`.

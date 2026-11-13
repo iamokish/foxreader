@@ -1,5 +1,6 @@
 #include "window.h"
 #include "window_recovery.h"
+#include "window_gtk_close.h"
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 #include <glib/gstdio.h>
@@ -21,6 +22,7 @@ static char *app_url;
 static const char *fallback_reason;
 static GList *downloads;
 static FoxWindowRecovery recovery;
+static FoxGtkCloseConfirmation close_confirmation;
 
 typedef struct {
     char *target, *temporary;
@@ -149,24 +151,28 @@ static void fullscreen_message(WebKitUserContentManager *manager, WebKitJavascri
     (void)manager; (void)value; (void)data;
     if (!fallback_active && !closing && !finished) toggle_fullscreen();
 }
+static void begin_close(void)
+{
+    if (closing || finished) return;
+    closing = TRUE;
+    fox_recovery_stop(&recovery);
+    cancel_startup_timer();
+    gtk_label_set_text(GTK_LABEL(label), !app_url ?
+        "Cancelling this launch...\nWaiting for it to finish safely." : owns_backend ?
+        "Closing Fox Reader...\nWaiting for the backend to finish safely." :
+        "Closing this window...\nThe existing Fox Reader session will keep running.");
+    gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
+    gtk_widget_set_sensitive(browser_open, FALSE);
+    gtk_widget_set_sensitive(browser_close, FALSE);
+    cancel_downloads();
+    stop_callback();
+}
 static gboolean close_requested(GtkWidget *widget, GdkEvent *event, gpointer data)
 {
     (void)widget; (void)event; (void)data;
     if (finished) { gtk_main_quit(); return TRUE; }
-    if (!closing) {
-        closing = TRUE;
-        fox_recovery_stop(&recovery);
-        cancel_startup_timer();
-        gtk_label_set_text(GTK_LABEL(label), !app_url ?
-            "Cancelling this launch...\nWaiting for it to finish safely." : owns_backend ?
-            "Closing Fox Reader...\nWaiting for the backend to finish safely." :
-            "Closing this window...\nThe existing Fox Reader session will keep running.");
-        gtk_stack_set_visible_child(GTK_STACK(stack), status_box);
-        gtk_widget_set_sensitive(browser_open, FALSE);
-        gtk_widget_set_sensitive(browser_close, FALSE);
-        cancel_downloads();
-        stop_callback();
-    }
+    if (!closing)
+        fox_gtk_close_show(&close_confirmation, GTK_WINDOW(window), app_url != NULL, owns_backend, begin_close);
     return TRUE;
 }
 static void browser_open_clicked(GtkButton *button, gpointer data)
@@ -512,6 +518,7 @@ static gboolean ready_on_main(gpointer value)
     owns_backend = message->owned != 0;
     g_free(app_url);
     app_url = g_strdup(message->url);
+    fox_gtk_close_update(&close_confirmation, TRUE, owns_backend);
     if (browser_mode || fallback_active) show_browser_status(NULL);
     else if (fox_recovery_begin_navigation(&recovery, (uint64_t)(g_get_monotonic_time() / 1000))) {
         /* WebKit starts its rendering process on this first load. Backend
@@ -531,6 +538,7 @@ void fox_window_ready(const char *url, int owned)
 static gboolean finish_on_main(gpointer code)
 {
     finished = TRUE;
+    fox_gtk_close_dismiss(&close_confirmation);
     fox_recovery_stop(&recovery);
     cancel_startup_timer();
     result_code = GPOINTER_TO_INT(code);
@@ -549,6 +557,7 @@ int fox_window_run(void) { gtk_main(); return result_code; }
 void fox_window_destroy(void)
 {
     finished = TRUE;
+    fox_gtk_close_dismiss(&close_confirmation);
     fox_recovery_stop(&recovery);
     cancel_startup_timer();
     cancel_downloads();

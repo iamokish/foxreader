@@ -2,7 +2,7 @@
 
 Custom endpoints let Fox Reader use an HTTP translation service that you configure. The service can run on your machine or on another server. You describe the request it expects and the response it returns; Fox Reader adds a translator button for it.
 
-This guide covers the current endpoint editor, conversation context, character and speaker data, encryption, saved-key Show/Hide, and the management API. Example hostnames ending in `.invalid` are placeholders. Replace them with your service's address.
+This guide covers the endpoint editor, YAML import/export, conversation context, character and speaker data, encryption, saved-key Show/Hide, and the management API. Example hostnames ending in `.invalid` are placeholders. Replace them with your service's address.
 
 ## Contents
 
@@ -13,6 +13,7 @@ This guide covers the current endpoint editor, conversation context, character a
 - [Working with schema trees](#working-with-schema-trees)
 - [Context, characters, and the current speaker](#context-characters-and-the-current-speaker)
 - [Preview, test, and activate](#preview-test-and-activate)
+- [Sharing endpoints with YAML](#sharing-endpoints-with-yaml)
 - [Encryption and saved keys](#encryption-and-saved-keys)
 - [Changing keys without interrupting translations](#changing-keys-without-interrupting-translations)
 - [Examples for other API layouts](#examples-for-other-api-layouts)
@@ -83,7 +84,7 @@ Configure it as follows:
 
 1. Open **Settings → Manage endpoints**, or visit `/user_endpoints` on your Fox Reader server. With the default address, this is `http://127.0.0.1:7954/user_endpoints`.
 2. Select **Add Endpoint**.
-3. Set **Name** to `MyAPI`, **Method** to `POST`, and **Hostname / URL** to `https://api.example.invalid/v1/translate`.
+3. Set **Name** to `MyAPI`, **Method** to `POST`, and **Hostname / path** to `api.example.invalid/v1/translate`, and **Scheme** to `https`.
 4. Set **Request body** to `json` and **Response body** to `json`.
 5. Under **Supported languages**, select **Japanese** and enter `ja` as its language code. Keep **Target language** as `en`.
 6. Keep the request root as `dict`. Add or rename its fields to match this table:
@@ -144,10 +145,10 @@ The response Error node can receive JSON `null` even when its configured node ty
 
 | Editor field | Meaning and accepted values |
 |---|---|
-| Name | Required button label, at most 6 characters. |
+| Name | Required button label, at most 6 characters. Unique across all saved endpoints and languages; case and surrounding whitespace are ignored. |
 | Method | `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`, according to the API's contract. |
-| Hostname / URL | Required hostname with optional path, such as `api.example.invalid/v1/translate`. A complete `http://` or `https://` URL is accepted. |
-| Scheme | `https` by default, or `http`. A scheme included in the pasted URL takes precedence. |
+| Hostname / path | Required hostname with optional path, such as `api.example.invalid/v1/translate`. Do not include `http://`, `https://`, another URI scheme, or a leading `//`. |
+| Scheme | `https` by default, or `http`. Select the protocol here, separately from the hostname. |
 | Port | Optional integer from 1 to 65535. It is inserted before the path. If the URL already includes a port, that port is used. |
 | HTTP version | Default uses the client's normal HTTP/1.1 path. HTTP/2 enables HTTP/2 support when the server can negotiate it. |
 | Timeout (seconds) | Positive number, default 20, passed to the HTTP client for each attempt. It is not a total budget across all retries. |
@@ -155,7 +156,9 @@ The response Error node can receive JSON `null` even when its configured node ty
 | Max text length | 100–10000 characters, default 2000. The backend checks the new plaintext selection before sending it to your API. This is not a token limit or a limit on the entire context/roster payload. |
 | Target language | The destination code your API expects, default `en`. It appears where Target Language or `<TARGET_LANG>` is used. |
 
-For a service listening on port 9000 on your machine, use `http://127.0.0.1:9000/translate`, or set the hostname to `127.0.0.1/translate`, scheme to `http`, and port to `9000`.
+For a service listening on port 9000 on your machine, set the hostname to `127.0.0.1/translate`, scheme to `http`, and port to `9000`. An inline port, such as `127.0.0.1:9000/translate`, also works.
+
+Existing saved configurations containing a full HTTP(S) URL are migrated when the store loads: its protocol moves to Scheme, preserving the effective URL, endpoint ID, activation, and encryption key. New saves, previews, and YAML imports require a hostname without the protocol prefix.
 
 Fox Reader removes trailing `/` characters when building the configured URL. Inspect the preview if your service distinguishes paths with and without a trailing slash.
 
@@ -170,6 +173,8 @@ Fox Reader's reader uses names such as `japanese`, `chinese`, and `korean`. An e
 | Korean | `ko` |
 
 The language code is optional. Without a mapping, the external Source Language value is the Fox Reader language name, such as `japanese`.
+
+Names are unique even when endpoints support different languages or are inactive. For example, `MyAPI`, `myapi`, and ` MyAPI ` conflict. You can keep an endpoint's own name when editing it. Older saved duplicates remain available with their IDs, settings, keys, and activation unchanged, but an edit must use a unique name before it can be saved. Deleting or renaming an endpoint frees its old name.
 
 A single saved endpoint can support several languages. Activation is separate for each language. Each language can have **20 saved endpoints**, with **3 active at a time**. An endpoint must be active for the reader's selected language to appear as a translator button.
 
@@ -199,7 +204,7 @@ The request is prepared once and reused for retries. A generated request UUID an
 
 `form` and `query` require a `dict` root and reject a direct `dict` child. Lists are allowed, with the behavior below. JSON is the straightforward choice for nested objects and structured character/context data.
 
-**Choosing `text` does not automatically send only the selected text.** The visual editor offers dict and list roots. For a service that requires a bare text body, the management API can configure a root `{"type": "string", "source": "text"}`. See [bare text requests](#bare-text-requests).
+**Choosing `text` does not automatically send only the selected text.** For a service that requires a bare text body, choose **string root** and the **Text** source in the editor. Its schema is `{"type": "string", "source": "text"}`. See [bare text requests](#bare-text-requests).
 
 ### Repeat list keys (`doseq`)
 
@@ -459,6 +464,59 @@ A successful test checks the configured request, response extraction, and option
 
 Saving does not activate an endpoint. Use the language controls on its saved card, then choose that translator in the reader. The reader's Auto TL feature follows the selected translator; the existing Context and Characters switches also apply to custom translations. Page translation uses the same metadata builders as individual entries.
 
+## Sharing endpoints with YAML
+
+Export shares **one endpoint at a time**. On its card, select **Export YAML**, review the text in the overlay, then select **Copy YAML**. If automatic clipboard access is unavailable, the overlay selects the text so you can copy it with Ctrl+C or Cmd+C.
+
+To import:
+
+1. Select **Import YAML** and paste one endpoint document.
+2. Select **Validate and review**. Invalid YAML stays in the overlay with an explanation, a line/column where available, and a suggested correction. Edit the text and try again; Fox Reader does not silently repair it.
+3. Review the editable draft. If its name is already used, a warning asks you to choose a different name before saving. If encryption is enabled, enter your own matching shared key. Imported drafts never reuse a saved endpoint's key.
+4. Select **Save Endpoint** to create a new endpoint with a new ID. Activate it separately for the desired language. Closing the draft leaves your saved endpoints unchanged.
+
+The portable format uses `version: 1` and one `endpoint` mapping. This complete minimal example can be pasted directly:
+
+```yaml
+version: 1
+endpoint:
+  name: MyAPI
+  hostname: api.example.invalid/v1/translate
+  host_scheme: https
+  method: POST
+  body_format: json
+  response_format: json
+  languages: [japanese]
+  language_codes:
+    japanese: ja
+  target_language: en
+  request_schema:
+    type: dict
+    children:
+      q: {type: string, source: text}
+      source: {type: string, source: src_lang}
+      target: {type: string, source: target_lang}
+  response_schema:
+    type: dict
+    children:
+      translation: {type: string, source: text}
+      error: {type: string, source: error}
+  encryption:
+    enabled: false
+```
+
+Exports include connection options, language mappings, request/response schemas (including context and character sources), and encryption settings. They omit the endpoint ID, activation state, `encryption.key`, and key-presence flags. Pasting those nonportable fields is rejected. Encryption options such as enabled directions and key encoding are preserved, but a matching key must be entered before an encrypted draft can be saved or previewed.
+
+**Review the YAML before sharing it.** Authentication headers, query parameters, and static schema values remain in the export; these can contain API tokens or other credentials. Only the dedicated shared encryption key is automatically excluded.
+
+Import uses the same connection, language, encryption-option, and schema validation as the normal editor. Saved-endpoint and activation limits still apply when saving or activating. A draft can be reviewed when a language's endpoint limit is reached, with a warning; saving remains blocked until the limit is resolved.
+
+A document is limited to **128 KiB of UTF-8 text**, 32 nested levels, and 8,192 YAML nodes. Only one document is accepted. Duplicate keys, aliases, custom tags, non-string mapping keys, unknown settings, and non-finite numbers are rejected. Quote values such as dates or `yes` when they should be strings. Export applies the same size and structure limits, so a successfully exported document fits the import parser.
+
+The management import route accepts only `{"yaml": "..."}` (JSON body limit: 256 KiB). Success returns `{"endpoint": {...}, "requires_key": true/false, "warnings": [...]}`; the draft has no ID or key. Validation failures return HTTP 400 with `{"error": "...", "suggestions": [...]}`. Both import and export responses use `Cache-Control: no-store`. Neither operation sends a translation request or modifies the endpoint store.
+
+The reader, `/setup`, `/settings`, and `/user_endpoints` share backend health monitoring. An offline overlay offers **Retry** and clears when the same backend recovers. If the backend restarts, **Refresh** explicitly reloads the page; this discards unsaved drafts. Fox Reader never automatically refreshes a form after a restart. The notice stays above open editor or transfer dialogs.
+
 ## Encryption and saved keys
 
 Encryption is optional and requires the `cryptography` package. Your service must implement the matching encryption contract before you enable it.
@@ -676,13 +734,14 @@ Only one copy of the duplicate alternative is retained. If the response is inste
 
 ### Bare text requests
 
-For an API expecting the selected text as its whole request body, the management API can create this endpoint:
+For an API expecting the selected text as its whole request body, select request body `text`, response body `text`, and string roots with the Text source. The equivalent management API configuration is:
 
 ```json
 {
   "id": "plain-demo",
   "name": "Plain",
-  "hostname": "https://api.example.invalid/translate",
+  "hostname": "api.example.invalid/translate",
+  "host_scheme": "https",
   "method": "POST",
   "languages": ["japanese"],
   "body_format": "text",
@@ -692,7 +751,7 @@ For an API expecting the selected text as its whole request body, the management
 }
 ```
 
-The body is the selection itself, without JSON quotes. The visual editor offers only dict/list root selectors, so use API-based configuration for this root-string layout.
+The body is the selection itself, without JSON quotes. String roots can also be imported and reviewed in the visual editor.
 
 ## Implementing encryption on your server
 
@@ -805,6 +864,8 @@ These routes belong to the **Fox Reader server**, not your external translation 
 |---|---|
 | `GET /user_endpoints` | Open the editor page. |
 | `GET /api/user_endpoints` | List saved endpoints, counts, activation, and limits. Routine responses omit encryption keys. |
+| `POST /api/user_endpoints/import` | Validate `{"yaml": "..."}` and return an unsaved draft; no endpoint is created or activated. |
+| `GET /api/user_endpoints/{id}/export` | Return `{"yaml": "..."}` for one endpoint, excluding its ID, activation, and shared encryption key. |
 | `POST /api/user_endpoints` | Create an endpoint from a full configuration object. |
 | `PUT /api/user_endpoints/{id}` | Update an endpoint using a full configuration object. This is not a partial PATCH operation. |
 | `DELETE /api/user_endpoints/{id}` | Delete an endpoint. |
@@ -826,7 +887,8 @@ Send this object to `POST /api/user_endpoints`, replacing the hostname with your
 {
   "id": "demo-json",
   "name": "MyAPI",
-  "hostname": "https://api.example.invalid/v1/translate",
+  "hostname": "api.example.invalid/v1/translate",
+  "host_scheme": "https",
   "method": "POST",
   "body_format": "json",
   "response_format": "json",
@@ -918,15 +980,16 @@ The endpoint configuration persists across restarts. Page context and the in-mem
 
 | Symptom | What to check |
 |---|---|
+| Name already exists | Choose a unique name (ignoring case and surrounding whitespace), including for imported drafts. Names are shared across all languages. Existing duplicates must be renamed before saving edits. |
 | No translator button | Save the endpoint, activate it for the selected reader language, and check the limit of 3 active endpoints per language. |
-| Wrong URL or language code | Inspect Preview request; check pasted scheme/port, path, selected supported language, and its code mapping. |
+| Wrong URL or language code | Inspect Preview request; check the Scheme selector, port, hostname/path, selected supported language, and its code mapping. |
 | “Exactly one Text node” | Assign Text as a dynamic source to one string node. A static `<TEXT>` token alone does not count. |
 | A literal `<CURRENT_SPEAKER>` or `<CONTEXT>` reaches the API | Use Current Speaker or Context as a node's source; these preview labels are not static-string substitution tokens. |
 | Current speaker is null | Enable Characters, select a page entry, assign its Speaker, and include both Character Info and Current Speaker in the request schema. Check that its ID exists in the roster. |
 | Context is empty | Enable Context; select an entry with earlier visible entries that contain both original and translated text on the same page. |
 | Context Links is empty | Include a Context node and ensure eligible history exists. Without Context, links are suppressed even in older saved schemas. |
 | Context links contain nulls | Assign speakers to those earlier entries and enable Characters. Unknown or deleted IDs become null. |
-| Expected a raw text body but got JSON | Request body `text` still serializes a dict/list root as JSON. A bare Text root requires API-based configuration. |
+| Expected a raw text body but got JSON | Request body `text` still serializes a dict/list root as JSON. Choose a string root with the Text source. |
 | API returns 401/403 | Check its authentication header or query parameter. A Fox Reader encryption key does not replace an API authentication token. |
 | Test works, page translation fails | Compare text length, actual context/roster size, field values, and speaker assignments; the test UI uses representative samples. |
 | Saved-key field is blank after reopening | This is the initial state. Select Show to load the saved key, or leave it blank to keep the stored key and type. |
@@ -957,6 +1020,8 @@ These files define the behavior described above:
 
 - [Endpoint editor](../frontend/templates/user_endpoints.html)
 - [Endpoint model, validation, and storage](../src/fox_reader/user_endpoints.py)
+- [YAML transfer validation](../src/fox_reader/endpoint_transfer.py)
+- [YAML transfer regression tests](../tests/test_endpoint_transfer.py)
 - [Schema building and response extraction](../src/fox_reader/endpoint_schema.py)
 - [External request preparation and execution](../src/fox_reader/translate/custom_endpoint.py)
 - [Management, preview, test, and key-reveal routes](../src/fox_reader/routes/user_endpoints.py)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,6 +10,12 @@ from pydantic import ValidationError
 
 from fox_reader import assets, endpoint_crypto
 from fox_reader.endpoint_schema import DEFAULT_UUID_VARIANT, UUID_VARIANTS
+from fox_reader.endpoint_transfer import (
+    MAX_REQUEST_BYTES,
+    EndpointTransferError,
+    export_endpoint,
+    import_endpoint,
+)
 from fox_reader.user_endpoints import (
     DEFAULT_MAX_TEXT_LENGTH,
     KNOWN_LANGUAGES,
@@ -130,6 +137,78 @@ async def get_active_endpoints(request: Request):
         "active": store.active_summary(),
         "max_active_per_language": MAX_ACTIVE_PER_LANGUAGE,
     })
+
+
+def _transfer_error(exc: EndpointTransferError) -> JSONResponse:
+    return JSONResponse(
+        {"error": str(exc), "suggestions": exc.suggestions}, status_code=400,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _transfer_yaml(request: Request) -> str:
+    """Bound the streamed JSON body before decoding or parsing it."""
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > MAX_REQUEST_BYTES:
+            raise EndpointTransferError(
+                "Import request is too large.",
+                "Use YAML of at most 128 KiB, with a JSON request of at most 256 KiB.",
+            )
+        content.extend(chunk)
+    try:
+        body = json.loads(content)
+    except (ValueError, UnicodeError, RecursionError):
+        raise EndpointTransferError(
+            "Import body must be valid JSON.", 'Send an object with one "yaml" string field.',
+        ) from None
+    if not isinstance(body, dict) or set(body) != {"yaml"} or not isinstance(body["yaml"], str):
+        raise EndpointTransferError(
+            "Import body must contain exactly one yaml string.", 'Send {"yaml": "version: 1\\nendpoint: ..."}.',
+        )
+    return body["yaml"]
+
+
+@router.post("/api/user_endpoints/import")
+async def import_user_endpoint(request: Request):
+    """Return an unsaved draft for review; never borrow a stored key."""
+    try:
+        result = import_endpoint(await _transfer_yaml(request))
+    except EndpointTransferError as exc:
+        return _transfer_error(exc)
+    store = getattr(request.app.state, "user_endpoints", None)
+    if store is not None:
+        if store.name_in_use(result["endpoint"]["name"]):
+            result["warnings"].append(
+                "An endpoint with this name already exists. Choose a different name before saving."
+            )
+        endpoints = store.all()
+        if any(
+            sum(language in endpoint.languages for endpoint in endpoints) >= MAX_ENDPOINTS_PER_LANGUAGE
+            for language in result["endpoint"]["languages"]
+        ):
+            result["warnings"].append(
+                "The endpoint limit is reached for a selected language. Remove an endpoint or change languages "
+                "before saving."
+            )
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/user_endpoints/{endpoint_id}/export")
+async def export_user_endpoint(request: Request, endpoint_id: str):
+    """Export portable settings only, with no ID, activation or encryption key."""
+    headers = {"Cache-Control": "no-store"}
+    store = getattr(request.app.state, "user_endpoints", None)
+    if store is None:
+        return JSONResponse({"error": "User endpoints are not configured"}, status_code=503, headers=headers)
+    endpoint = store.get(endpoint_id)
+    if endpoint is None:
+        return JSONResponse({"error": "Endpoint not found"}, status_code=404, headers=headers)
+    try:
+        document = export_endpoint(endpoint)
+    except EndpointTransferError as exc:
+        return _transfer_error(exc)
+    return JSONResponse({"yaml": document}, headers=headers)
 
 
 @router.get("/api/user_endpoints/{endpoint_id}/key")

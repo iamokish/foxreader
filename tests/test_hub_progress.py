@@ -21,7 +21,12 @@ from fox_reader.routes import setup
 
 @pytest.fixture(autouse=True)
 def progress_scope(monkeypatch):
+    from huggingface_hub import constants
+
     monkeypatch.setattr(progress_mod.download_context, "current", None, raising=False)
+    # Optional agent detection adds a request depending on the machine's cache.
+    # These transport fixtures exercise model downloads, not that telemetry.
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_TELEMETRY", True)
 
 
 @pytest.fixture
@@ -80,9 +85,11 @@ def test_real_hub_download_reports_small_chunks_before_ten_mib_buffer(tmp_path, 
         assert request.method == "GET"
         return httpx.Response(200, headers=headers, stream=stream)
 
-    with _client(monkeypatch, handle, response_hooks=[lambda response: existing_hooks.append(response.request.method)]):
+    with (
+        _client(monkeypatch, handle, response_hooks=[lambda response: existing_hooks.append(response.request.method)]),
+        disable_progress_bars(),
+    ):
         progress_mod.observe_hub_client()  # registering twice must not double-count
-        disable_progress_bars()
         destination = hf_hub_download("org/model", "weights.bin", local_dir=tmp_path,
                                       tqdm_class=progress_mod.HubByteProgress)
     assert 0 < intermediate[0][0] < len(chunk) * 3 < 10 * 1024 * 1024

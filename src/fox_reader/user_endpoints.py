@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from fox_reader import endpoint_crypto
 from fox_reader.endpoint_schema import (
@@ -200,7 +200,7 @@ class EndpointEncryption(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_encryption(self) -> "EndpointEncryption":
+    def validate_encryption(self, info: ValidationInfo) -> "EndpointEncryption":
         if not self.enabled:
             # A disabled endpoint has no business keeping a secret on disk.
             object.__setattr__(self, "key", "")
@@ -213,7 +213,8 @@ class EndpointEncryption(BaseModel):
                 "encryption off for this endpoint."
             )
 
-        if not self.key:
+        allow_missing_key = (info.context or {}).get("allow_missing_encryption_key", False)
+        if not self.key and not allow_missing_key:
             raise ValueError(
                 "An encryption key is required when encryption is on."
             )
@@ -223,6 +224,11 @@ class EndpointEncryption(BaseModel):
                 "Choose at least one direction to encrypt: the request, the "
                 "response, or both."
             )
+
+        # Only YAML draft validation opts in. Saving, loading and executing
+        # endpoints still require a real key, and all other rules still apply.
+        if not self.key and allow_missing_key:
+            return self
 
         try:
             endpoint_crypto.validate_secret(self.key, self.key_encoding)
@@ -308,6 +314,20 @@ class UserEndpoint(BaseModel):
         if not value:
             raise ValueError("value cannot be empty")
 
+        return value
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str) -> str:
+        # A numeric authority port is allowed; a URI scheme is not. This
+        # covers non-HTTP schemes (including mailto:) as well as // URLs.
+        if value.startswith("//") or re.match(
+            r"^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d+(?:[/?#]|$))", value,
+        ):
+            raise ValueError(
+                "hostname must not start with a scheme or //; remove the "
+                "prefix and select http or https in host_scheme."
+            )
         return value
 
     @field_validator("max_text_length", mode="before")
@@ -550,12 +570,6 @@ class UserEndpoint(BaseModel):
 
         scheme = self.host_scheme
 
-        if "://" in raw:
-            pasted_scheme, raw = raw.split("://", 1)
-
-            if pasted_scheme.lower() in {"http", "https"}:
-                scheme = pasted_scheme.lower()
-
         if self.port is None or re.search(r":\d+(?:/|$)", raw):
             return f"{scheme}://{raw}"
 
@@ -646,6 +660,13 @@ class UserEndpointStore:
 
                 for item in raw_endpoints:
                     try:
+                        # Older builds let a stored URL prefix override the
+                        # selected scheme. Migrate only here, preserving the
+                        # effective target, ID, activation and encryption key.
+                        if isinstance(item, dict) and isinstance(item.get("hostname"), str):
+                            match = re.match(r"^(https?)://(.+)$", item["hostname"].strip(), re.I)
+                            if match:
+                                item = {**item, "host_scheme": match[1].lower(), "hostname": match[2]}
                         self._endpoints.append(UserEndpoint.model_validate(item))
                     except ValidationError as exc:
                         label = (
@@ -704,6 +725,15 @@ class UserEndpointStore:
     def all(self) -> list[UserEndpoint]:
         with self._lock:
             return copy.deepcopy(self._endpoints)
+
+    def name_in_use(self, name: str, *, replacing: str | None = None) -> bool:
+        """Names are global, case-insensitive labels; an edit excludes only itself."""
+        normalized = name.strip().casefold()
+        with self._lock:
+            return any(
+                endpoint.id != replacing and endpoint.name.casefold() == normalized
+                for endpoint in self._endpoints
+            )
 
     def get(self, endpoint_id: str) -> UserEndpoint | None:
         endpoint_id = (endpoint_id or "").strip()
@@ -790,6 +820,14 @@ class UserEndpointStore:
     # Writes
     # ------------------------------------------------------------------
 
+    def _check_unique_name(self, name: str, *, replacing: str | None = None) -> None:
+        # Called under the write lock, before any store or activation changes.
+        # Legacy duplicate names stay loadable but must be resolved on edits.
+        if self.name_in_use(name, replacing=replacing):
+            raise ValueError(
+                "An endpoint with this name already exists. Choose a different name before saving."
+            )
+
     def create(self, payload: dict[str, Any]) -> UserEndpoint:
         endpoint = UserEndpoint.model_validate(payload)
 
@@ -799,6 +837,7 @@ class UserEndpointStore:
                     f"Endpoint ID already exists: {endpoint.id}"
                 )
 
+            self._check_unique_name(endpoint.name)
             self._check_language_limits(endpoint.languages)
 
             self._endpoints.append(endpoint)
@@ -830,6 +869,7 @@ class UserEndpointStore:
 
             endpoint = UserEndpoint.model_validate(payload)
 
+            self._check_unique_name(endpoint.name, replacing=endpoint_id)
             self._check_language_limits(
                 endpoint.languages,
                 replacing=endpoint_id,

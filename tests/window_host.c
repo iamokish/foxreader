@@ -28,7 +28,7 @@ static void record(const char *name, const char *value)
 static void stop_requested(void)
 {
     record("stop-requested", "stop");
-    fox_window_finish(0);
+    if (!getenv("FOX_TEST_DEFER_FINISH")) fox_window_finish(0);
 }
 
 static void browser_requested(const char *url)
@@ -42,7 +42,6 @@ static void log_message(const char *message)
     record("window.log", message);
 }
 
-#if defined(_WIN32) || defined(__linux__)
 static int command_pending(const char *name)
 {
     FILE *file = fopen(name, "rb");
@@ -51,7 +50,19 @@ static int command_pending(const char *name)
     remove(name);
     return 1;
 }
-#endif
+
+#include "close_confirmation.h"
+
+static void lifecycle_tick(void)
+{
+    if (command_pending("ready-owned")) fox_window_ready(getenv("FOX_TEST_URL"), 1);
+    if (command_pending("ready-attached")) fox_window_ready(getenv("FOX_TEST_URL"), 0);
+    if (command_pending("finish")) fox_window_finish(0);
+    if (command_pending("failure")) {
+        fox_window_status("Fixture backend failed.");
+        fox_window_finish(1);
+    }
+}
 
 #ifdef _WIN32
 static BOOL CALLBACK close_window(HWND hwnd, LPARAM unused)
@@ -71,7 +82,9 @@ static BOOL CALLBACK close_window(HWND hwnd, LPARAM unused)
 static void CALLBACK control_tick(HWND hwnd, UINT message, UINT_PTR timer, DWORD time)
 {
     (void)hwnd; (void)message; (void)timer; (void)time;
+    lifecycle_tick();
     if (command_pending("close-view")) EnumWindows(close_window, 0);
+    confirmation_tick();
 }
 #endif
 
@@ -111,6 +124,8 @@ static gboolean control_tick(gpointer unused)
     int inspect = command_pending("inspect-controls");
     GList *windows, *entry;
     (void)unused;
+    lifecycle_tick();
+    confirmation_tick();
     if (!close && !crash && !reopen && !quit && !inspect) return G_SOURCE_CONTINUE;
     windows = gtk_window_list_toplevels();
     for (entry = windows; entry; entry = entry->next) {
@@ -140,11 +155,22 @@ static gboolean control_tick(gpointer unused)
 }
 #endif
 
+#ifdef __APPLE__
+static void control_tick(void)
+{
+    lifecycle_tick();
+    if (command_pending("close-view")) [fixture_main_window() performClose:nil];
+    if (command_pending("quit-application")) [NSApp terminate:nil];
+    confirmation_tick();
+}
+#endif
+
 static int run_host(void)
 {
     char root[4096];
     const char *url = getenv("FOX_TEST_URL");
     const char *owner = getenv("FOX_TEST_OWNS_BACKEND");
+    const char *browser = getenv("FOX_TEST_BROWSER_MODE");
     int result;
 #ifdef _WIN32
     wchar_t wide_root[4096];
@@ -155,11 +181,14 @@ static int run_host(void)
 #else
 #ifdef __linux__
     guint timer;
+#elif defined(__APPLE__)
+    NSTimer *timer;
 #endif
     if (!getcwd(root, sizeof root)) return 2;
 #endif
     if (!url) return 2;
-    if (!fox_window_create(root, stop_requested, browser_requested, log_message, 0)) {
+    if (!fox_window_create(root, stop_requested, browser_requested, log_message,
+                           browser && strcmp(browser, "1") == 0)) {
         record("unavailable", "No graphical native viewer is available");
         return 77;
     }
@@ -167,13 +196,22 @@ static int run_host(void)
     timer = SetTimer(NULL, 0, 20, control_tick);
 #elif defined(__linux__)
     timer = g_timeout_add(20, control_tick, NULL);
+#elif defined(__APPLE__)
+    timer = [NSTimer timerWithTimeInterval:0.02 repeats:YES block:^(NSTimer *tick) {
+        (void)tick;
+        control_tick();
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 #endif
-    fox_window_ready(url, !owner || strcmp(owner, "0") != 0);
+    record("created", "created");
+    if (!getenv("FOX_TEST_DEFER_READY")) fox_window_ready(url, !owner || strcmp(owner, "0") != 0);
     result = fox_window_run();
 #ifdef _WIN32
     if (timer) KillTimer(NULL, timer);
 #elif defined(__linux__)
     if (timer) g_source_remove(timer);
+#elif defined(__APPLE__)
+    [timer invalidate];
 #endif
     fox_window_destroy();
     record("window-exited", "exited");

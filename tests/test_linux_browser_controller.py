@@ -13,6 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_window_recovery import (
+    accept_close,
+    assert_confirmation,
+    confirmation_snapshot,
+    host_command,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
@@ -115,6 +122,7 @@ def running_controller(binaries, tmp_path, *, browser_mode=False, native="missin
         finally:
             if process.poll() is None:
                 (root / "close-view").touch()
+                (root / "confirm-yes").touch()
                 (root / "finish").touch()
                 try:
                     process.wait(timeout=5)
@@ -158,7 +166,7 @@ def test_browser_fallback_is_visible_and_can_reopen_and_quit(controller_binaries
         assert lines(root, "browser-open") == [URL]
         (root / "open-reader").touch()
         wait_for(lambda: lines(root, "browser-open") == [URL, URL])
-        (root / "quit-view").touch()
+        accept_close(root, process, command="quit-view")
         stopping = snapshot(root, process, "fox-browser-state=Stopping")
         assert "fox-browser-open-sensitive=0" in stopping
         assert lines(root, "stop-requested") == ["stop"]
@@ -178,7 +186,7 @@ def test_attached_controller_explains_that_closing_leaves_original_running(contr
         view = snapshot(root, process, "fox-browser-state=Running")
         assert "fox-browser-close=Close This Window" in view
         assert "running" in view.lower() and "original" in view.lower()
-        (root / "close-view").touch()
+        accept_close(root, process)
         snapshot(root, process, "fox-browser-state=Closing")
         assert lines(root, "stop-requested") == ["stop"]
         (root / "finish").touch()
@@ -187,7 +195,7 @@ def test_attached_controller_explains_that_closing_leaves_original_running(contr
 
 def test_close_during_startup_never_opens_a_late_browser(controller_binaries, tmp_path):
     with running_controller(controller_binaries, tmp_path) as (root, process):
-        (root / "close-view").touch()
+        accept_close(root, process)
         snapshot(root, process, "fox-browser-state=Closing")
         assert lines(root, "stop-requested") == ["stop"]
         (root / "ready-owned").touch()
@@ -205,9 +213,75 @@ def test_backend_error_stays_visible_until_dismissed(controller_binaries, tmp_pa
         assert "fox-browser-open-sensitive=0" in view
         assert "fox-browser-close=Close" in view
         assert not lines(root, "stop-requested")
+        confirmation_snapshot(root, process, count=0)
         (root / "ready-owned").touch()
         snapshot(root, process, "fox-browser-state=Error")
         assert not lines(root, "browser-open")
         (root / "quit-view").touch()
         assert process.wait(timeout=5) == 1
+        assert lines(root, "window-exited") == ["exited"]
+        assert not lines(root, "stop-requested")
+
+
+@pytest.mark.parametrize("state", ["startup", "owned", "attached"])
+@pytest.mark.parametrize("response", ["no", "default", "escape", "dismiss"])
+def test_controller_close_confirmation_can_be_cancelled(controller_binaries, tmp_path, state, response):
+    with running_controller(controller_binaries, tmp_path) as (root, process):
+        if state != "startup":
+            host_command(root, process, f"ready-{state}")
+        expected_state = "Starting" if state == "startup" else "Running"
+        before = snapshot(root, process, f"fox-browser-state={expected_state}")
+        host_command(root, process, "quit-view")
+        original = assert_confirmation(root, process)
+        for command in ("close-view", "quit-view", "close-view"):
+            host_command(root, process, command)
+            assert assert_confirmation(root, process)["id"] == original["id"]
+        host_command(root, process, f"confirm-{response}")
+        confirmation_snapshot(root, process, count=0)
+        assert snapshot(root, process, f"fox-browser-state={expected_state}") == before
+        assert not lines(root, "stop-requested")
+        if state != "startup":
+            host_command(root, process, "open-reader")
+            wait_for(lambda: lines(root, "browser-open") == [URL, URL])
+        accept_close(root, process)
+        stopping = "Stopping" if state == "owned" else "Closing"
+        snapshot(root, process, f"fox-browser-state={stopping}")
+        assert lines(root, "stop-requested") == ["stop"]
+        host_command(root, process, "close-view")
+        confirmation_snapshot(root, process, count=0)
+        assert lines(root, "stop-requested") == ["stop"]
+        (root / "finish").touch()
+        assert process.wait(timeout=5) == 0
+
+
+@pytest.mark.parametrize("state", ["owned", "attached"])
+def test_readiness_during_confirmation_keeps_same_prompt_and_can_be_declined(controller_binaries, tmp_path, state):
+    with running_controller(controller_binaries, tmp_path) as (root, process):
+        host_command(root, process, "close-view")
+        original = assert_confirmation(root, process)
+        host_command(root, process, f"ready-{state}")
+        snapshot(root, process, "fox-browser-state=Running")
+        assert assert_confirmation(root, process)["id"] == original["id"]
+        host_command(root, process, "confirm-default")
+        confirmation_snapshot(root, process, count=0)
+        assert not lines(root, "stop-requested")
+        wait_for(lambda: lines(root, "browser-open") == [URL])
+        accept_close(root, process)
+        wait_for(lambda: lines(root, "stop-requested") == ["stop"])
+        (root / "finish").touch()
+        assert process.wait(timeout=5) == 0
+
+
+@pytest.mark.parametrize("finish", ["finish", "failure"])
+def test_controller_finish_dismisses_pending_confirmation(controller_binaries, tmp_path, finish):
+    with running_controller(controller_binaries, tmp_path) as (root, process):
+        host_command(root, process, "close-view")
+        assert_confirmation(root, process)
+        (root / finish).touch()
+        if finish == "failure":
+            snapshot(root, process, "fox-browser-state=Error")
+            confirmation_snapshot(root, process, count=0)
+            (root / "close-view").touch()
+        assert process.wait(timeout=5) == (1 if finish == "failure" else 0)
+        assert not lines(root, "stop-requested")
         assert lines(root, "window-exited") == ["exited"]

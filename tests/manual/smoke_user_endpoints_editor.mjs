@@ -110,6 +110,7 @@ class BroadcastChannel {
 const sandbox = {
   document,
   BroadcastChannel,
+  addEventListener() {},
   console,
   crypto: globalThis.crypto,
   AbortController,

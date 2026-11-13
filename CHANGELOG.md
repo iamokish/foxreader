@@ -6,6 +6,35 @@ in a tagged version.
 
 ## [Unreleased]
 
+### Added
+
+- Native Yes/No close confirmation on Windows, Linux, and macOS. The dialog
+  follows the system theme, stays above its parent window, and defaults to No.
+- Backend health monitoring on setup, settings, and custom-endpoint pages,
+  with themed Retry/Refresh notices above open dialogs. Restart recovery
+  requires an explicit refresh, preserving unsaved forms until then.
+- YAML copy/paste import and export for one custom endpoint at a time, with
+  validation and correction suggestions. Imports open an editable draft before
+  saving; shared encryption keys are excluded and must be entered separately.
+- String roots in the custom-endpoint schema editor for bare text requests.
+
+### Changed
+
+- Custom-endpoint names must be unique across all endpoints and languages,
+  ignoring case and surrounding whitespace. Existing duplicates remain
+  available, but conflicting imports and edits require a new name before saving.
+- Expanded the custom-endpoint guide with YAML sharing, validation rules,
+  encryption-key handling, and management API examples.
+
+### Fixed
+
+- Custom-endpoint hostnames reject protocol prefixes and use the selected
+  Scheme. Existing saved HTTP(S) URLs migrate while preserving their effective
+  address, endpoint ID, activation, and encryption key.
+- Health checks time out stalled requests, avoid overlapping polls, and keep
+  restart notices visible until refresh. Escape and Tab no longer affect
+  background dialogs while a health notice is open.
+
 ## [0.3.0]
 
 ### Added
@@ -103,7 +132,7 @@ in a tagged version.
 - Per-entry typesetting, image cleaning, live previews, and export.
 - Character rosters, custom fonts, dark/light themes, and standalone builds.
 
-[Unreleased]: https://github.com/iamokish/GrihaLekha/compare/0.3.0...master
+[Unreleased]: https://github.com/iamokish/foxreader/compare/0.3.0...master
 [0.3.0]: https://github.com/iamokish/foxreader/compare/0.2.2...0.3.0
 [0.2.2]: https://github.com/iamokish/foxreader/compare/0.2.1...0.2.2
 [0.2.1]: https://github.com/iamokish/foxreader/compare/0.2.0...0.2.1

@@ -126,7 +126,8 @@ print("\n[2] DeepL-style JSON-RPC POST with alternatives")
 deepl = UserEndpoint.model_validate({
     "id": "deepl-clone",
     "name": "DeepL",
-    "hostname": "https://oneshot-free.www.deepl.com/v1/translate",
+    "hostname": "oneshot-free.www.deepl.com/v1/translate",
+    "host_scheme": "https",
     "method": "POST",
     "languages": ["japanese"],
     "language_codes": {"japanese": "JA"},
@@ -214,7 +215,7 @@ prepared = prepare_request(
 
 equals("json content type is defaulted", prepared["headers"]["Content-Type"], "application/json")
 equals("header placeholder expands", prepared["headers"]["X-Src"], "JA")
-equals("pasted scheme is honoured", prepared["url"], "https://oneshot-free.www.deepl.com/v1/translate")
+equals("selected scheme is honoured", prepared["url"], "https://oneshot-free.www.deepl.com/v1/translate")
 
 body = json.loads(prepared["body"])
 equals("nested text node", body["params"]["texts"][0]["text"], "こんにちは")

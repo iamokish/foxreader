@@ -38,7 +38,7 @@ struct Window {
     void (*log)(const char *) = nullptr;
     FoxWindowRecovery recovery{};
     bool browser_mode = false, fallback = false, runtime_missing = false;
-    bool browser_opened = false, stopping = false, finished = false;
+    bool browser_opened = false, stopping = false, finished = false, owns_backend = false;
     bool page_visible = false, navigated = false, script_ready = false, fullscreen = false, dark = true;
     bool com_initialized = false;
     int exit_code = 0, spinner = 0;
@@ -52,12 +52,15 @@ struct Window {
     HFONT title_font = nullptr, body_font = nullptr;
     HICON icon = nullptr;
     HWND install_button = nullptr;
+    HWND close_dialog = nullptr;
+    HBRUSH close_background = nullptr;
     ComPtr<ICoreWebView2Environment> environment;
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
     std::mutex pending_mutex;
     std::string pending_message, pending_url;
     bool has_message = false, has_url = false, has_finish = false;
+    bool pending_owner = false;
     int pending_exit_code = 0;
 };
 
@@ -165,21 +168,39 @@ bool fullscreen_key(Window &window, UINT key, bool repeat)
     return false;
 }
 
+void theme_titlebar(HWND hwnd, bool is_dark)
+{
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (dwm) {
+        using SetAttribute = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
+        auto set_attribute = reinterpret_cast<SetAttribute>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
+        BOOL dark = is_dark;
+        if (set_attribute && FAILED(set_attribute(hwnd, 20, &dark, sizeof(dark))))
+            set_attribute(hwnd, 19, &dark, sizeof(dark));
+        FreeLibrary(dwm);
+    }
+}
+
+void theme_close_dialog(Window &window)
+{
+    if (!window.close_dialog) return;
+    theme_titlebar(window.close_dialog, window.dark);
+    if (window.close_background) DeleteObject(window.close_background);
+    window.close_background = CreateSolidBrush(window.dark ? RGB(24, 24, 24) : GetSysColor(COLOR_3DFACE));
+    RedrawWindow(window.close_dialog, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
 void apply_theme(Window &window)
 {
     DWORD light = 0, size = sizeof(light);
     window.dark = RegGetValueW(HKEY_CURRENT_USER,
         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
         L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size) != ERROR_SUCCESS || !light;
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-    if (dwm) {
-        using SetAttribute = HRESULT(WINAPI *)(HWND, DWORD, LPCVOID, DWORD);
-        auto set_attribute = reinterpret_cast<SetAttribute>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
-        BOOL dark = window.dark;
-        if (set_attribute && FAILED(set_attribute(window.hwnd.load(), 20, &dark, sizeof(dark))))
-            set_attribute(window.hwnd.load(), 19, &dark, sizeof(dark));
-        FreeLibrary(dwm);
-    }
+    HIGHCONTRASTW contrast{sizeof(HIGHCONTRASTW)};
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+        (contrast.dwFlags & HCF_HIGHCONTRASTON)) window.dark = false;
+    theme_titlebar(window.hwnd.load(), window.dark);
+    theme_close_dialog(window);
     if (window.controller) {
         ComPtr<ICoreWebView2Controller2> controller2;
         if (SUCCEEDED(window.controller.As(&controller2))) {
@@ -344,7 +365,8 @@ void configure_browser(const std::shared_ptr<Window> &window)
             KillTimer(state->hwnd.load(), kWatchdog);
             state->page_visible = true;
             state->controller->put_IsVisible(TRUE);
-            state->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+            if (!state->close_dialog)
+                state->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
             KillTimer(state->hwnd.load(), kSpinner);
             return S_OK;
         }).Get(), &token);
@@ -469,6 +491,165 @@ void stop_view(Window &window)
     window.environment.Reset();
 }
 
+void dismiss_close_dialog(Window &window, bool restore_focus = false)
+{
+    HWND dialog = window.close_dialog;
+    if (!dialog) return;
+    window.close_dialog = nullptr;
+    DestroyWindow(dialog);
+    if (window.close_background) DeleteObject(window.close_background);
+    window.close_background = nullptr;
+    if (HWND hwnd = window.hwnd.load()) {
+        EnableWindow(hwnd, TRUE);
+        if (restore_focus) {
+            SetForegroundWindow(hwnd);
+            SetFocus(hwnd);
+        }
+    }
+}
+
+void begin_close(Window &window)
+{
+    if (window.stopping || window.finished) return;
+    window.stopping = true;
+    dismiss_close_dialog(window);
+    stop_view(window);
+    window.message = L"Closing Fox Reader…";
+    window.detail = L"Waiting for this launch to finish safely.";
+    HWND hwnd = window.hwnd.load();
+    SetTimer(hwnd, kSpinner, 500, nullptr);
+    if (window.install_button) ShowWindow(window.install_button, SW_HIDE);
+    InvalidateRect(hwnd, nullptr, TRUE);
+    if (window.request_stop) window.request_stop();
+}
+
+void update_close_dialog(Window &window)
+{
+    if (!window.close_dialog) return;
+    const wchar_t *detail = window.url.empty()
+        ? L"Are you sure you want to close Fox Reader?\n\nThis will cancel this launch."
+        : window.owns_backend
+            ? L"Are you sure you want to close Fox Reader?\n\nThis will stop this Fox Reader session."
+            : L"Are you sure you want to close this window?\n\nThe original Fox Reader session will keep running.";
+    SetDlgItemTextW(window.close_dialog, 100, detail);
+}
+
+INT_PTR CALLBACK close_dialog_proc(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    auto window = reinterpret_cast<Window *>(GetWindowLongPtrW(dialog, DWLP_USER));
+    if (message == WM_INITDIALOG) {
+        window = reinterpret_cast<Window *>(lparam);
+        SetWindowLongPtrW(dialog, DWLP_USER, lparam);
+        window->close_dialog = dialog;
+        SetWindowTextW(dialog, L"Close Fox Reader?");
+        auto control = [dialog](const wchar_t *kind, const wchar_t *text, DWORD style,
+                                int id, RECT bounds) {
+            MapDialogRect(dialog, &bounds);
+            HWND child = CreateWindowExW(0, kind, text, WS_CHILD | WS_VISIBLE | style,
+                bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+                dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+            SendMessageW(child, WM_SETFONT, SendMessageW(dialog, WM_GETFONT, 0, 0), TRUE);
+            return child;
+        };
+        control(L"STATIC", L"", SS_LEFT, 100, {12, 12, 288, 72});
+        update_close_dialog(*window);
+        control(L"BUTTON", L"&Yes", WS_TABSTOP | BS_OWNERDRAW, IDYES, {160, 84, 220, 106});
+        HWND no = control(L"BUTTON", L"&No", WS_TABSTOP | BS_OWNERDRAW, IDNO, {228, 84, 288, 106});
+        SendMessageW(dialog, DM_SETDEFID, IDNO, 0);
+        theme_close_dialog(*window);
+        RECT parent{}, bounds{};
+        GetWindowRect(window->hwnd.load(), &parent);
+        GetWindowRect(dialog, &bounds);
+        int width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
+        int x = parent.left + (parent.right - parent.left - width) / 2;
+        int y = parent.top + (parent.bottom - parent.top - height) / 2;
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (GetMonitorInfoW(MonitorFromWindow(window->hwnd.load(), MONITOR_DEFAULTTONEAREST), &monitor)) {
+            x = std::max(monitor.rcWork.left, std::min(static_cast<LONG>(x), monitor.rcWork.right - width));
+            y = std::max(monitor.rcWork.top, std::min(static_cast<LONG>(y), monitor.rcWork.bottom - height));
+        }
+        SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        EnableWindow(window->hwnd.load(), FALSE);
+        ShowWindow(dialog, SW_SHOW);
+        SetFocus(no);
+        return FALSE;
+    }
+    if (!window) return FALSE;
+    switch (message) {
+    case WM_COMMAND:
+        if (LOWORD(wparam) == IDYES) { begin_close(*window); return TRUE; }
+        if (LOWORD(wparam) == IDNO || LOWORD(wparam) == IDCANCEL) {
+            dismiss_close_dialog(*window, true);
+            return TRUE;
+        }
+        break;
+    case WM_CLOSE:
+        dismiss_close_dialog(*window, true);
+        return TRUE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+        SetTextColor(reinterpret_cast<HDC>(wparam), window->dark ? RGB(238, 238, 238) : GetSysColor(COLOR_WINDOWTEXT));
+        SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
+        return reinterpret_cast<INT_PTR>(window->close_background);
+    case WM_DRAWITEM: {
+        auto item = reinterpret_cast<DRAWITEMSTRUCT *>(lparam);
+        if (item->CtlType != ODT_BUTTON) break;
+        bool pressed = (item->itemState & ODS_SELECTED) != 0;
+        bool focused = (item->itemState & ODS_FOCUS) != 0;
+        COLORREF background = window->dark ? (pressed ? RGB(72, 72, 72) : RGB(48, 48, 48)) :
+            GetSysColor(pressed ? COLOR_3DSHADOW : COLOR_3DFACE);
+        HBRUSH fill = CreateSolidBrush(background);
+        FillRect(item->hDC, &item->rcItem, fill);
+        DeleteObject(fill);
+        HBRUSH border = CreateSolidBrush(window->dark ? (focused ? RGB(238, 238, 238) : RGB(128, 128, 128)) :
+            GetSysColor(focused ? COLOR_WINDOWTEXT : COLOR_3DSHADOW));
+        FrameRect(item->hDC, &item->rcItem, border);
+        DeleteObject(border);
+        SetTextColor(item->hDC, window->dark ? RGB(238, 238, 238) : GetSysColor(COLOR_BTNTEXT));
+        SetBkMode(item->hDC, TRANSPARENT);
+        auto previous = SelectObject(item->hDC, reinterpret_cast<HFONT>(SendMessageW(dialog, WM_GETFONT, 0, 0)));
+        wchar_t text[16]{};
+        GetWindowTextW(item->hwndItem, text, 16);
+        RECT bounds = item->rcItem;
+        DrawTextW(item->hDC, text, -1, &bounds, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (focused && !(item->itemState & ODS_NOFOCUSRECT)) {
+            InflateRect(&bounds, -4, -4);
+            DrawFocusRect(item->hDC, &bounds);
+        }
+        SelectObject(item->hDC, previous);
+        return TRUE;
+    }
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+        apply_theme(*window);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void request_close(Window &window)
+{
+    if (window.finished) { DestroyWindow(window.hwnd.load()); return; }
+    if (window.stopping) return;
+    if (window.close_dialog) { SetForegroundWindow(window.close_dialog); return; }
+    // A modeless dialog with a disabled owner keeps the regular event loop alive:
+    // backend completion, startup recovery and OS shutdown can dismiss it safely.
+#pragma pack(push, 2)
+    struct CloseTemplate {
+        DLGTEMPLATE dialog;
+        WORD menu, window_class, title, font_size;
+        wchar_t font[9];
+    };
+#pragma pack(pop)
+    alignas(DWORD) const CloseTemplate layout = {
+        {WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_SETFONT, 0, 0, 0, 0, 300, 118},
+        0, 0, 0, 10, L"Segoe UI"
+    };
+    if (!CreateDialogIndirectParamW(GetModuleHandleW(nullptr), &layout.dialog, window.hwnd.load(),
+                                    close_dialog_proc, reinterpret_cast<LPARAM>(&window)) && window.log)
+        window.log("Could not display the close confirmation; the window remains open.");
+}
+
 void dispatch(Window &window)
 {
     bool finish = false;
@@ -482,6 +663,7 @@ void dispatch(Window &window)
             window.url_utf8 = window.pending_url;
             window.url = wide(window.pending_url.c_str());
             window.origin = url_origin(window.url);
+            window.owns_backend = window.pending_owner;
             window.has_url = false;
         }
         if (window.has_finish) {
@@ -492,6 +674,7 @@ void dispatch(Window &window)
     }
     if (finish) {
         window.finished = true;
+        dismiss_close_dialog(window);
         stop_view(window);
         if (window.exit_code == 0 || window.stopping) {
             DestroyWindow(window.hwnd.load());
@@ -501,7 +684,10 @@ void dispatch(Window &window)
         window.message = L"Fox Reader could not continue";
         if (window.install_button) ShowWindow(window.install_button, SW_HIDE);
         KillTimer(window.hwnd.load(), kSpinner);
-    } else navigate(window);
+    } else {
+        update_close_dialog(window);
+        navigate(window);
+    }
     InvalidateRect(window.hwnd.load(), nullptr, TRUE);
 }
 
@@ -553,21 +739,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     case kDispatch: dispatch(*window); return 0;
     case kFullscreen: set_fullscreen(*window, wparam ? !window->fullscreen : false); return 0;
     case WM_CLOSE:
-        if (window->finished) { DestroyWindow(hwnd); return 0; }
-        if (!window->stopping) {
-            window->stopping = true;
-            stop_view(*window);
-            window->message = L"Closing Fox Reader…";
-            window->detail = L"Saving and releasing models. Please wait.";
-            SetTimer(hwnd, kSpinner, 500, nullptr);
-            if (window->install_button) ShowWindow(window->install_button, SW_HIDE);
-            InvalidateRect(hwnd, nullptr, TRUE);
-            if (window->request_stop) window->request_stop();
-        }
+        request_close(*window);
         return 0;
     case WM_QUERYENDSESSION:
         if (!window->stopping) {
             window->stopping = true;
+            dismiss_close_dialog(*window);
             fox_recovery_stop(&window->recovery);
             KillTimer(hwnd, kWatchdog);
             if (window->request_stop) window->request_stop();
@@ -589,7 +766,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {560, 360};
         return 0;
     case WM_SETFOCUS:
-        if (window->controller && window->page_visible)
+        if (window->close_dialog) SetFocus(window->close_dialog);
+        else if (window->controller && window->page_visible)
             window->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         return 0;
     case WM_KEYDOWN:
@@ -690,10 +868,10 @@ extern "C" void fox_window_status(const char *message)
 
 extern "C" void fox_window_ready(const char *url, int owns_backend)
 {
-    (void)owns_backend;
     if (auto window = std::atomic_load(&active)) {
         { std::lock_guard<std::mutex> guard(window->pending_mutex);
-          window->pending_url = url ? url : ""; window->has_url = true; }
+          window->pending_url = url ? url : ""; window->has_url = true;
+          window->pending_owner = owns_backend != 0; }
         if (HWND hwnd = window->hwnd.load()) PostMessageW(hwnd, kDispatch, 0, 0);
     }
 }
@@ -712,6 +890,19 @@ extern "C" int fox_window_run(void)
     MSG message{};
     int status = 0;
     while ((status = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+        auto window = std::atomic_load(&active);
+        if (window && window->close_dialog) {
+            // Owner-drawn buttons do not report DLGC_UNDEFPUSHBUTTON, so the
+            // dialog manager otherwise invokes No even after Tab selects Yes.
+            HWND dialog = window->close_dialog;
+            if (message.message == WM_KEYDOWN && message.wParam == VK_RETURN &&
+                (message.hwnd == dialog || IsChild(dialog, message.hwnd)) &&
+                GetFocus() == GetDlgItem(dialog, IDYES)) {
+                SendMessageW(dialog, WM_COMMAND, IDYES, 0);
+                continue;
+            }
+            if (IsDialogMessageW(dialog, &message)) continue;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
@@ -723,6 +914,7 @@ extern "C" void fox_window_destroy(void)
     auto window = std::atomic_exchange(&active, std::shared_ptr<Window>{});
     if (!window) return;
     window->stopping = true;
+    dismiss_close_dialog(*window);
     stop_view(*window);
     if (HWND hwnd = window->hwnd.load()) DestroyWindow(hwnd);
     if (window->title_font) DeleteObject(window->title_font);

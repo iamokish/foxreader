@@ -211,6 +211,8 @@ BACKEND = Domain(
         "test_custom_endpoint_context",
         "test_custom_endpoint_failures",
         "test_user_endpoint_keys",
+        "test_user_endpoint_names",
+        "test_endpoint_transfer",
         "test_device_vl_slot",
         "test_folder_workspace",
         "test_image_rendering",

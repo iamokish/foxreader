@@ -75,9 +75,9 @@ def post_window_message(hwnd, message, wparam=0, lparam=0):
         raise ctypes.WinError(ctypes.get_last_error())
 
 
-def window_for(pid):
+def windows_for(pid, class_name, title=None):
     if os.name != "nt":
-        return None
+        return []
     user = ctypes.windll.user32
     found = []
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
@@ -87,12 +87,31 @@ def window_for(pid):
         user.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(process))
         name = ctypes.create_unicode_buffer(128)
         user.GetClassNameW(ctypes.c_void_p(hwnd), name, 128)
-        if process.value == pid and name.value == "FoxReaderWindow":
+        caption = ctypes.create_unicode_buffer(128)
+        user.GetWindowTextW(ctypes.c_void_p(hwnd), caption, 128)
+        if process.value == pid and name.value == class_name and (title is None or caption.value == title):
             found.append(hwnd)
         return True
 
     user.EnumWindows(callback_type(collect), 0)
+    return found
+
+
+def window_for(pid):
+    found = windows_for(pid, "FoxReaderWindow")
     return found[0] if found else None
+
+
+def close_confirmation_for(pid):
+    dialogs = windows_for(pid, "#32770", "Close Fox Reader?")
+    assert len(dialogs) <= 1, "Repeated close requests opened multiple confirmation dialogs"
+    return dialogs[0] if dialogs else None
+
+
+def request_window_close(process):
+    hwnd = wait_for(lambda: window_for(process.pid))
+    post_window_message(hwnd, 0x0010)  # WM_CLOSE
+    return wait_for(lambda: close_confirmation_for(process.pid), description="native close confirmation")
 
 
 def _installation(tmp_path, launcher_variable):
@@ -133,8 +152,8 @@ def no_window_installation(tmp_path):
 
 def stop_launcher(process):
     if os.name == "nt":
-        hwnd = wait_for(lambda: window_for(process.pid))
-        post_window_message(hwnd, 0x0010)  # WM_CLOSE
+        dialog = request_window_close(process)
+        post_window_message(dialog, 0x0111, 6)  # WM_COMMAND, IDYES
     else:
         process.send_signal(signal.SIGTERM)
 
@@ -265,6 +284,47 @@ def test_windows_binary_uses_gui_subsystem(installation):
     header = struct.unpack_from("<I", data, 0x3C)[0]
     assert data[header:header + 4] == b"PE\x00\x00"
     assert struct.unpack_from("<H", data, header + 24 + 68)[0] == 2  # IMAGE_SUBSYSTEM_WINDOWS_GUI
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native close dialog")
+@pytest.mark.parametrize("response", ["no", "default", "escape", "dismiss"])
+def test_declining_native_close_preserves_backend_and_allows_later_shutdown(installation, response):
+    root, launcher, port, env = installation
+    process = subprocess.Popen([str(launcher)], env=env, cwd=root,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(lambda: health(port))
+        wait_for_native_page(root, process)
+        hwnd = wait_for(lambda: window_for(process.pid))
+        dialog = request_window_close(process)
+        user = ctypes.windll.user32
+        user.GetWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        user.GetWindow.restype = ctypes.c_void_p
+        assert user.GetWindow(dialog, 4) == hwnd  # GW_OWNER
+        assert not user.IsWindowEnabled(ctypes.c_void_p(hwnd))
+        for _ in range(3):
+            assert request_window_close(process) == dialog
+        assert process.poll() is None and health(port)
+        assert not (root / "shutdown-ok").exists()
+        message, value = {
+            "no": (0x0111, 7),           # WM_COMMAND, IDNO
+            "default": (0x0100, 0x0D),   # WM_KEYDOWN, Return
+            "escape": (0x0100, 0x1B),    # WM_KEYDOWN, Escape
+            "dismiss": (0x0010, 0),      # dialog's own title-bar close
+        }[response]
+        post_window_message(dialog, message, value)
+        wait_for(lambda: close_confirmation_for(process.pid) is None)
+        assert user.IsWindowEnabled(ctypes.c_void_p(hwnd))
+        assert process.poll() is None and health(port)
+        assert not (root / "shutdown-ok").exists()
+        stop_launcher(process)
+        assert process.wait(timeout=25) == 0
+        assert (root / "shutdown-ok").read_text() == "token accepted"
+        assert not health(port)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 @pytest.mark.parametrize("close_during_startup", [

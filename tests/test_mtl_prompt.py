@@ -222,5 +222,10 @@ def test_http_keeps_context_and_speaker_links_aligned(endpoint):
         })
     assert response.json()["translated"] == "English"
     offset = 0 if endpoint == "ml" else 1
-    assert calls[0][2 + offset] == [["b", "B"]]
-    assert calls[0][4 + offset] == ["opaque-b"]
+    # Custom endpoints normalize later, after resolving their configured schema.
+    # The route must preserve both raw arrays; test_custom_endpoint_context checks
+    # their filtering and alignment in the actual outgoing endpoint request.
+    expected_context = [["b", "B"]] if endpoint == "ml" else [["", "drop"], ["b", "B"]]
+    expected_links = ["opaque-b"] if endpoint == "ml" else ["opaque-a", "opaque-b"]
+    assert calls[0][2 + offset] == expected_context
+    assert calls[0][4 + offset] == expected_links

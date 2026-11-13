@@ -22,7 +22,7 @@ def key_api(tmp_path):
 
 def create_endpoint(api, key, encoding="fernet", endpoint_id="saved"):
     payload = {
-        "id": endpoint_id, "name": "Saved", "hostname": "example.invalid",
+        "id": endpoint_id, "name": endpoint_id[:6].title(), "hostname": "example.invalid",
         "languages": ["japanese"],
         "encryption": {"enabled": bool(key), "key": key, "key_encoding": encoding},
     }
