@@ -164,6 +164,7 @@ def running_host(binary, tmp_path, url, *, owns_backend=True, startup=False, def
 
 
 def host_command(root, process, name):
+    """Wait for a nonterminating command while requiring the host to stay alive."""
     path = root / name
     path.touch()
 
@@ -349,9 +350,11 @@ def test_windows_focused_yes_accepts_return_and_preserves_button_theme(native_ho
         host_command(root, process, "confirm-focus-yes")
         focused = confirmation_snapshot(root, process, count=1)
         assert focused["yes-ownerdraw"] == focused["no-ownerdraw"] == "1"
-        host_command(root, process, "confirm-yes-default")
-        wait_for(lambda: lines(root, "stop-requested") == ["stop"])
+        # Accepting Yes can exit before host_command's next liveness check.
+        (root / "confirm-yes-default").touch()
         assert process.wait(timeout=10) == 0
+        assert lines(root, "stop-requested") == ["stop"]
+        assert lines(root, "window-exited") == ["exited"]
 
 
 @pytest.mark.parametrize("finish", ["finish", "failure"])
