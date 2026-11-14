@@ -1,9 +1,9 @@
 """Character metadata for local translation models and custom endpoints.
 
-The roster lives only in memory on the backend: nothing is written to disk by
-this module. The frontend offers CSV import/export, and the user re-imports the
-file themselves after a restart. Switching the source folder clears the roster
-(the frontend calls :meth:`CharacterStore.clear` when a new folder is loaded).
+The active destination holds ``fox_characters_data.json``. Every roster change
+is saved atomically; loading a folder restores its validated roster and speaker
+ids. Before a folder is loaded, the roster stays in memory. CSV import/export
+remains available for sharing characters between projects.
 
 A character is a plain dict with exactly these keys::
 
@@ -28,9 +28,14 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
+import os
+import stat
+import tempfile
 import threading
 import uuid
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,12 @@ MAX_FIELD_CHARS = 100
 #: How many characters travel with a request at most. The metadata block is
 #: re-tokenized on every call, so an unbounded roster would eat the window.
 MAX_CHARACTERS = 50
+
+#: Versioned destination-side roster, including stable speaker ids.
+CHARACTERS_FILENAME = "fox_characters_data.json"
+# Includes JSON escaping overhead at the row, field and id limits below.
+MAX_ROSTER_BYTES = 256 * 1024
+MAX_META_ID_CHARS = 128
 
 
 # ---------------------------------------------------------------------------
@@ -337,15 +348,113 @@ def to_csv(characters: list[dict]) -> str:
 
 
 class CharacterStore:
-    """The in-memory character roster.
+    """Thread-safe character roster with optional destination persistence.
 
-    Thread-safe (RLock). Nothing here touches disk: import/export move CSV
-    text through the caller, and a restart simply starts empty again.
+    Folder loads and mutations share one lock. Changes reach memory only after
+    their atomic save succeeds, so failed writes leave the previous roster intact.
     """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._characters: dict[str, dict] = {}
+        self._path: Path | None = None
+
+    @staticmethod
+    def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+        result: dict = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _validate_saved(data: object) -> dict[str, dict]:
+        if (not isinstance(data, dict) or set(data) != {"version", "characters"}
+                or type(data["version"]) is not int or data["version"] != 1):
+            raise ValueError("unsupported character document")
+        rows = data["characters"]
+        if not isinstance(rows, list) or len(rows) > MAX_CHARACTERS:
+            raise ValueError("invalid character list")
+        characters: dict[str, dict] = {}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or set(row) != CHARACTER_KEYS:
+                raise ValueError(f"invalid character row {index}")
+            mid = row["meta_id"]
+            if (not isinstance(mid, str) or not mid or mid != mid.strip()
+                    or len(mid) > MAX_META_ID_CHARS or any(ord(c) < 32 for c in mid)
+                    or mid in characters):
+                raise ValueError(f"invalid or duplicate character id at row {index}")
+            if any(row[field] is not None and not isinstance(row[field], str) for field in CSV_FIELDS):
+                raise ValueError(f"invalid character field at row {index}")
+            for value in row.values():
+                if isinstance(value, str):
+                    value.encode("utf-8")  # JSON escapes can hide unpaired surrogates.
+            cleaned = clean_character_dict(row, index=index)
+            if cleaned != row or not any(row[field] for field in CSV_FIELDS):
+                raise ValueError(f"invalid character values at row {index}")
+            characters[mid] = cleaned
+        return characters
+
+    def load_destination(self, directory: str | Path | None) -> list[dict]:
+        """Bind to a destination and restore its roster without writing a file.
+
+        Missing, malformed, oversized and non-regular files are ignored as a
+        whole. The next edit can replace an invalid file. ``None`` detaches the
+        store and clears memory without altering the previous destination.
+        """
+        path = Path(directory).absolute() / CHARACTERS_FILENAME if directory else None
+        with self._lock:
+            characters: dict[str, dict] = {}
+            if path is not None:
+                try:
+                    metadata = path.lstat()
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_ROSTER_BYTES:
+                        raise ValueError("character file is not a bounded regular file")
+                    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+                    with os.fdopen(os.open(path, flags), "rb") as stream:
+                        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                            raise ValueError("character file is not regular")
+                        raw = stream.read(MAX_ROSTER_BYTES + 1)
+                    if len(raw) > MAX_ROSTER_BYTES:
+                        raise ValueError("character file is too large")
+                    data = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=self._unique_object)
+                    characters = self._validate_saved(data)
+                except FileNotFoundError:
+                    pass
+                except (OSError, ValueError, UnicodeError, RecursionError) as exc:
+                    logger.warning("Ignoring character file %s: %s", path, exc)
+            self._path = path
+            self._characters = characters
+            return [dict(char) for char in characters.values()]
+
+    def _commit_locked(self, characters: dict[str, dict]) -> None:
+        if self._path is not None:
+            path = self._path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary: str | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=path.parent,
+                    prefix=".fox_characters_data-", suffix=".tmp", delete=False,
+                ) as stream:
+                    temporary = stream.name
+                    json.dump({"version": 1, "characters": list(characters.values())},
+                              stream, ensure_ascii=False, indent=2)
+                    stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, path)
+            finally:
+                if temporary is not None:
+                    try:
+                        os.unlink(temporary)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        logger.warning("Could not remove temporary character file %s", temporary)
+        self._characters = characters
 
     def list(self) -> list[dict]:
         with self._lock:
@@ -359,8 +468,8 @@ class CharacterStore:
             found = self._characters.get(mid)
             return dict(found) if found is not None else None
 
-    def _insert_locked(self, fields: dict) -> dict:
-        existing = set(self._characters)
+    def _insert_locked(self, fields: dict, characters: dict[str, dict]) -> dict:
+        existing = set(characters)
         mid = generate_meta_id(existing)
         char = {
             "meta_id": mid,
@@ -370,7 +479,7 @@ class CharacterStore:
             "alias_en": fields.get("alias_en"),
             "alias_ja": fields.get("alias_ja"),
         }
-        self._characters[mid] = char
+        characters[mid] = char
         return dict(char)
 
     def add(self, raw: object) -> dict:
@@ -389,7 +498,10 @@ class CharacterStore:
         with self._lock:
             if len(self._characters) >= MAX_CHARACTERS:
                 raise ValueError(f"too many characters (max {MAX_CHARACTERS})")
-            return self._insert_locked(cleaned)
+            characters = dict(self._characters)
+            created = self._insert_locked(cleaned, characters)
+            self._commit_locked(characters)
+            return created
 
     def update(self, meta_id: object, raw: object) -> dict:
         mid = normalise_meta_id(meta_id)
@@ -414,9 +526,11 @@ class CharacterStore:
                 updated["alias_en"] = _clean_field(raw.get("alias_en"))
             if "alias_ja" in raw:
                 updated["alias_ja"] = _clean_field(raw.get("alias_ja"))
-            if not any((updated.get("name_en"), updated.get("name_ja"), updated.get("gender"), updated.get("alias_en"), updated.get("alias_ja"))):
+            if not any(updated[field] for field in CSV_FIELDS):
                 raise ValueError("character needs at least one of: name_en, name_ja, gender, alias_en, alias_ja")
-            self._characters[mid] = updated
+            characters = dict(self._characters)
+            characters[mid] = updated
+            self._commit_locked(characters)
             return dict(updated)
 
     def delete(self, meta_id: object) -> bool:
@@ -424,13 +538,18 @@ class CharacterStore:
         if mid is None:
             return False
         with self._lock:
-            return self._characters.pop(mid, None) is not None
+            if mid not in self._characters:
+                return False
+            characters = dict(self._characters)
+            del characters[mid]
+            self._commit_locked(characters)
+            return True
 
     def clear(self) -> int:
-        """Drop the whole roster (folder change). Returns rows removed."""
+        """Delete and save the whole roster. Returns rows removed."""
         with self._lock:
             removed = len(self._characters)
-            self._characters.clear()
+            self._commit_locked({})
             return removed
 
     def replace_all(self, raws: object) -> list[dict]:
@@ -460,8 +579,9 @@ class CharacterStore:
                 logger.warning("Import has more than %d characters; ignoring the rest", MAX_CHARACTERS)
                 break
         with self._lock:
-            self._characters.clear()
-            out = [self._insert_locked(fields) for fields in cleaned]
+            characters: dict[str, dict] = {}
+            out = [self._insert_locked(fields, characters) for fields in cleaned]
+            self._commit_locked(characters)
             return out
 
     def import_csv(self, text: str) -> list[dict]:
@@ -474,6 +594,6 @@ class CharacterStore:
         return to_csv(rows)
 
 
-#: The process-wide roster. In-memory only: a restart starts empty and the
-#: user re-imports their CSV.
+#: Unbound fallback for standalone character API users. The running app keeps
+#: its destination-bound roster on SessionService.
 store = CharacterStore()

@@ -45,6 +45,14 @@ in a tagged version.
 
 ### Fixed
 
+- Gemma and Qwen translations no longer acquire surrounding double quotes from
+  character/context reference formatting; source quotations are preserved.
+- Character rosters now survive shutdown in the destination's
+  `fox_characters_data.json`, saving each change and restoring validated data
+  with stable speaker IDs on folder load. Invalid files can be replaced on edit;
+  failed saves retain the old roster, and stale-window edits are rejected.
+- Updater recovery, cleanup, and backend shutdown timeouts now measure elapsed
+  time, so delayed polling on macOS or busy hosts cannot extend their deadlines.
 - Settings continues reporting update preparation and handoff, disables
   cancellation during replacement, and suppresses offline warnings when the
   backend intentionally closes for installation. Failed handoffs restore health

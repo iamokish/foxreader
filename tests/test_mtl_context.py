@@ -65,15 +65,22 @@ def test_render_block_is_empty_without_pairs():
 
 def test_render_block_numbers_oldest_first_and_flattens():
     block = render_context_block([["a\nb", "A B"], ["c", "C"]], "japanese")
-    assert '1. Japanese: "a b"' in block
-    assert '2. Japanese: "c"' in block
-    assert block.index('"a b"') < block.index('"c"')
+    assert "1. Japanese: a b" in block
+    assert "2. Japanese: c" in block
+    assert block.index("Japanese: a b") < block.index("Japanese: c")
+    assert '"' not in block
     assert "Do NOT translate" in block
     assert "Translate ONLY the new" in block
 
 
 def test_render_block_uses_original_for_unknown_languages():
-    assert '1. Original: "a"' in render_context_block([["a", "b"]], "klingon")
+    assert "1. Original: a" in render_context_block([["a", "b"]], "klingon")
+
+
+def test_render_block_preserves_quotes_from_the_actual_dialogue():
+    block = render_context_block([["「行け」と言った。", 'He said "Go."']], "japanese")
+    assert "1. Japanese: 「行け」と言った。" in block
+    assert '   English: He said "Go."' in block
 
 
 def test_translation_request_defaults_to_no_context():

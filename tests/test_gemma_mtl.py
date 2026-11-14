@@ -237,6 +237,47 @@ def test_translate_and_repeated_unload(native_loader, cls, directory, filename):
     assert translator.translate("  ") == ""
 
 
+@pytest.mark.parametrize("cls,directory,filename", _VARIANTS)
+@pytest.mark.parametrize("use_context,use_characters", [(False, False), (True, False), (False, True), (True, True)])
+def test_translate_removes_added_quotes_but_preserves_quoted_source(
+    native_loader, cls, directory, filename, use_context, use_characters,
+):
+    translator = cls(native_loader.root, device="cpu")
+    metadata = {
+        "context": [["おはよう。", "Good morning."]] if use_context else None,
+        "character_info": [{"meta_id": "a", "name_en": "Aiko"}] if use_characters else None,
+        "meta_id": "a" if use_characters else None,
+    }
+    try:
+        translator.model.response = {"choices": [{"message": {"content": '"Hello."'}}]}
+        assert translator.translate("こんにちは。", **metadata) == "Hello."
+        assert translator.translate("「こんにちは。」", **metadata) == '"Hello."'
+    finally:
+        translator.unload()
+
+
+@pytest.mark.parametrize("text,source,expected", [
+    ('"Hello."', "こんにちは。", "Hello."),
+    ('  “Hello.”  ', "こんにちは。", "Hello."),
+    ('„Hello.“', "こんにちは。", "Hello."),
+    ('＂Hello.＂', "こんにちは。", "Hello."),
+    ('```text\n"Hello."\n```', "こんにちは。", "Hello."),
+    ('"Line one.\nLine two."', "一行目。\n二行目。", "Line one.\nLine two."),
+    ('"Hello."', None, '"Hello."'),
+    ('"Hello."', "「こんにちは。」", '"Hello."'),
+    ('"Hello."', "『こんにちは。』", '"Hello."'),
+    ('“Hello.”', "“你好。”", '“Hello.”'),
+    ('"Hello."', '"안녕."', '"Hello."'),
+    ('He said "Go."', "行けと言った。", 'He said "Go."'),
+    ('"Hello." "Goodbye."', "こんにちは。さようなら。", '"Hello." "Goodbye."'),
+    ('“Hello.” “Goodbye.”', "こんにちは。さようなら。", '“Hello.” “Goodbye.”'),
+    ('"Hello.', "こんにちは。", '"Hello.'),
+    ('"He said \'Go.\'"', "「行け」と言った。", '"He said \'Go.\'"'),
+])
+def test_cleanup_only_removes_an_unambiguous_added_quote_pair(text, source, expected):
+    assert gemma.clean_translation(text, source=source) == expected
+
+
 def test_quantizations_own_independent_handles_and_locks(native_loader):
     q8 = gemma.GemmaE4BQ8Translator(native_loader.root, device="cpu")
     q6 = gemma.GemmaE4BQ6Translator(native_loader.root, device="cpu")

@@ -504,14 +504,30 @@ def _message_content(response: Any) -> str:
     return ""
 
 
-def clean_translation(text: str) -> str:
-    """Remove only a whole-response markdown fence."""
+_DOUBLE_QUOTE_PAIRS = {('"', '"'), ("“", "”"), ("„", "“"), ("‟", "”"), ("＂", "＂")}
+_SOURCE_QUOTES = frozenset("\"'“”„‟‘’‚‛«»‹›「」『』〝〞〟＂＇")
+
+
+def clean_translation(text: str, *, source: str | None = None) -> str:
+    """Remove response formatting while preserving the source's quotation marks.
+
+    Reference data can make Gemma/Qwen add a double-quoted response wrapper.
+    Only remove one unambiguous pair when the source has no quotation marks;
+    unknown-source callers, quoted dialogue and multiple quote spans stay intact.
+    """
     stripped = (text or "").strip()
 
     match = _WRAPPING_FENCE.match(stripped)
 
     if match:
-        return match.group(1).strip()
+        stripped = match.group(1).strip()
+
+    if source is not None and not _SOURCE_QUOTES.intersection(source) and len(stripped) >= 2:
+        opening, closing = stripped[0], stripped[-1]
+        if (opening, closing) in _DOUBLE_QUOTE_PAIRS:
+            inner = stripped[1:-1]
+            if opening not in inner and closing not in inner:
+                stripped = inner.strip()
 
     return stripped
 
@@ -709,7 +725,7 @@ class _GemmaE4BTranslator:
             ) from exc
 
         return clean_translation(
-            _message_content(response)
+            _message_content(response), source=source,
         )
 
     # ------------------------------------------------------------------

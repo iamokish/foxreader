@@ -1,10 +1,12 @@
 """Unit tests for character metadata: store, CSV, capability, request, prompt.
 
-Memory-only by design: nothing here writes to disk, and the VNTL prompt is
-exercised with a stub tokenizer so no 8.5 GiB GGUF is needed.
+Persistence uses isolated destination folders, and the VNTL prompt is exercised
+with a stub tokenizer so no 8.5 GiB GGUF is needed.
 """
 
+import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -82,8 +84,163 @@ def test_delete_and_clear(fresh_store):
     assert two["meta_id"]  # unused, keeps linters honest about two existing
 
 
+def test_character_changes_survive_restart_with_the_same_speaker_ids(tmp_path):
+    store = CharacterStore()
+    path = tmp_path / chars.CHARACTERS_FILENAME
+    assert store.load_destination(tmp_path) == []
+    assert not path.exists()  # Loading never creates or repairs a file.
+    aiko = store.add({"name_en": "Aiko", "name_ja": "愛子", "gender": "female"})
+    ken = store.add({"name_en": "Ken"})
+    updated = store.update(aiko["meta_id"], {"alias_ja": "お姉ちゃん"})
+    assert CharacterStore().load_destination(tmp_path) == [updated, ken]
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+    assert store.delete(ken["meta_id"])
+    assert CharacterStore().load_destination(tmp_path) == [updated]
+    assert store.clear() == 1
+    assert CharacterStore().load_destination(tmp_path) == []
+    assert json.loads(path.read_text(encoding="utf-8"))["characters"] == []
+
+
+def test_imported_roster_is_saved_once_with_its_generated_ids(tmp_path):
+    store = CharacterStore()
+    store.load_destination(tmp_path)
+    original = store.add({"name_en": "Old"})
+    imported = store.import_csv("name_en,name_ja,gender,alias_en,alias_ja\nAiko,愛子,female,,\nKen,,male,,\n")
+    assert all(row["meta_id"] != original["meta_id"] for row in imported)
+    assert CharacterStore().load_destination(tmp_path) == imported
+
+
+def test_destination_switches_and_detach_do_not_erase_saved_rosters(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    store = CharacterStore()
+    store.load_destination(first)
+    saved = store.add({"name_en": "First"})
+    original_bytes = (first / chars.CHARACTERS_FILENAME).read_bytes()
+    assert store.load_destination(second) == []
+    assert not second.exists()
+    other = store.add({"name_en": "Second"})
+    assert store.load_destination(first) == [saved]
+    assert (first / chars.CHARACTERS_FILENAME).read_bytes() == original_bytes
+    assert store.load_destination(None) == []
+    store.clear()
+    assert CharacterStore().load_destination(first) == [saved]
+    assert CharacterStore().load_destination(second) == [other]
+
+
+@pytest.mark.parametrize("raw", [
+    b"not JSON", b"\xff", b"[]", b'{"version": 2, "characters": []}',
+    b'{"version": true, "characters": []}', b'{"version": 1, "characters": {}}',
+    b'{"version": 1, "version": 1, "characters": []}',
+    b'{"version": 1, "characters": [{"meta_id": "a", "name_en": "Incomplete"}]}',
+    b"x" * (chars.MAX_ROSTER_BYTES + 1),
+], ids=["json", "encoding", "root-type", "version", "bool-version", "list-type", "duplicate-key", "row", "size"])
+def test_invalid_character_files_are_ignored_until_an_edit_overwrites_them(tmp_path, raw):
+    path = tmp_path / chars.CHARACTERS_FILENAME
+    path.write_bytes(raw)
+    store = CharacterStore()
+    store.add({"name_en": "Previous workspace"})
+    assert store.load_destination(tmp_path) == []
+    assert path.read_bytes() == raw
+    created = store.add({"name_en": "Replacement"})
+    assert CharacterStore().load_destination(tmp_path) == [created]
+
+
+@pytest.mark.parametrize("problem", ["duplicate-id", "empty", "type", "length", "gender", "surrogate", "count"])
+def test_invalid_saved_character_rows_reject_the_entire_document(tmp_path, problem):
+    row = {"meta_id": "speaker", "name_en": "Aiko", "name_ja": None, "gender": None,
+           "alias_en": None, "alias_ja": None}
+    rows = [row]
+    if problem == "duplicate-id":
+        rows.append(dict(row))
+    elif problem == "empty":
+        row["name_en"] = None
+    elif problem == "type":
+        row["name_en"] = 23
+    elif problem == "length":
+        row["name_en"] = "x" * (chars.MAX_FIELD_CHARS + 1)
+    elif problem == "gender":
+        row["gender"] = "unknown"
+    elif problem == "surrogate":
+        row["name_en"] = "\ud800"
+    else:
+        rows = [{**row, "meta_id": str(index)} for index in range(chars.MAX_CHARACTERS + 1)]
+    path = tmp_path / chars.CHARACTERS_FILENAME
+    raw = json.dumps({"version": 1, "characters": rows})
+    path.write_text(raw, encoding="utf-8")
+    assert CharacterStore().load_destination(tmp_path) == []
+    assert path.read_text(encoding="utf-8") == raw
+
+
+def test_linked_roster_is_ignored_and_replaced_without_changing_its_target(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    stored = CharacterStore()
+    stored.load_destination(elsewhere)
+    stored.add({"name_en": "Another project"})
+    target = elsewhere / chars.CHARACTERS_FILENAME
+    original = target.read_bytes()
+    link = tmp_path / chars.CHARACTERS_FILENAME
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    store = CharacterStore()
+    assert store.load_destination(tmp_path) == []
+    replacement = store.add({"name_en": "This project"})
+    assert not link.is_symlink()
+    assert target.read_bytes() == original
+    assert CharacterStore().load_destination(tmp_path) == [replacement]
+
+
+@pytest.mark.parametrize("operation", ["add", "update", "delete", "clear", "import"])
+def test_failed_character_save_preserves_previous_memory_and_file(tmp_path, monkeypatch, operation):
+    store = CharacterStore()
+    store.load_destination(tmp_path)
+    saved = store.add({"name_en": "Saved"})
+    path = tmp_path / chars.CHARACTERS_FILENAME
+    before = path.read_bytes()
+
+    def fail_replace(*args):
+        raise OSError("destination is not writable")
+
+    monkeypatch.setattr(chars.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="not writable"):
+        if operation == "add":
+            store.add({"name_en": "New"})
+        elif operation == "update":
+            store.update(saved["meta_id"], {"name_en": "Changed"})
+        elif operation == "delete":
+            store.delete(saved["meta_id"])
+        elif operation == "clear":
+            store.clear()
+        else:
+            store.replace_all([{"name_en": "Imported"}])
+    assert store.list() == [saved]
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_unbound_character_edits_remain_in_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    store = CharacterStore()
+    store.add({"name_en": "Unsaved"})
+    store.replace_all([{"name_en": "Imported"}])
+    store.clear()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_concurrent_roster_edits_persist_every_character(tmp_path):
+    store = CharacterStore()
+    store.load_destination(tmp_path)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda index: store.add({"name_en": f"Character {index}"}), range(12)))
+    saved = CharacterStore().load_destination(tmp_path)
+    assert saved == store.list()
+    assert {row["name_en"] for row in saved} == {f"Character {index}" for index in range(12)}
+
+
 def test_csv_roundtrip_without_meta_id(fresh_store):
-    fresh_store.add({"name_en": "Aiko", "name_ja": "愛子", "gender": "female", "alias_en": "Sis", "alias_ja": "お姉ちゃん"})
+    fresh_store.add({"name_en": "Aiko", "name_ja": "愛子", "gender": "female",
+                     "alias_en": "Sis", "alias_ja": "お姉ちゃん"})
     fresh_store.add({"name_ja": "先生", "gender": "male"})
     text = fresh_store.export_csv()
     assert text.splitlines()[0] == "name_en,name_ja,gender,alias_en,alias_ja"

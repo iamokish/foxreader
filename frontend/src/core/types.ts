@@ -253,6 +253,10 @@ export interface FolderResponse {
     same_dir?: boolean;
     /** Pages that already have a typeset copy in `dest`. Empty when same_dir. */
     saved?: string[];
+    /** Validated roster from the selected destination, with stable speaker ids. */
+    characters?: CharacterInfo[];
+    /** Identity checked when saving character edits, to reject stale folder views. */
+    character_workspace?: string;
 }
 
 /**

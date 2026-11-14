@@ -1,11 +1,10 @@
 /**
  * Character roster: the in-memory mirror of the backend's roster.
  *
- * The backend (`fox_reader.translate.characters.store`) is the source of
+ * The backend session's character store is the source of
  * truth for ids; this module mirrors it for the entry selectors and the
- * translate payload, and owns the CSV parse/generate. Nothing here touches
- * disk except through a user-triggered download/upload: a restart starts
- * empty and the user re-imports their file.
+ * translate payload, and owns the CSV parse/generate. The backend saves changes
+ * in the active destination folder and restores that roster on folder load.
  */
 
 import { state } from "./state";
@@ -19,6 +18,10 @@ export const MAX_CHARACTERS = 50;
 export const MAX_FIELD_CHARS = 100;
 
 let roster: CharacterInfo[] = [];
+let characterWorkspace: string | null = null;
+let folderGeneration = 0;
+let rosterRevision = 0;
+let readSequence = 0;
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -56,8 +59,20 @@ function setRoster(next: CharacterInfo[]): void {
             alias_en: c.alias_en?.trim() || null,
             alias_ja: c.alias_ja?.trim() || null,
         }));
+    rosterRevision += 1;
     resetDanglingEntries();
     notify();
+}
+
+/** Adopt the roster returned by folder activation without changing it on disk. */
+export function applyFolderCharacters(next: CharacterInfo[], workspace?: string): void {
+    folderGeneration += 1;
+    characterWorkspace = workspaceIdentity(workspace);
+    setRoster(next);
+}
+
+function workspaceIdentity(value: unknown): string | null {
+    return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 /** Entries pointing at a deleted/unknown character read as "none". */
@@ -105,9 +120,9 @@ export function characterPickerLabel(char: CharacterInfo): string {
     return symbol ? `${base} (${symbol})` : base;
 }
 
-function asJson(value: unknown): Record<string, CharacterInfo[]> | null {
+function asJson(value: unknown): { characters: CharacterInfo[]; character_workspace?: unknown } | null {
     if (value && typeof value === "object" && Array.isArray((value as { characters?: unknown }).characters)) {
-        return value as Record<string, CharacterInfo[]>;
+        return value as { characters: CharacterInfo[]; character_workspace?: unknown };
     }
     return null;
 }
@@ -115,69 +130,89 @@ function asJson(value: unknown): Record<string, CharacterInfo[]> | null {
 // ------------------------------------------------------------------ backend
 
 export async function fetchCharacters(): Promise<CharacterInfo[]> {
+    const revision = rosterRevision;
+    const request = ++readSequence;
     const res = await fetch("/api/characters", { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = asJson(await res.json());
-    setRoster(data?.characters ?? []);
+    if (!data) throw new Error("Backend did not return the character roster");
+    // An earlier read must not erase a folder snapshot or a completed edit.
+    if (revision === rosterRevision && request === readSequence) {
+        const workspace = workspaceIdentity(data.character_workspace);
+        if (characterWorkspace !== null && characterWorkspace !== workspace) {
+            throw new Error("The folder changed. Reload it before editing characters.");
+        }
+        characterWorkspace = workspace;
+        setRoster(data.characters);
+    }
     return getCharacters();
 }
 
-export async function addCharacter(fields: CharacterFields): Promise<CharacterInfo> {
-    const res = await fetch("/api/characters", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(fields ?? {}),
+/** Never replay a write against a workspace that changed while it was pending. */
+async function mutateCharacters(path: string, method: string, body?: unknown) {
+    const generation = folderGeneration;
+    if (characterWorkspace === null) await fetchCharacters();
+    if (generation !== folderGeneration || characterWorkspace === null) {
+        throw new Error("The folder changed. Reload it before editing characters.");
+    }
+    const headers: Record<string, string> = { "X-Fox-Character-Workspace": characterWorkspace };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const res = await fetch(path, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+    return { res, generation };
+}
+
+export async function addCharacter(fields: CharacterFields): Promise<CharacterInfo> {
+    const { res, generation } = await mutateCharacters("/api/characters", "POST", fields ?? {});
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
     const created = (data as { character?: CharacterInfo }).character;
     if (!created) throw new Error("Backend did not return the character");
-    setRoster([...roster, created]);
+    if (generation === folderGeneration) setRoster([...roster, created]);
     return created;
 }
 
 export async function updateCharacter(meta_id: string, fields: CharacterFields): Promise<CharacterInfo> {
-    const res = await fetch(`/api/characters/${encodeURIComponent(meta_id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(fields ?? {}),
-    });
+    const { res, generation } = await mutateCharacters(
+        `/api/characters/${encodeURIComponent(meta_id)}`,
+        "PUT",
+        fields ?? {},
+    );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
     const updated = (data as { character?: CharacterInfo }).character;
     if (!updated) throw new Error("Backend did not return the character");
-    setRoster(roster.map((c) => (c.meta_id === meta_id ? updated : c)));
+    if (generation === folderGeneration) setRoster(roster.map((c) => (c.meta_id === meta_id ? updated : c)));
     return updated;
 }
 
 export async function deleteCharacter(meta_id: string): Promise<void> {
-    const res = await fetch(`/api/characters/${encodeURIComponent(meta_id)}`, { method: "DELETE" });
+    const { res, generation } = await mutateCharacters(`/api/characters/${encodeURIComponent(meta_id)}`, "DELETE");
     if (!res.ok && res.status !== 404) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
     }
-    setRoster(roster.filter((c) => c.meta_id !== meta_id));
+    if (generation === folderGeneration) setRoster(roster.filter((c) => c.meta_id !== meta_id));
 }
 
-/** Drop the whole roster (called when the source folder changes). Never throws. */
+/** Explicitly clear and save the active roster; retain the mirror if saving fails. */
 export async function clearCharacters(): Promise<void> {
-    try {
-        await fetch("/api/characters", { method: "DELETE" });
-    } catch {
-        /* backend down: the local mirror still clears */
+    const { res, generation } = await mutateCharacters("/api/characters", "DELETE");
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
     }
-    setRoster([]);
+    if (generation === folderGeneration) setRoster([]);
 }
 
 export async function importCharacterRows(rows: CharacterFields[]): Promise<CharacterInfo[]> {
-    const res = await fetch("/api/characters/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characters: rows ?? [] }),
-    });
+    const { res, generation } = await mutateCharacters("/api/characters/import", "POST", { characters: rows ?? [] });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
-    setRoster((data as { characters?: CharacterInfo[] }).characters ?? []);
+    if (generation === folderGeneration) setRoster((data as { characters?: CharacterInfo[] }).characters ?? []);
     return getCharacters();
 }
 

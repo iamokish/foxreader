@@ -7,7 +7,6 @@ The window budget includes instructions, metadata, dialogue and the answer.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -26,6 +25,7 @@ _INSTRUCTIONS = "\n".join([
     "Return ONLY valid translated text.",
     "Provide the final translation immediately without any other text.",
     "Do not wrap any text in markdown.",
+    "Do not add quotation marks around the translation. Preserve quotation marks present in the source.",
     "Do not explain anything.",
 ])
 
@@ -50,16 +50,13 @@ def _render_system(pairs: list, lang: str | None, characters: dict, links: list,
             "unless they occur in the text being translated. Do not repeat this reference.",
         ]
         for mid, char in characters.items():
-            fields = {label: char[key] for key, label in _CHARACTER_FIELDS.items() if char.get(key)}
-            lines.append(f"{labels[mid]}: {json.dumps(fields, ensure_ascii=False)}")
+            lines.append(f"{labels[mid]}:")
+            lines.extend(f"  {label}: {char[key]}" for key, label in _CHARACTER_FIELDS.items() if char.get(key))
         glossary = []
         for char in characters.values():
             for original, english in (("name_ja", "name_en"), ("alias_ja", "alias_en")):
                 if char.get(original) and char.get(english):
-                    glossary.append(
-                        f"{json.dumps(char[original], ensure_ascii=False)} -> "
-                        f"{json.dumps(char[english], ensure_ascii=False)}"
-                    )
+                    glossary.append(f"{char[original]} -> {char[english]}")
         if glossary:
             lines.extend([
                 "Name and alias glossary (original -> English):",

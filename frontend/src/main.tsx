@@ -41,7 +41,7 @@ import {
 import { state } from "./state";
 import { on } from "./eventbus";
 import { syncMLStateFromBackend } from "./mlStatus";
-import { clearCharacters } from "./characters";
+import { applyFolderCharacters } from "./characters";
 import { handleReaderKey } from "./reader";
 
 installDesktopIntegration();
@@ -312,10 +312,6 @@ async function applyFolder(source: string, dest: string) {
         const data = await loadFolder(source, { dest });
         if (data.status === "success") {
             state.pageEntriesCache = {};
-            // The roster belongs to the folder's cast: a new folder starts
-            // with no characters (backend cleared too; restart/empty is fine
-            // and never blocks the folder load).
-            void clearCharacters();
             // Before renderGallery: it reads `savedFiles` to badge the thumbnails
             // and `viewVariant` to build their URLs.
             state.sourceDir = data.source ?? source;
@@ -324,6 +320,9 @@ async function applyFolder(source: string, dest: string) {
             state.savedFiles = new Set(data.saved ?? []);
             state.viewVariant = "original";
             lastKnownSource = state.sourceDir;
+            // Activation already loaded the destination's roster. Adopt that
+            // snapshot before page entries arrive, keeping their speaker ids.
+            applyFolderCharacters(data.characters ?? [], data.character_workspace);
 
             const pathInput = document.getElementById("folderPathInput") as HTMLInputElement | null;
             if (pathInput) pathInput.value = state.sourceDir;

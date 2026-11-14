@@ -51,7 +51,7 @@ def resolve_weights(mtl_dir: Path | str, model_id: str) -> Path:
     return path
 
 
-def clean_qwen_translation(text: str) -> str:
+def clean_qwen_translation(text: str, *, source: str | None = None) -> str:
     """Discard explicitly marked reasoning if a model ignores its prefix."""
     result = text.strip()
     while result.startswith("<think>"):
@@ -63,7 +63,7 @@ def clean_qwen_translation(text: str) -> str:
     # Markers inside translated prose are literal content and must survive.
     if result.startswith("</think>"):
         result = result[len("</think>"):].lstrip()
-    return clean_translation(result)
+    return clean_translation(result, source=source)
 
 
 class Qwen35Translator:
@@ -190,7 +190,7 @@ class Qwen35Translator:
                 raise RuntimeError("The model returned an invalid translation response.")
             if choice.get("finish_reason") == "length":
                 raise RuntimeError("The translation exceeded the model's output limit. Translate a shorter passage.")
-            result = clean_qwen_translation(content)
+            result = clean_qwen_translation(content, source=source)
             if not result:
                 raise RuntimeError("The model returned an empty translation. Try again.")
             return result

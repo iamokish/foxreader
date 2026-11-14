@@ -218,6 +218,23 @@ static void errline(const char *fmt, ...)
 #endif
 }
 
+/* Polling sleeps may overrun; elapsed time comes from a monotonic clock. */
+static long long monotonic_ms(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER counter, frequency;
+    /* These are also declared by older MinGW headers without GetTickCount64. */
+    if (!QueryPerformanceCounter(&counter) || !QueryPerformanceFrequency(&frequency) ||
+        counter.QuadPart < 0 || frequency.QuadPart <= 0) return -1;
+    return counter.QuadPart / frequency.QuadPart * 1000 +
+        counter.QuadPart % frequency.QuadPart * 1000 / frequency.QuadPart;
+#else
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return -1;
+    return (long long)value.tv_sec * 1000 + value.tv_nsec / 1000000;
+#endif
+}
+
 static void sleep_ms(int ms)
 {
 #ifdef _WIN32
@@ -1409,14 +1426,19 @@ static int child_alive(child_t *c)
 /* 1 if it is gone by the deadline. */
 static int child_wait(child_t *c, int timeout_ms)
 {
-    int waited = 0;
-    while (child_alive(c)) {
-        if (waited >= timeout_ms)
-            return 0;
-        sleep_ms(100);
-        waited += 100;
-    }
-    return 1;
+    long long current, deadline;
+    if (!child_alive(c)) return 1;
+    if (timeout_ms <= 0) return 0;
+    current = monotonic_ms();
+    if (current < 0) return 0;
+    deadline = current + timeout_ms;
+    do {
+        long long remaining = deadline - current;
+        sleep_ms(remaining < 100 ? (int)remaining : 100);
+        if (!child_alive(c)) return 1;
+        current = monotonic_ms();
+    } while (current >= 0 && current < deadline);
+    return 0;
 }
 
 static void child_kill(child_t *c)

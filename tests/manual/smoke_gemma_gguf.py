@@ -714,8 +714,8 @@ with env(**{fox_device.MTL_THREADS_ENV: None, gemma.VERBOSE_ENV: None}), fake_cp
         check("and the text is the user turn", user == {"role": "user", "content": "こんにちは"})
 
         with_context = translator._build_system_prompt([["鬼がいる", "There is an oni"]], lang="japanese")
-        check("source context becomes a prompt line", 'Japanese: "鬼がいる"' in with_context, with_context)
-        check("and keeps its paired translation", 'English: "There is an oni"' in with_context, with_context)
+        check("source context becomes a prompt line", 'Japanese: 鬼がいる' in with_context, with_context)
+        check("and keeps its paired translation", 'English: There is an oni' in with_context, with_context)
         check(
             "the context ends by asking for the new text only",
             with_context.rstrip().endswith("Now translate the new text that follows into English."),
@@ -857,7 +857,7 @@ with stub_llama():
         ) == "Translated",
     )
     system, user = handle.calls[-1]["messages"]
-    check("the Q6 prompt includes the supplied name", '"English name": "Aiko"' in system["content"])
+    check("the Q6 prompt includes the supplied name", 'English name: Aiko' in system["content"])
     check("and identifies the current speaker", "Speaker of the new text: Character 1." in system["content"])
     check("Q6 keeps the source as a separate user turn", user == {"role": "user", "content": "愛子はどこ？"})
     translator.unload()

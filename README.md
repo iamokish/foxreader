@@ -78,7 +78,7 @@ Open a folder of pages, capture speech bubbles (rectangle, freehand, auto-detect
 ### Productivity
 
 - Split flow: draw a cut across a region to divide it; pieces inherit styling and slot.
-- Characters roster with CSV import/export and speaker attribution for all local models.
+- Characters roster with destination-folder autosave, CSV import/export, and speaker attribution for all local models.
 - Layouts (`basic` / `vulpes`), dark/light themes.
 - Vulpes layout: pages rail + canvas + editor, resizable sections, entry actions in the footer.
 - Reader mode (both layouts, in each one's colours): single page, double-page spread (reading-direction aware; cover and landscape pages stand alone), continuous vertical scroll with an adjustable gap, and a before/after comparison of the original against the typeset copy. Centred page-turn arrows, and the whole overlay hides itself once the pointer goes still.
@@ -257,12 +257,32 @@ when there is no earlier context. Enable **Characters** and assign a speaker to
 an entry to identify who is speaking; the roster can also guide names mentioned
 in dialogue.
 
+Gemma and Qwen return plain translated text when Context or Characters is enabled.
+Reference examples do not add quotation marks to the answer; actual quotations
+in the source remain intact. VNTL retains its trained dialogue format.
+
 When prompts are full, Gemma and Qwen discard unused roster entries before
 older context, while keeping the current speaker. This trims only the request;
 the roster itself is unchanged. The CSV/API fields `name_ja` and `alias_ja`
 retain their existing names and hold the original-language name and alias for
 Chinese and Korean too; the roster editor labels them **Name (original)** and
 **Alias (original)**.
+
+Character changes are saved immediately to `fox_characters_data.json` in the
+selected destination folder (by default `<source>/fox_tled`). Adding, editing,
+deleting, importing, and clearing all update that file; closing Fox Reader does
+not remove it. Loading a folder restores the validated roster from its destination,
+including the same speaker IDs. Changing destinations loads that destination's
+roster without erasing the previous one. Sources sharing a destination share its roster.
+
+Missing or invalid roster files are ignored; a later edit can replace an invalid
+file. Saves replace the file atomically, and a failed save leaves the previous
+roster intact and reports an error. An edit from a window showing an older folder
+is rejected until that window reloads its folder. Load a folder before building
+a roster you want to keep: changes made before selecting a destination are temporary.
+
+CSV import/export remains available for sharing. CSV import replaces the active
+roster with new speaker IDs; automatic folder loading preserves the saved IDs.
 
 Qwen runs in non-thinking mode for direct text translation. Fox Reader downloads
 only the selected text GGUF; no vision encoder (`mmproj`) is needed. Each model's
@@ -345,7 +365,7 @@ Pages:
 - `/setup` — first-run wizard: required + MTL download state, per-file progress, optional OCR-VL side job, finish/close.
 - `/settings` — devices (per-slot AUTO + thread count), per-language MTL defaults, API tokens (validated), OCR engine switch.
 - `/user_endpoints` — custom endpoint CRUD, mustache-style preview, test call, per-language activation.
-- Characters modal — speaker roster CRUD + CSV import/export for all local models; entry Speaker select tags `character_id`.
+- Characters modal — speaker roster CRUD + CSV import/export for all local models, automatically saved in the destination; entry Speaker select tags `character_id`.
 
 ## Environment Variables
 

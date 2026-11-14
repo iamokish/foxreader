@@ -182,6 +182,21 @@ def test_context_and_current_character_reach_prompt_without_history_requirement(
     assert "ありがとう。" in contextual
 
 
+@pytest.mark.parametrize("use_context,use_characters", [(False, False), (True, False), (False, True), (True, True)])
+def test_metadata_translation_removes_added_quotes_after_reasoning(translator, use_context, use_characters):
+    translator.model.response = {"choices": [{
+        "text": '<think>use the supplied name</think>\n```text\n"Hello."\n```',
+        "finish_reason": "stop",
+    }]}
+    metadata = {
+        "context": [["おはよう。", "Good morning."]] if use_context else None,
+        "character_info": [{"meta_id": "a", "name_en": "Aiko"}] if use_characters else None,
+        "meta_id": "a" if use_characters else None,
+    }
+    assert translator.translate("こんにちは。", **metadata) == "Hello."
+    assert translator.translate("「こんにちは。」", **metadata) == '"Hello."'
+
+
 def test_exact_token_budget_trims_history_and_preserves_source(translator, monkeypatch):
     translator.n_ctx = 1800
     monkeypatch.setattr(qwen, "MAX_NEW_TOKENS", 64)

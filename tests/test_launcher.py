@@ -167,6 +167,31 @@ def config_reader(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def timing_probe(tmp_path_factory):
+    root = Path(__file__).resolve().parents[1]
+    with pytest.MonkeyPatch.context() as imports:
+        imports.syspath_prepend(str(root / "packaging"))
+        import toolchain
+
+        try:
+            compiler = toolchain.find_compiler(allow_download=False)
+        except toolchain.ToolchainError as exc:
+            pytest.skip(f"native timing checks need a C compiler: {exc}")
+        output = tmp_path_factory.mktemp("launcher-timing") / ("timing.exe" if os.name == "nt" else "timing")
+        toolchain.build_launcher(output, root / "tests/launcher_timing.c", compiler, gui=False)
+    return output
+
+
+@pytest.mark.parametrize("mode", [
+    "oversleep", "interrupted-sleep", "short-timeout", "zero-timeout", "already-exited",
+    "exit-during-wait", "clock-failure", "clock-failure-during-wait",
+])
+def test_shutdown_wait_uses_elapsed_time(timing_probe, mode):
+    result = subprocess.run([str(timing_probe), mode], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture(scope="module")
 def cli_config_binaries(tmp_path_factory):
     root = Path(__file__).resolve().parents[1]
     with pytest.MonkeyPatch.context() as imports:
@@ -1298,8 +1323,10 @@ def test_no_window_browser_without_terminal_fails_before_backend(no_window_insta
 @pytest.mark.skipif(sys.platform not in {"linux", "darwin"}, reason="POSIX controlling PTY")
 @pytest.mark.parametrize("arguments", [[], ["--browser"]], ids=["default", "explicit-browser"])
 def test_no_window_browser_uses_terminal_and_preserves_owned_shutdown(no_window_installation, arguments):
+    import errno
     import fcntl
     import pty
+    import select
     import termios
 
     root, launcher, port, env = no_window_installation
@@ -1313,29 +1340,51 @@ def test_no_window_browser_uses_terminal_and_preserves_owned_shutdown(no_window_
     env.update(PATH=str(commands), FOX_TEST_BROWSER_MARKER=str(marker))
     master, slave = pty.openpty()
     process = None
+    terminal_output = bytearray()
 
     def claim_terminal():
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         os.tcsetpgrp(0, os.getpgrp())
 
+    def wait_in_terminal(predicate, timeout=15):
+        def ready():
+            # A real terminal consumes its output. Darwin can wait for unread
+            # PTY output during process exit, even after the backend has stopped.
+            readable, _, _ = select.select([master], [], [], 0)
+            if readable:
+                try:
+                    terminal_output.extend(os.read(master, 4096))
+                    del terminal_output[:-8192]
+                except OSError as exc:
+                    if exc.errno != errno.EIO:  # Linux reports PTY EOF as EIO.
+                        raise
+            return predicate()
+
+        return wait_for(ready, timeout=timeout)
+
     try:
         process = subprocess.Popen([str(launcher), *arguments], cwd=root, env=env,
                                    stdin=slave, stdout=slave, stderr=slave, preexec_fn=claim_terminal)
         os.close(slave)
         slave = None
-        wait_for(lambda: marker.exists())
+        wait_in_terminal(lambda: marker.exists())
         assert marker.read_text() == f"http://127.0.0.1:{port}/"
         assert health(port)
         assert not (root / "ui-requested").exists()
         process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=25) == 0
+        wait_in_terminal(lambda: process.poll() is not None, timeout=25)
+        assert process.returncode == 0
         assert (root / "shutdown-ok").read_text() == "token accepted"
         assert not health(port)
     finally:
-        if process is not None and process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
-        if slave is not None:
-            os.close(slave)
-        os.close(master)
+        print("\nTerminal output:\n" + terminal_output.decode("utf-8", errors="replace"))
+        try:
+            if slave is not None:
+                os.close(slave)
+        finally:
+            # Release the terminal before reaping, including on assertion failure.
+            os.close(master)
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)

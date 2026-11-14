@@ -179,6 +179,9 @@ Ubuntu 22.04/24.04 and Apple Silicon. Its isolated backend fixture checks
 ownership, authenticated shutdown, and file logging; Windows additionally
 exercises the window close button and fullscreen restoration. The regular
 release builds compile the same hosts before compiling the heavy backend.
+Terminal tests consume PTY output during startup and shutdown, as a real terminal
+does. Controlled-clock checks cover delayed and interrupted shutdown polling;
+updater checks reject late readiness and terminate stalled cleanup helpers.
 The shared recovery-policy tests exercise deadlines and late events with a
 controlled clock. Native host tests hold a local page response open to exercise
 the real watchdog without opening a browser or loading models.

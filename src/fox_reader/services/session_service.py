@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
+from typing import Any, TypeVar
+from uuid import uuid4
+
 from fastapi import WebSocket
 
 from fox_reader.fsaccess import normalize_dir
+from fox_reader.translate.characters import CharacterStore
+
+_Result = TypeVar("_Result")
+
+
+async def complete_workspace_operation(operation: Coroutine[Any, Any, _Result]) -> _Result:
+    """Finish an in-flight workspace write before releasing its lock on cancel.
+
+    Cancelling an await does not stop filesystem work in a worker thread.
+    Shield the complete operation so paths and roster state stay in agreement.
+    """
+    task = asyncio.create_task(operation)
+    cancelled = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+            break
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancelled = exc
+    if cancelled is not None:
+        raise cancelled
+    return result
 
 
 class SessionService:
@@ -13,6 +42,11 @@ class SessionService:
         self._current_dir: str | None = None
         self._dest_dir: str | None = None
         self._bubble_cache: dict[str, dict] = {}
+        self.characters = CharacterStore()
+        self.character_workspace = uuid4().hex
+        # Folder activation and roster writes share a destination. Serialize
+        # them while disk I/O runs off the event loop.
+        self.workspace_lock = asyncio.Lock()
 
     @property
     def current_dir(self) -> str | None:
@@ -63,6 +97,7 @@ class SessionService:
         """Point the session at a source folder and its destination."""
         self.current_dir = source
         self.dest_dir = dest
+        self.character_workspace = uuid4().hex
 
     # Bubble cache ------------------------------------------------------------------
     #

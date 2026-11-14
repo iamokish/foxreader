@@ -1052,10 +1052,10 @@ export function initEntriesListeners(): void {
     });
 
     // The roster lives on the backend; mirror it once at startup (best
-    // effort -- an unreachable backend just means an empty roster until the
-    // user imports), then repaint the entry selectors on every change.
+    // effort -- folder activation also supplies a validated roster snapshot),
+    // then repaint the entry selectors on every change.
     void fetchCharacters().catch(() => {
-        /* offline backend: selectors stay on "none" until an import */
+        /* A later folder load or editor refresh retries the roster. */
     });
     subscribeCharacters(() => renderCurrentPageEntries("characters"));
 

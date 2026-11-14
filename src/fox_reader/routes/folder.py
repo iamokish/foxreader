@@ -11,6 +11,7 @@ from PIL import Image
 from fox_reader import assets, fsaccess
 from fox_reader.image_rendering import image_render_quality_mode
 from fox_reader.models.requests import FolderInspectRequest, FolderRequest
+from fox_reader.services.session_service import complete_workspace_operation
 from fox_reader.services.thumbnails import MAX_DIMENSION, ThumbnailService
 
 router = APIRouter()
@@ -305,20 +306,28 @@ async def load_folder(request: Request, request_data: FolderRequest):
 
     dest = dest_report.path or dest
 
-    session.set_workspace(source, dest)
-    session.clear_bubble_cache()
-
     files = await asyncio.to_thread(fsaccess.list_images, source)
     dimensions = await asyncio.to_thread(_measure_dimensions, source, files)
     saved = await asyncio.to_thread(_saved_pages, source, dest, files)
 
-    if workspaces is not None:
-        workspaces.remember(source, dest)
+    # Activate only after validation and listing succeed. Keep roster writes
+    # serialized with the switch so they cannot target a half-loaded workspace.
+    async def activate():
+        async with session.workspace_lock:
+            characters = await asyncio.to_thread(session.characters.load_destination, dest)
+            session.set_workspace(source, dest)
+            session.clear_bubble_cache()
+            if workspaces is not None:
+                await asyncio.to_thread(workspaces.remember, source, dest)
+            return characters, session.character_workspace
+
+    characters, character_workspace = await complete_workspace_operation(activate())
 
     # `status`, `files` and `dimensions` are unchanged; everything else is added.
     return JSONResponse(
         {"status": "success", "files": files, "dimensions": dimensions,
-         "source": source, "dest": dest, "same_dir": same, "saved": saved},
+         "source": source, "dest": dest, "same_dir": same, "saved": saved,
+         "characters": characters, "character_workspace": character_workspace},
         status_code=200,
     )
 

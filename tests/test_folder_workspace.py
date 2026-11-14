@@ -6,20 +6,26 @@ below is asserted on after every write path.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import threading
+from contextlib import ExitStack
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from fox_reader import fsaccess
+from fox_reader.routes import characters as character_routes
 from fox_reader.routes import folder as folder_routes
 from fox_reader.routes import inpaint as inpaint_routes
-from fox_reader.services.session_service import SessionService
 from fox_reader.services.progress import ProgressRegistry
+from fox_reader.services.session_service import SessionService
+from fox_reader.translate import characters as character_data
 from fox_reader.workspaces import MAX_ENTRIES, WorkspaceStore
-
 
 # --------------------------------------------------------------------- fixtures
 
@@ -265,6 +271,7 @@ class TestWorkspaceStore:
 def _folder_app(session: SessionService, workspaces=None) -> FastAPI:
     app = FastAPI()
     app.include_router(folder_routes.router)
+    app.include_router(character_routes.router)
     app.state.session = session
     app.state.workspaces = workspaces
     return app
@@ -482,6 +489,246 @@ class TestFolderRoutes:
         client = TestClient(_folder_app(SessionService()))
         client.post("/api/load_folder", json={"path": str(pages)})
         assert client.get("/img_serve/ghost.png").status_code == 404
+
+
+class TestCharacterWorkspace:
+    def test_cancelled_folder_request_finishes_activation_before_releasing_lock(self, pages, tmp_path, monkeypatch):
+        destination = tmp_path / "next destination"
+        prepared = character_data.CharacterStore()
+        prepared.load_destination(destination)
+        restored = prepared.add({"name_en": "Next project"})
+        session = SessionService()
+        entered, release = threading.Event(), threading.Event()
+
+        async def scenario():
+            transport = httpx.ASGITransport(app=_folder_app(session))
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                first = await client.post("/api/load_folder", json={"path": str(pages)})
+                assert first.status_code == 200
+                old_token = first.json()["character_workspace"]
+                original_load = session.characters.load_destination
+
+                def paused_load(directory):
+                    characters = original_load(directory)
+                    entered.set()  # The worker has rebound the roster but not returned.
+                    if not release.wait(timeout=10):
+                        raise RuntimeError("test did not release the folder worker")
+                    return characters
+
+                monkeypatch.setattr(session.characters, "load_destination", paused_load)
+                request = asyncio.create_task(client.post(
+                    "/api/load_folder", json={"path": str(pages), "dest": str(destination)},
+                ))
+                try:
+                    assert await asyncio.to_thread(entered.wait, 5)
+                    assert session.characters.list() == [restored]
+                    assert session.workspace_lock.locked()
+                    for _ in range(2):
+                        request.cancel()
+                        await asyncio.sleep(0)
+                        assert not request.done()
+                        assert session.workspace_lock.locked()
+                        assert session.character_workspace == old_token
+                    release.set()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(request, timeout=5)
+                    assert not session.workspace_lock.locked()
+                    assert session.current_dir == fsaccess.resolve_dir(str(pages))
+                    assert session.save_dir == fsaccess.resolve_dir(str(destination))
+                    assert session.character_workspace != old_token
+                    response = await client.get("/api/characters")
+                    assert response.json() == {
+                        "characters": [restored], "character_workspace": session.character_workspace,
+                    }
+                finally:
+                    release.set()
+                    await asyncio.gather(request, return_exceptions=True)
+
+        asyncio.run(scenario())
+
+    @pytest.mark.parametrize("transition", ["destination", "reload", "restart"])
+    def test_stale_window_edits_cannot_change_a_newly_loaded_roster(self, pages, tmp_path, transition):
+        with ExitStack() as stack:
+            client = stack.enter_context(TestClient(_folder_app(SessionService())))
+            loaded = client.post("/api/load_folder", json={"path": str(pages)}).json()
+            old_token = loaded["character_workspace"]
+            old_headers = {"X-Fox-Character-Workspace": old_token}
+            added = client.post("/api/characters", json={"name_en": "Aiko"}, headers=old_headers)
+            assert added.status_code == 201
+            destination = pages / "fox_tled"
+            if transition == "destination":
+                destination = tmp_path / "new destination"
+            elif transition == "restart":
+                client = stack.enter_context(TestClient(_folder_app(SessionService())))
+            loaded = client.post(
+                "/api/load_folder", json={"path": str(pages), "dest": str(destination)},
+            ).json()
+            current_token = loaded["character_workspace"]
+            assert current_token and current_token != old_token
+            assert client.get("/api/characters").json()["character_workspace"] == current_token
+            current_headers = {"X-Fox-Character-Workspace": current_token}
+            if transition == "destination":
+                added = client.post("/api/characters", json={"name_en": "Ken"}, headers=current_headers)
+                assert added.status_code == 201
+            before = client.get("/api/characters").json()["characters"]
+            path = destination / character_data.CHARACTERS_FILENAME
+            original_bytes = path.read_bytes()
+            mid = before[0]["meta_id"]
+            attempts = [
+                ("POST", "/api/characters", {"name_en": "Stale"}),
+                ("PUT", f"/api/characters/{mid}", {"name_en": "Stale"}),
+                ("DELETE", f"/api/characters/{mid}", None),
+                ("DELETE", "/api/characters", None),
+                ("POST", "/api/characters/import", {"characters": [{"name_en": "Stale"}]}),
+            ]
+            for method, endpoint, payload in attempts:
+                response = client.request(method, endpoint, json=payload, headers=old_headers)
+                assert response.status_code == 409, (method, endpoint, response.text)
+                assert "folder changed" in response.json()["error"].lower()
+                assert client.get("/api/characters").json()["characters"] == before
+                assert path.read_bytes() == original_bytes
+            changed = client.put(f"/api/characters/{mid}", json={"alias_en": "Current"}, headers=current_headers)
+            assert changed.status_code == 200
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == [changed.json()["character"]]
+
+    def test_roster_changes_are_saved_before_the_api_returns(self, pages):
+        path = pages / "fox_tled" / character_data.CHARACTERS_FILENAME
+        with TestClient(_folder_app(SessionService())) as client:
+            loaded = client.post("/api/load_folder", json={"path": str(pages)})
+            assert loaded.status_code == 200
+            assert loaded.json()["characters"] == []
+            assert not path.exists()
+
+            added = client.post("/api/characters", json={"name_en": "Aiko", "name_ja": "愛子"})
+            assert added.status_code == 201
+            character = added.json()["character"]
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == [character]
+
+            updated = client.put(f"/api/characters/{character['meta_id']}", json={"alias_en": "Sis"})
+            assert updated.status_code == 200
+            assert updated.json()["character"]["meta_id"] == character["meta_id"]
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == [updated.json()["character"]]
+
+            assert client.delete(f"/api/characters/{character['meta_id']}").status_code == 200
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == []
+
+            imported = client.post("/api/characters/import", json={
+                "characters": [{"name_en": "Ken"}],
+                "csv": "name_en,name_ja,gender,alias_en,alias_ja\nAiko,愛子,female,,\n",
+            })
+            assert imported.status_code == 200
+            assert imported.json()["added"] == 2
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == imported.json()["characters"]
+            cleared = client.delete("/api/characters")
+            assert cleared.status_code == 200 and cleared.json()["removed"] == 2
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == []
+
+    def test_restart_restores_speaker_ids_in_load_snapshot_and_character_api(self, pages):
+        first_session = SessionService()
+        with TestClient(_folder_app(first_session)) as first:
+            assert first.post("/api/load_folder", json={"path": str(pages)}).status_code == 200
+            saved = first.post("/api/characters", json={"name_en": "Aiko", "gender": "female"}).json()["character"]
+        restarted_session = SessionService()
+        assert restarted_session.characters is not first_session.characters
+        with TestClient(_folder_app(restarted_session)) as restarted:
+            assert restarted.get("/api/characters").json()["characters"] == []
+            loaded = restarted.post("/api/load_folder", json={"path": str(pages)})
+            assert loaded.status_code == 200
+            assert loaded.json()["characters"] == [saved]
+            assert restarted.get("/api/characters").json()["characters"] == [saved]
+            assert restarted_session.characters.get(saved["meta_id"]) == saved
+
+    def test_same_source_destination_switch_and_reload_preserve_each_roster(self, pages, tmp_path):
+        first, second = tmp_path / "first output", tmp_path / "second output"
+        first_path = first / character_data.CHARACTERS_FILENAME
+        second_path = second / character_data.CHARACTERS_FILENAME
+        with TestClient(_folder_app(SessionService())) as client:
+            assert client.post("/api/load_folder", json={"path": str(pages), "dest": str(first)}).status_code == 200
+            aiko = client.post("/api/characters", json={"name_en": "Aiko"}).json()["character"]
+            first_bytes = first_path.read_bytes()
+
+            switched = client.post("/api/load_folder", json={"path": str(pages), "dest": str(second)})
+            assert switched.status_code == 200 and switched.json()["characters"] == []
+            assert not second_path.exists()
+            assert first_path.read_bytes() == first_bytes
+            ken = client.post("/api/characters", json={"name_en": "Ken"}).json()["character"]
+            second_bytes = second_path.read_bytes()
+
+            for _ in range(2):  # Switching back and reloading the same source/destination.
+                loaded = client.post("/api/load_folder", json={"path": str(pages), "dest": str(first)})
+                assert loaded.status_code == 200 and loaded.json()["characters"] == [aiko]
+                assert client.get("/api/characters").json()["characters"] == [aiko]
+                assert first_path.read_bytes() == first_bytes
+                assert second_path.read_bytes() == second_bytes
+            loaded = client.post("/api/load_folder", json={"path": str(pages), "dest": str(second)})
+            assert loaded.json()["characters"] == [ken]
+
+    def test_invalid_roster_does_not_block_folder_load_and_next_edit_replaces_it(self, pages):
+        destination = pages / "fox_tled"
+        destination.mkdir()
+        path = destination / character_data.CHARACTERS_FILENAME
+        invalid = b'{"version":1,"characters":"invalid"}'
+        path.write_bytes(invalid)
+        with TestClient(_folder_app(SessionService())) as client:
+            loaded = client.post("/api/load_folder", json={"path": str(pages)})
+            assert loaded.status_code == 200 and loaded.json()["characters"] == []
+            assert path.read_bytes() == invalid
+            assert client.get("/api/characters").json()["characters"] == []
+            added = client.post("/api/characters", json={"name_en": "Aiko"})
+            assert added.status_code == 201
+            assert json.loads(path.read_text(encoding="utf-8"))["characters"] == [added.json()["character"]]
+
+    @pytest.mark.parametrize("failure", ["source", "destination", "no-create"])
+    def test_failed_folder_load_keeps_the_active_roster_and_destination(self, pages, tmp_path, failure):
+        session = SessionService()
+        with TestClient(_folder_app(session)) as client:
+            assert client.post("/api/load_folder", json={"path": str(pages)}).status_code == 200
+            saved = client.post("/api/characters", json={"name_en": "Aiko"}).json()["character"]
+            source, destination = session.current_dir, session.save_dir
+            path = pages / "fox_tled" / character_data.CHARACTERS_FILENAME
+            before = path.read_bytes()
+            if failure == "source":
+                request = {"path": str(tmp_path / "missing")}
+            elif failure == "destination":
+                blocked = tmp_path / "not a directory"
+                blocked.write_text("unrelated file", encoding="utf-8")
+                request = {"path": str(pages), "dest": str(blocked)}
+            else:
+                request = {"path": str(pages), "dest": str(tmp_path / "missing"), "create_dest": False}
+            assert client.post("/api/load_folder", json=request).status_code == 400
+            assert (session.current_dir, session.save_dir) == (source, destination)
+            assert client.get("/api/characters").json()["characters"] == [saved]
+            assert path.read_bytes() == before
+
+    @pytest.mark.parametrize("operation", ["add", "update", "delete", "clear", "import"])
+    def test_save_errors_are_reported_without_changing_roster_or_saved_file(self, pages, monkeypatch, operation):
+        session = SessionService()
+        with TestClient(_folder_app(session)) as client:
+            assert client.post("/api/load_folder", json={"path": str(pages)}).status_code == 200
+            saved = client.post("/api/characters", json={"name_en": "Aiko"}).json()["character"]
+            path = pages / "fox_tled" / character_data.CHARACTERS_FILENAME
+            before = path.read_bytes()
+
+            def fail_replace(*args):
+                raise OSError("destination became read-only")
+
+            monkeypatch.setattr(character_data.os, "replace", fail_replace)
+            if operation == "add":
+                response = client.post("/api/characters", json={"name_en": "Ken"})
+            elif operation == "update":
+                response = client.put(f"/api/characters/{saved['meta_id']}", json={"name_en": "Changed"})
+            elif operation == "delete":
+                response = client.delete(f"/api/characters/{saved['meta_id']}")
+            elif operation == "clear":
+                response = client.delete("/api/characters")
+            else:
+                response = client.post("/api/characters/import", json={"characters": [{"name_en": "Imported"}]})
+            assert response.status_code == 500
+            assert "read-only" in response.json()["error"]
+            assert client.get("/api/characters").json()["characters"] == [saved]
+            assert session.characters.list() == [saved]
+            assert path.read_bytes() == before
+            assert list(path.parent.iterdir()) == [path]
 
 
 # -------------------------------------------------------------- saving a page

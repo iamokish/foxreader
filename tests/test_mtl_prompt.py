@@ -48,8 +48,8 @@ def test_characters_work_without_context_and_opaque_ids_never_render():
     assert "Conversation context" not in system
     assert "opaque-" not in system
     assert "Do not add names, speaker labels" in system
-    assert '"健" -> "Ken"' in system
-    assert '"先生" -> "Teacher"' in system
+    assert "健 -> Ken" in system
+    assert "先生 -> Teacher" in system
     assert "never translate names by their dictionary meaning" in system
 
 
@@ -69,6 +69,22 @@ def test_bare_text_does_not_invent_a_roster_or_context():
     assert "Character reference" not in messages[0]["content"]
     assert "Conversation context" not in messages[0]["content"]
     assert messages[0]["content"] == build_system_prompt()
+
+
+@pytest.mark.parametrize("use_context,use_characters", [(True, False), (False, True), (True, True)])
+def test_reference_data_does_not_teach_quoted_output(use_context, use_characters):
+    system = build_system_prompt(
+        [["こんにちは。", "Hello."]] if use_context else None, "japanese",
+        ROSTER if use_characters else None, ["opaque-a"], "opaque-a",
+    )
+    assert '"' not in system
+    assert "Do not add quotation marks around the translation" in system
+    assert "Preserve quotation marks present in the source" in system
+    if use_context:
+        assert "English: Hello." in system
+    if use_characters:
+        assert "English name: Aiko" in system
+        assert "愛子 -> Aiko" in system
 
 
 def test_irrelevant_roster_is_trimmed_before_recent_dialogue():
@@ -96,7 +112,7 @@ def test_oldest_history_is_trimmed_with_its_speaker():
     )
     system = messages[0]["content"]
     assert "old translation" not in system
-    assert 'English: "newest"' in system
+    assert "English: newest" in system
     assert "Speaker for pair 1: Character 2" in system
     assert "Speaker for pair 1: Character 1" not in system
 

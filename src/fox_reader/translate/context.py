@@ -145,8 +145,10 @@ def render_context_block(
     for index, (source, english) in enumerate(clean, start=1):
         if speakers[index - 1]:
             lines.append(f"   Speaker for pair {index}: {speakers[index - 1]}")
-        lines.append(f'{index}. {label}: "{source}"')
-        lines.append(f'   English: "{english}"')
+        # Reference punctuation is copied by instruction-tuned models. Keep
+        # the text literal instead of teaching every translation to be quoted.
+        lines.append(f"{index}. {label}: {source}")
+        lines.append(f"   English: {english}")
 
     lines.append("Now translate the new text that follows into English.")
     return "\n".join(lines)

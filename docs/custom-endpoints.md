@@ -369,7 +369,12 @@ Aiko,愛子,female,Ai-chan,愛ちゃん
 Ken,健,male,,
 ```
 
-The character roster is held in memory and cleared when changing the source folder. Export a CSV if you need to restore it after restarting. Reimporting creates new IDs, so reassign speakers as needed.
+Character edits are saved immediately in the destination folder's `fox_characters_data.json`.
+Loading a folder restores that destination's validated roster with the same IDs;
+closing Fox Reader or switching folders does not erase the saved file. Invalid
+files are ignored and can be replaced by a later edit. Load a folder before
+creating a roster you want to keep, or export a CSV while no destination is
+selected. CSV reimport still creates new IDs, so reassign speakers as needed.
 
 ### Complete example with two speakers
 
@@ -974,7 +979,9 @@ Custom translation failures are normally represented by `error` in this JSON res
 
 Saved endpoint configurations and per-language activation are stored in `config/user_endpoints.yaml` under the Fox Reader data root. This includes headers, static query values, and encryption keys. Use the editor or management API for changes while Fox Reader is running; editing the file alone does not reload the in-memory store.
 
-The endpoint configuration persists across restarts. Page context and the in-memory character roster have separate lifecycles; they are not embedded in each endpoint's saved configuration.
+The endpoint configuration persists across restarts. Page context is held in the
+current reader session, and the character roster is saved with the destination
+folder; neither is embedded in each endpoint's saved configuration.
 
 ## Troubleshooting
 

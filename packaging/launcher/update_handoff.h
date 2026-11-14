@@ -10,6 +10,14 @@
 #define UPDATE_READY_TIMEOUT_MS 15000
 #define UPDATE_CLEANUP_TIMEOUT_MS 30000
 
+static int update_before_deadline(long long deadline)
+{
+    long long current;
+    if (deadline < 0) return 0;
+    current = monotonic_ms();
+    return current >= 0 && current < deadline;
+}
+
 typedef struct update_terminal_t {
     pchar name[51];
     struct update_terminal_t *next;
@@ -266,7 +274,12 @@ static int update_start_helper(const pchar *root, const pchar *runner, const cha
 {
     char response[16];
     size_t used = 0, size = strlen(payload);
-    int elapsed, ready = 0;
+    int ready = 0;
+    long long deadline = monotonic_ms();
+    if (deadline < 0) return 0;
+    /* Polling sleeps can overrun on macOS or a busy host. The payload and READY
+     * response share one real deadline, independent of how often we wake. */
+    deadline += UPDATE_READY_TIMEOUT_MS;
 #ifdef _WIN32
     SECURITY_ATTRIBUTES security;
     STARTUPINFOEXW startup;
@@ -317,7 +330,7 @@ static int update_start_helper(const pchar *root, const pchar *runner, const cha
     CloseHandle(output_write); output_write = NULL;
     if (!WriteFile(input_write, payload, (DWORD)size, &count, NULL) || count != size) goto cleanup;
     CloseHandle(input_write); input_write = NULL;
-    for (elapsed = 0; elapsed < UPDATE_READY_TIMEOUT_MS && used < sizeof response - 1; elapsed += 25) {
+    while (used < sizeof response - 1 && update_before_deadline(deadline)) {
         DWORD available = 0;
         if (!PeekNamedPipe(output_read, NULL, 0, NULL, &available, NULL)) break;
         if (available) {
@@ -327,7 +340,7 @@ static int update_start_helper(const pchar *root, const pchar *runner, const cha
         Sleep(25);
     }
     response[used] = 0;
-    ready = strcmp(response, "READY\n") == 0;
+    ready = strcmp(response, "READY\n") == 0 && update_before_deadline(deadline);
     if (ready && cleanup) {
         DWORD exit_code = 1;
         ready = WaitForSingleObject(process.hProcess, UPDATE_CLEANUP_TIMEOUT_MS) == WAIT_OBJECT_0 &&
@@ -385,19 +398,17 @@ cleanup:
     }
     close(input[0]); close(output[1]);
     if (child < 0) { close(input[1]); close(output[0]); return 0; }
-    elapsed = 0;
-    while (sent < size && elapsed < UPDATE_READY_TIMEOUT_MS) {
+    while (sent < size && update_before_deadline(deadline)) {
         count = write(input[1], payload + sent, size - sent);
         if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
             sleep_ms(25);
-            elapsed += 25;
             continue;
         }
         if (count <= 0) break;
         sent += (size_t)count;
     }
     close(input[1]);
-    for (; sent == size && elapsed < UPDATE_READY_TIMEOUT_MS && used < sizeof response - 1; elapsed += 25) {
+    while (sent == size && used < sizeof response - 1 && update_before_deadline(deadline)) {
         count = read(output[0], response + used, 1);
         if (count == 1) {
             if (response[used++] == '\n') break;
@@ -406,14 +417,16 @@ cleanup:
     }
     close(output[0]);
     response[used] = 0;
-    ready = strcmp(response, "READY\n") == 0;
+    ready = strcmp(response, "READY\n") == 0 && update_before_deadline(deadline);
     if (ready && cleanup) {
         int status = 0;
-        for (elapsed = 0; elapsed < UPDATE_CLEANUP_TIMEOUT_MS; elapsed += 25) {
+        deadline = monotonic_ms();
+        if (deadline >= 0) deadline += UPDATE_CLEANUP_TIMEOUT_MS;
+        while (update_before_deadline(deadline)) {
             pid_t stopped = waitpid(child, &status, WNOHANG);
             if (stopped == child) {
                 reaped = 1;
-                ready = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                ready = WIFEXITED(status) && WEXITSTATUS(status) == 0 && update_before_deadline(deadline);
                 break;
             }
             if (stopped < 0 && errno != EINTR) { reaped = 1; ready = 0; break; }

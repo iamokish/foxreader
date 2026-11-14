@@ -10,6 +10,7 @@ import {
     getCharacters,
     importCharacterRows,
     parseCharactersCsv,
+    subscribeCharacters,
     updateCharacter,
 } from "../../characters";
 import type { CharacterFields, CharacterInfo } from "../../types";
@@ -57,20 +58,30 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
 
     useEffect(() => {
         if (!open) return;
+        let active = true;
+        const unsubscribe = subscribeCharacters(() => setRows(getCharacters()));
         setError("");
         setLoading(true);
         fetchCharacters()
             .then((list) => {
+                if (!active) return;
                 setRows(list);
                 setError("");
             })
             .catch((err) => {
+                if (!active) return;
                 // Offline backend: show the local mirror rather than a blank
                 // modal, and say so once.
                 setRows(getCharacters());
                 setError(err instanceof Error ? err.message : "Could not load characters");
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                if (active) setLoading(false);
+            });
+        return () => {
+            active = false;
+            unsubscribe();
+        };
     }, [open]);
 
     useEffect(() => {
@@ -155,7 +166,7 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
             return;
         try {
             await clearCharacters();
-            refresh([]);
+            refresh(getCharacters());
             setEditingId(null);
             showNotify("Characters cleared.");
         } catch (err) {
@@ -264,8 +275,9 @@ export function CharactersModal({ open, onClose }: CharactersModalProps) {
 
                 <p class="ch-hint">
                     Character names and speakers help all local translation models stay consistent, even with Context
-                    off. Removing a character clears its speaker assignments. Export a CSV to keep your roster after a
-                    restart.
+                    off. Changes are saved automatically in your destination folder and restored when you load it again.
+                    Load a folder to enable saving; until then, export a CSV to keep your roster. Removing a character
+                    clears its speaker assignments.
                 </p>
 
                 {error && <p class="ch-error" data-selectable>{error}</p>}
