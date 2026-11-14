@@ -2,11 +2,9 @@
 
 Two things here are load-bearing beyond "does validation work":
 
-* A config file that fails validation is replaced with defaults, silently. That
-  is the right call at startup -- refusing to boot over a stray character helps
-  nobody -- but it means every path that can put a bad value into the model is a
-  path that can lose *all* of the user's settings. `TestUpdate` pins the
-  atomicity that stops it.
+* Startup repairs invalid fields while preserving other preferences. Runtime
+  updates are strict and transactional: rejected changes must never reach disk
+  or replace the last valid in-memory configuration.
 * The launcher parses `host` and `port` out of the saved YAML in C, before any
   Python exists to ask. `TestSavedFileShape` pins the flat `key: value` layout
   that parser relies on, and the `user_config.yaml`-over-`fox_config.yaml`
@@ -225,15 +223,12 @@ class TestConfigManagerLoad:
         assert yaml.safe_load(path.read_text(encoding="utf-8")) == FoxConfig().model_dump(mode="json")
 
     def test_empty_file_loads_defaults(self, tmp_path):
-        """An empty file is valid input -- every field has a default -- so it
-        loads rather than being treated as corrupt, and is left as it is. The
-        launcher's own fallbacks match these defaults, so the two still agree on
-        host and port with nothing written down."""
+        """An empty file receives all current fields, just like an older config."""
         path = tmp_path / "fox_config.yaml"
         path.write_text("", encoding="utf-8")
 
         assert ConfigManager(tmp_path).load() == FoxConfig()
-        assert path.read_text(encoding="utf-8") == ""
+        assert yaml.safe_load(path.read_text(encoding="utf-8")) == FoxConfig().model_dump(mode="json")
 
 
 class TestUpdate:

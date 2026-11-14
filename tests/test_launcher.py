@@ -150,6 +150,546 @@ def no_window_installation(tmp_path):
     launcher_diagnostics(result[0])
 
 
+@pytest.fixture(scope="module")
+def config_reader(tmp_path_factory):
+    root = Path(__file__).resolve().parents[1]
+    with pytest.MonkeyPatch.context() as imports:
+        imports.syspath_prepend(str(root / "packaging"))
+        import toolchain
+
+        try:
+            compiler = toolchain.find_compiler(allow_download=False)
+        except toolchain.ToolchainError as exc:
+            pytest.skip(f"native configuration checks need a C compiler: {exc}")
+        output = tmp_path_factory.mktemp("launcher-config") / ("config.exe" if os.name == "nt" else "config")
+        toolchain.build_launcher(output, root / "tests/launcher_config.c", compiler, gui=False)
+    return output
+
+
+@pytest.fixture(scope="module")
+def cli_config_binaries(tmp_path_factory):
+    root = Path(__file__).resolve().parents[1]
+    with pytest.MonkeyPatch.context() as imports:
+        imports.syspath_prepend(str(root / "packaging"))
+        import toolchain
+
+        try:
+            compiler = toolchain.find_compiler(allow_download=False)
+        except toolchain.ToolchainError as exc:
+            pytest.skip(f"native startup checks need a C compiler: {exc}")
+        directory = tmp_path_factory.mktemp("launcher-config-cli")
+        launcher = directory / ("launcher.exe" if os.name == "nt" else "launcher")
+        backend = directory / ("backend.exe" if os.name == "nt" else "backend")
+        toolchain.build_launcher(launcher, compiler=compiler, no_window=True)
+        toolchain.build_launcher(backend, root / "tests/launcher_backend.c", compiler, gui=False)
+    return launcher, backend
+
+
+@pytest.fixture
+def cli_config_installation(tmp_path, monkeypatch, cli_config_binaries):
+    launcher, backend = cli_config_binaries
+    monkeypatch.setenv("FOX_TEST_NO_WINDOW_LAUNCHER", str(launcher))
+    monkeypatch.setenv("FOX_TEST_BACKEND", str(backend))
+    result = _installation(tmp_path, "FOX_TEST_NO_WINDOW_LAUNCHER")
+    yield result
+    launcher_diagnostics(result[0])
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS bundle exec forwarding")
+@pytest.mark.parametrize("bundle_name", ["Fox Reader.app", "Renamed Reader.app"])
+def test_macos_bundle_forwards_future_options_to_updated_root_launcher(cli_config_installation, bundle_name):
+    root, launcher, _, env = cli_config_installation
+    bundled = root / bundle_name / "Contents" / "MacOS" / "launcher"
+    bundled.parent.mkdir(parents=True)
+    shutil.copy2(launcher, bundled)
+    original_bundle = bundled.read_bytes()
+    marker = root / "forwarded-arguments"
+    env["FOX_TEST_FORWARD_MARKER"] = str(marker)
+    arguments = ["--future-option", "value with spaces", "--version"]
+    for exit_code in (37, 38):
+        launcher.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$$" "$@" > "$FOX_TEST_FORWARD_MARKER"\n'
+            f"exit {exit_code}\n",
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+        process = subprocess.Popen([str(bundled), *arguments], cwd=root, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, errors = process.communicate(timeout=10)
+        assert process.returncode == exit_code, (output + errors).decode(errors="replace")
+        assert marker.read_text(encoding="utf-8").splitlines() == [str(process.pid), *arguments]
+    assert bundled.read_bytes() == original_bundle
+    assert not (root / "started").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS bundle exec forwarding")
+@pytest.mark.parametrize("problem", ["missing", "symlink", "directory", "not-executable"])
+def test_macos_bundle_refuses_missing_or_unsafe_root_launcher(cli_config_installation, problem):
+    root, launcher, _, env = cli_config_installation
+    bundled = root / "Renamed Reader.app" / "Contents" / "MacOS" / "launcher"
+    bundled.parent.mkdir(parents=True)
+    shutil.copy2(launcher, bundled)
+    if problem == "not-executable":
+        launcher.chmod(0o600)
+    else:
+        launcher.unlink()
+        if problem == "symlink":
+            launcher.symlink_to(bundled)
+        elif problem == "directory":
+            launcher.mkdir()
+
+    result = subprocess.run([str(bundled), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+
+    assert result.returncode == 1
+    assert "current Fox Reader launcher" in result.stderr
+    assert "root launcher" in log_tail(root / "logs" / "launcher.log")
+    assert not (root / "started").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS root launcher entry point")
+def test_macos_root_launcher_runs_directly(cli_config_installation):
+    root, launcher, _, env = cli_config_installation
+    result = subprocess.run([str(launcher), "--version"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.fullmatch(r"\d+\.\d+\.\d+\s*", result.stdout)
+    assert not (root / "started").exists()
+
+
+@pytest.fixture(scope="module")
+def recovery_helper(tmp_path_factory):
+    """A native child records the pipe contract and waits for launcher exit."""
+    root = Path(__file__).resolve().parents[1]
+    directory = tmp_path_factory.mktemp("launcher-recovery-helper")
+    source = directory / "recovery.c"
+    source.write_text(
+        '#define main fox_launcher_main\n'
+        f'#include "{(root / "packaging/launcher/launcher.c").as_posix()}"\n'
+        '#undef main\n' + r'''
+#ifdef _WIN32
+#include <fcntl.h>
+#endif
+
+static void mark(const char *name, const char *value)
+{
+    FILE *file = fopen(name, "wb");
+    if (file) { fputs(value, file); fclose(file); }
+}
+
+static int wait_for_launcher(unsigned long pid)
+{
+#ifdef _WIN32
+    HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+    DWORD result;
+    if (!parent) return 0;
+    result = WaitForSingleObject(parent, 15000);
+    CloseHandle(parent);
+    return result == WAIT_OBJECT_0;
+#else
+    int waited;
+    for (waited = 0; waited < 15000; waited += 25) {
+        if (kill((pid_t)pid, 0) < 0 && errno == ESRCH) return 1;
+        sleep_ms(25);
+    }
+    return 0;
+#endif
+}
+
+int main(int argc, char **argv)
+{
+    char lines[8][PATH_CAP * 4], temporary[PATH_CAP], token[65], pid_text[32];
+    pchar current[PATH_CAP];
+    const char *mode = getenv("FOX_TEST_RECOVERY_MODE");
+    char *cwd;
+    FILE *file;
+    int i;
+    unsigned long parent;
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    if (argc == 2 && strcmp(argv[1], "--breakaway") == 0) {
+        parent = strtoul(getenv("FOX_READER_LAUNCHER_PID"), NULL, 10);
+        if (!wait_for_launcher(parent)) return 11;
+        mark("detached-finished", "survived launcher exit");
+        return 0;
+    }
+    if (mode && strcmp(mode, "backend") == 0) {
+        const char *owner = getenv("FOX_READER_LAUNCHER_PID");
+        if (!owner || !*owner) return 12;
+        mark("launcher-pid", owner);
+#ifdef _WIN32
+        STARTUPINFOW startup;
+        PROCESS_INFORMATION process;
+        wchar_t executable[PATH_CAP], command[PATH_CAP + 32];
+        memset(&startup, 0, sizeof startup); startup.cb = sizeof startup;
+        memset(&process, 0, sizeof process);
+        if (!GetModuleFileNameW(NULL, executable, PATH_CAP)) return 13;
+        swprintf(command, PATH_CAP + 32, L"\"%ls\" --breakaway", executable);
+        if (!CreateProcessW(executable, command, NULL, NULL, FALSE,
+                            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+                            NULL, NULL, &startup, &process)) return 14;
+        CloseHandle(process.hThread); CloseHandle(process.hProcess);
+#else
+        pid_t child = fork();
+        if (child < 0) return 13;
+        if (child == 0) {
+            if (setsid() < 0) _exit(14);
+            execl(argv[0], argv[0], "--breakaway", (char *)NULL);
+            _exit(15);
+        }
+#endif
+        return 0;
+    }
+    if (argc != 1) return 2;
+    for (i = 0; i < 8; ++i) {
+        size_t size;
+        if (!fgets(lines[i], sizeof lines[i], stdin)) return 3;
+        size = strlen(lines[i]);
+        if (!size || lines[i][size - 1] != '\n') return 4;
+        lines[i][size - 1] = 0;
+    }
+    if (getchar() != EOF || strcmp(lines[0], "FOXREADER-UPDATER-1") ||
+        (strcmp(lines[1], "recover") && strcmp(lines[1], "cleanup")) || strcmp(lines[6], "0") ||
+        !update_hex(lines[4], 64) || !update_hex(lines[7], 64)) return 5;
+#ifdef _WIN32
+    if (!GetCurrentDirectoryW(PATH_CAP, current)) return 6;
+    snprintf(pid_text, sizeof pid_text, "%lu", (unsigned long)GetCurrentProcessId());
+#else
+    if (!getcwd(current, sizeof current)) return 6;
+    snprintf(pid_text, sizeof pid_text, "%lu", (unsigned long)getpid());
+#endif
+    cwd = PRINTABLE(current);
+    if (!cwd || strcmp(cwd, lines[2])) return 7;
+    PRINTABLE_FREE(cwd);
+    snprintf(temporary, sizeof temporary, "%s/ticket.token", lines[3]);
+    file = fopen(temporary, "rb");
+    if (!file || fread(token, 1, 64, file) != 64) return 8;
+    fclose(file); token[64] = 0;
+    if (strcmp(token, lines[4])) return 9;
+    file = fopen("recovery-handoff", "wb");
+    if (!file) return 10;
+    for (i = 0; i < 8; ++i) fprintf(file, "%s\n", lines[i]);
+    fclose(file);
+    mark("recovery-pid", pid_text);
+    if (strcmp(lines[1], "cleanup") == 0) {
+        const char *names[] = {"journal.bin", "state", "ticket.token"};
+        if (mode && strcmp(mode, "cleanup-error") == 0) {
+            fputs("ERROR\n", stdout); fflush(stdout);
+            return 18;
+        }
+        fputs("READY\n", stdout); fflush(stdout);
+        if (mode && strcmp(mode, "cleanup-fail") == 0) return 19;
+        if (mode && strcmp(mode, "cleanup-hang") == 0) sleep_ms(40000);
+        for (i = 0; i < 3; ++i) {
+            snprintf(temporary, sizeof temporary, "%s/%s", lines[3], names[i]);
+            remove(temporary);
+        }
+#ifdef _WIN32
+        if (!RemoveDirectoryA(lines[3])) return 20;
+#else
+        if (rmdir(lines[3])) return 20;
+#endif
+        mark("cleanup-finished", lines[3]);
+        return 0;
+    }
+    if (mode && strcmp(mode, "exit") == 0) return 1;
+    if (mode && strcmp(mode, "late-ready") == 0) sleep_ms(20000);
+    parent = strtoul(lines[5], NULL, 10);
+#ifdef _WIN32
+    /* Capture a process handle before READY, as the real updater does. */
+    {
+        HANDLE owner = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)parent);
+        DWORD result;
+        if (!owner) return 16;
+        fputs(mode && strcmp(mode, "error") == 0 ? "ERROR\n" : "READY\n", stdout);
+        fflush(stdout);
+        result = WaitForSingleObject(owner, 15000);
+        CloseHandle(owner);
+        if (result != WAIT_OBJECT_0) return 17;
+    }
+#else
+    if ((unsigned long)getppid() != parent) return 16;
+    fputs(mode && strcmp(mode, "error") == 0 ? "ERROR\n" : "READY\n", stdout);
+    fflush(stdout);
+    if (!wait_for_launcher(parent)) return 17;
+#endif
+    mark("recovered", "launcher exited before mutation");
+    return 0;
+}
+''',
+        encoding="utf-8",
+    )
+    with pytest.MonkeyPatch.context() as imports:
+        imports.syspath_prepend(str(root / "packaging"))
+        import toolchain
+
+        try:
+            compiler = toolchain.find_compiler(allow_download=False)
+        except toolchain.ToolchainError as exc:
+            pytest.skip(f"native recovery checks need a C compiler: {exc}")
+        output = directory / ("helper.exe" if os.name == "nt" else "helper")
+        toolchain.build_launcher(output, source, compiler, gui=False)
+    return output
+
+
+def prepare_recovery(root, *, state=None, helper=None, identifier="a"):
+    transaction = root / (".foxreader-update-" + identifier * 32)
+    transaction.mkdir()
+    (transaction / "journal.bin").write_bytes(b"fixture journal")
+    if state is not None:
+        (transaction / "state").write_bytes(state)
+    if helper is not None:
+        runner = transaction / "runner"
+        runner.mkdir()
+        shutil.copy2(helper, runner / ("foxreader-updater.exe" if os.name == "nt" else "foxreader-updater"))
+        (transaction / "inventory.sha256").write_bytes(b"b" * 64 + b"\n")
+    return transaction
+
+
+def fixture_process_running(pid):
+    if os.name == "nt":
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return False
+        try:
+            return kernel.WaitForSingleObject(handle, 0) == 258  # WAIT_TIMEOUT
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_launcher_does_not_start_backend_during_update(cli_config_installation):
+    root, launcher, _, env = cli_config_installation
+    path = root / ".fox-reader.update.lock"
+    with path.open("w+b") as stream:
+        stream.write(b"0")
+        stream.flush()
+        stream.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "being updated" in result.stdout
+        assert not (root / "started").exists()
+    # Releasing the lock leaves a harmless file; ordinary startup is restored.
+    (root / "bin" / ("fox-reader.exe" if os.name == "nt" else "fox-reader")).unlink()
+    result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+    assert "no Fox Reader binary" in result.stderr
+    assert path.is_file()
+
+
+@pytest.mark.parametrize("state,terminal", [
+    (None, False), (b"COMMITTED\n", True), (b"ROLLED_BACK\n", True),
+    (b"COMMITTED", False), (b"COMMITTED\nextra", False), (b"", False),
+])
+def test_launcher_checks_interrupted_update_before_backend(cli_config_installation, state, terminal):
+    root, launcher, _, env = cli_config_installation
+    prepare_recovery(root, state=state)
+    (root / "bin" / ("fox-reader.exe" if os.name == "nt" else "fox-reader")).unlink()
+
+    result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+
+    assert result.returncode != 0
+    assert not (root / "started").exists()
+    if terminal:
+        assert "no Fox Reader binary" in result.stderr
+    else:
+        assert "interrupted Fox Reader update needs recovery" in result.stderr
+        assert "no Fox Reader binary" not in result.stderr
+
+
+def test_launcher_blocks_multiple_interrupted_updates(cli_config_installation):
+    root, launcher, _, env = cli_config_installation
+    prepare_recovery(root, identifier="a")
+    prepare_recovery(root, identifier="b")
+
+    result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+
+    assert result.returncode != 0
+    assert "Cannot safely check" in result.stderr
+    assert not (root / "started").exists()
+
+
+def test_launcher_recovers_with_fresh_pipe_ticket_and_stays_closed(cli_config_installation, recovery_helper):
+    root, launcher, _, env = cli_config_installation
+    transaction = prepare_recovery(root, helper=recovery_helper)
+    (transaction / "ticket.token").write_text("old authorization", encoding="utf-8")
+    (transaction / "ticket.new").write_text("interrupted token write", encoding="utf-8")
+    (root / "bin" / ("fox-reader.exe" if os.name == "nt" else "fox-reader")).unlink()
+    process = subprocess.Popen([str(launcher), "--cli"], cwd=root, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, errors = process.communicate(timeout=20)
+
+    assert process.returncode == 0, (output + errors).decode(errors="replace")
+    wait_for(lambda: (root / "recovered").exists(), description="recovery after launcher exit")
+    lines = (root / "recovery-handoff").read_text(encoding="utf-8").splitlines()
+    assert lines[:4] == ["FOXREADER-UPDATER-1", "recover", str(root), transaction.name]
+    assert re.fullmatch("[0-9a-f]{64}", lines[4])
+    assert lines[4] == (transaction / "ticket.token").read_text()
+    assert lines[5:] == [str(process.pid), "0", "b" * 64]
+    assert not (root / "started").exists()
+    assert "will remain closed" in output.decode()
+
+
+@pytest.mark.parametrize("mode", ["error", "exit", "late-ready"])
+def test_failed_recovery_handoff_kills_helper_before_launcher_exit(
+    cli_config_installation, recovery_helper, mode,
+):
+    root, launcher, _, env = cli_config_installation
+    prepare_recovery(root, helper=recovery_helper)
+    env["FOX_TEST_RECOVERY_MODE"] = mode
+
+    result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=25)
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Could not start update recovery" in result.stderr
+    assert not fixture_process_running(int((root / "recovery-pid").read_text()))
+    assert not (root / "recovered").exists()
+    assert not (root / "started").exists()
+
+
+@pytest.mark.parametrize("digest", [b"b" * 64 + b"\0", b"b" * 63, b"B" * 64, b"b" * 64 + b"\nextra"])
+def test_launcher_rejects_invalid_recovery_digest(cli_config_installation, recovery_helper, digest):
+    root, launcher, _, env = cli_config_installation
+    transaction = prepare_recovery(root, helper=recovery_helper)
+    (transaction / "inventory.sha256").write_bytes(digest)
+
+    result = subprocess.run([str(launcher), "--cli"], cwd=root, env=env,
+                            capture_output=True, text=True, timeout=10)
+
+    assert result.returncode != 0
+    assert "inventory digest is invalid" in result.stderr
+    assert not (root / "recovery-pid").exists()
+    assert not (root / "started").exists()
+
+
+def test_backend_receives_launcher_pid_and_can_detach_updater(cli_config_installation, recovery_helper):
+    root, launcher, _, env = cli_config_installation
+    backend = root / "bin" / ("fox-reader.exe" if os.name == "nt" else "fox-reader")
+    shutil.copy2(recovery_helper, backend)
+    env.update(FOX_TEST_RECOVERY_MODE="backend", FOX_READER_LAUNCHER_PID="1")
+    process = subprocess.Popen([str(launcher), "--cli"], cwd=root, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, errors = process.communicate(timeout=20)
+
+    # This fixture intentionally exits before serving HTTP. The launcher reports
+    # that startup failure while still releasing its job/process-group ownership.
+    assert process.returncode == 1, (output + errors).decode(errors="replace")
+    assert b"backend exited before it was ready (code 0)" in errors
+    assert (root / "launcher-pid").read_text() == str(process.pid)
+    wait_for(lambda: (root / "detached-finished").exists(), description="updater survives owner shutdown")
+
+
+def test_launcher_cleans_terminal_transactions_before_normal_startup(cli_config_installation, recovery_helper):
+    root, launcher, _, env = cli_config_installation
+    transactions = [
+        prepare_recovery(root, state=b"COMMITTED\n", identifier="a"),
+        prepare_recovery(root, state=b"ROLLED_BACK\n", identifier="b"),
+        prepare_recovery(root, state=b"COMMITTED\n", identifier="c"),
+    ]
+    # Cleanup can have removed its journal before crashing; the terminal marker
+    # still proves that the remaining transaction is safe to remove.
+    (transactions[-1] / "journal.bin").unlink()
+    shutil.copy2(recovery_helper, root / ("foxreader-updater.exe" if os.name == "nt" else "foxreader-updater"))
+    (root / "bin" / ("fox-reader.exe" if os.name == "nt" else "fox-reader")).unlink()
+    process = subprocess.Popen([str(launcher), "--cli"], cwd=root, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, errors = process.communicate(timeout=20)
+
+    assert process.returncode == 1, (output + errors).decode(errors="replace")
+    assert b"no Fox Reader binary" in errors  # Normal startup proceeded after cleanup.
+    assert all(not transaction.exists() for transaction in transactions)
+    lines = (root / "recovery-handoff").read_text(encoding="utf-8").splitlines()
+    assert lines[1] == "cleanup"
+    assert lines[5:] == [str(process.pid), "0", "0" * 64]
+    assert not (root / "recovered").exists()
+
+
+@pytest.mark.parametrize("mode", ["cleanup-error", "cleanup-fail", "cleanup-hang"])
+def test_launcher_cleanup_failure_does_not_block_backend(cli_config_installation, recovery_helper, mode):
+    root, launcher, port, env = cli_config_installation
+    transaction = prepare_recovery(root, state=b"COMMITTED\n")
+    shutil.copy2(recovery_helper, root / ("foxreader-updater.exe" if os.name == "nt" else "foxreader-updater"))
+    env["FOX_TEST_RECOVERY_MODE"] = mode
+    process = subprocess.Popen([str(launcher), "--cli"], cwd=root, env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(lambda: health(port), timeout=45 if mode == "cleanup-hang" else 15,
+                 description="backend startup after cleanup failure")
+        assert process.poll() is None
+        assert transaction.is_dir()
+        assert not fixture_process_running(int((root / "recovery-pid").read_text()))
+        assert "Cleanup will be retried next launch" in log_tail(root / "logs" / "launcher.log")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=25)
+        wait_for(lambda: not health(port), description="fixture backend shutdown")
+
+
+@pytest.mark.parametrize("default,user,host,port", [
+    (None, None, "127.0.0.1", 7954),
+    ("host: 0.0.0.0\nport: 8123\n", None, "0.0.0.0", 8123),
+    ("host: 0.0.0.0\nport: 8123\n", "theme: light\n", "127.0.0.1", 7954),
+    ("port: 8123\n", "port: 9000\n", "127.0.0.1", 9000),
+    ("port: 8123\n", "port: broken\n", "127.0.0.1", 7954),
+    ("port: 8123oops\n", None, "127.0.0.1", 7954),
+    ("host: ::1\nport: 8123\nextra:\n  host: elsewhere\n  port: 9000\n", None, "::1", 8123),
+])
+def test_native_configuration_selection(config_reader, tmp_path, default, user, host, port):
+    config = tmp_path / "config"
+    for name, contents in (("fox_config.yaml", default), ("user_config.yaml", user)):
+        if contents is not None:
+            config.mkdir(exist_ok=True)
+            (config / name).write_text(contents, encoding="utf-8")
+    result = subprocess.run([str(config_reader)], cwd=tmp_path, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [host, str(port)]
+
+
+@pytest.mark.parametrize("filename", ["fox_config.yaml", "user_config.yaml"])
+@pytest.mark.parametrize("source", [
+    b"{host: 127.0.0.1, port: 8123, theme: light, layout: basic, mtl_dir: models}\n",
+    b"'host': 127.0.0.1\n'port': 8123\n",
+    "host: 127.0.0.1\nport: 8123\n".encode("utf-8-sig"),
+    "host: 127.0.0.1\nport: 8123\n".encode("utf-16"),
+    b"host: 127.0.0.1\nport: 8123\ntheme: invalid\nextra:\n  host: other\n  port: 9000\n",
+], ids=["flow", "quoted-keys", "utf8-bom", "utf16-bom", "invalid-theme"])
+def test_repaired_yaml_agrees_with_native_reader(config_reader, tmp_path, filename, source):
+    from fox_reader.config import ConfigManager
+
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "fox_config.yaml").write_text("host: 0.0.0.0\nport: 9000\n", encoding="utf-8")
+    (config / filename).write_bytes(source)
+    expected = ConfigManager(config).load()
+
+    result = subprocess.run([str(config_reader)], cwd=tmp_path, capture_output=True, text=True, timeout=5)
+
+    assert result.returncode == 0, result.stderr
+    assert expected.port == 8123
+    assert result.stdout.splitlines() == [expected.host, str(expected.port)]
+
+
 def stop_launcher(process):
     if os.name == "nt":
         dialog = request_window_close(process)
@@ -249,6 +789,92 @@ def test_graphical_launch_without_a_controller_cannot_start_an_invisible_backend
                             capture_output=True, text=True, start_new_session=True, timeout=15)
     assert result.returncode != 0, result.stdout + result.stderr
     assert not (root / "started").exists()
+
+
+@pytest.mark.parametrize("filename", ["fox_config.yaml", "user_config.yaml"])
+def test_startup_refreshes_configuration_after_backend_repair(installation, filename):
+    root, launcher, port, env = installation
+    config = root / "config" / filename
+    # Flow-style YAML is valid but intentionally beyond the small native reader.
+    # The real backend canonicalizes it before binding. Wait for child startup
+    # here so the rewrite occurs after the launcher has read the original file.
+    config.write_text(f"{{host: 127.0.0.1, port: {port}}}\n", encoding="utf-8")
+    args = [] if os.name == "nt" else ["--cli"]
+    process = subprocess.Popen([str(launcher), *args], env=env, cwd=root,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(lambda: (root / "started").exists())
+        config.write_text(f"host: 127.0.0.1\nport: {port}\n", encoding="utf-8")
+        wait_for(lambda: f"Fox Reader is ready at http://127.0.0.1:{port}/" in
+                 log_tail(root / "logs" / "launcher.log"))
+        if os.name == "nt":
+            wait_for_native_page(root, process)
+        stop_launcher(process)
+        assert process.wait(timeout=25) == 0
+        assert (root / "shutdown-ok").read_text() == "token accepted"
+        assert not health(port)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("filename", ["fox_config.yaml", "user_config.yaml"])
+def test_cli_startup_observes_config_manager_repair(cli_config_installation, filename):
+    root, launcher, port, env = cli_config_installation
+    config = root / "config" / filename
+    config.write_text(f"{{host: 127.0.0.1, port: {port}, theme: invalid}}\n", encoding="utf-8")
+    # Use a private hidden console for CTRL_BREAK on Windows. This exercises
+    # the real graceful shutdown handler without signaling pytest's console.
+    helper = r'''
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from fox_reader.config import ConfigManager
+
+root, port = Path(sys.argv[2]), int(sys.argv[3])
+options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
+process = subprocess.Popen([sys.argv[1], "--cli"], cwd=root, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+try:
+    deadline = time.monotonic() + 15
+    while not (root / "started").exists():
+        assert process.poll() is None, "launcher exited before backend startup"
+        assert time.monotonic() < deadline, "backend startup marker missing"
+        time.sleep(0.05)
+    config = ConfigManager(root / "config").load()
+    assert config.port == port and config.theme == "dark"
+    expected = f"Fox Reader is ready at http://127.0.0.1:{port}/"
+    while expected not in (root / "logs/launcher.log").read_text(encoding="utf-8"):
+        assert process.poll() is None, "launcher exited before repaired address was ready"
+        assert time.monotonic() < deadline, "launcher kept probing the original address"
+        time.sleep(0.05)
+    process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+    assert process.wait(timeout=25) == 0, "launcher did not shut down cleanly"
+finally:
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=5)
+'''
+    options = {}
+    if os.name == "nt":
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        options.update(startupinfo=startup, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    result = subprocess.run([sys.executable, "-c", helper, str(launcher), str(root), str(port)],
+                            cwd=root, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, timeout=45, **options)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (root / "shutdown-ok").read_text() == "token accepted"
+    assert not (root / "ui-requested").exists()
+    assert not health(port)
 
 
 def test_owned_close_and_native_output(installation):
@@ -396,6 +1022,30 @@ def launcher_toolchain(monkeypatch):
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("system,kind", [("Windows", "msvc"), ("Linux", "gcc"), ("Darwin", "clang")])
+def test_updater_build_uses_native_controls_and_cpp17(launcher_toolchain, monkeypatch, tmp_path, system, kind):
+    toolchain = launcher_toolchain
+    monkeypatch.setattr(toolchain.platform, "system", lambda: system)
+    compiler_path = tmp_path / ("cl.exe" if kind == "msvc" else kind)
+    compiler = toolchain.Compiler(kind, compiler_path, "fixture compiler")
+    if kind != "msvc":
+        compiler_path.with_name("g++" if kind == "gcc" else "clang++").write_bytes(b"fixture driver")
+    monkeypatch.setattr(toolchain.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="-lgtk-3"))
+
+    command = toolchain._updater_command(compiler, tmp_path / "updater", tmp_path)
+
+    assert "/std:c++17" in command if kind == "msvc" else "-std=c++17" in command
+    assert not any("WebView2" in argument or "WebKit" in argument or "python" in argument for argument in command)
+    if system == "Windows":
+        assert "/MT" in command and "/SUBSYSTEM:WINDOWS" in command
+        assert "comctl32.lib" in command
+    elif system == "Linux":
+        assert "-static-libstdc++" in command and "-lgtk-3" in command
+    else:
+        assert "Cocoa" in command and "-lproc" in command
+        assert command[command.index("-arch") + 1] == "arm64"
 
 
 @pytest.mark.parametrize("system,kind", [

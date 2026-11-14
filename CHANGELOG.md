@@ -8,6 +8,13 @@ in a tagged version.
 
 ### Added
 
+- Download and install updates through a separate native updater on Windows,
+  Linux, and macOS. Downloads, joined archives, and prepared files are verified;
+  Fox Reader closes for installation and stays closed after success.
+- Transactional replacement with automatic rollback and recovery on the next
+  launch after interruption. Updates preserve configuration and models, merge
+  fonts, and clean up their temporary files. `build-info.json` is replaced with
+  the new release metadata and restored with the previous version on rollback.
 - Native Yes/No close confirmation on Windows, Linux, and macOS. The dialog
   follows the system theme, stays above its parent window, and defaults to No.
 - Backend health monitoring on setup, settings, and custom-endpoint pages,
@@ -20,6 +27,16 @@ in a tagged version.
 
 ### Changed
 
+- In-app updates are available only in packaged builds. Source runs omit the
+  update controls and reject update API requests, even if build metadata has
+  been copied into the checkout.
+- Configuration is generated from built-in defaults on first launch and is no
+  longer tracked or bundled in release archives. Existing configuration gains
+  new fields automatically, including manually created `user_config.yaml` files.
+- Packaged licences, notices, terms, and the font guide are collected in
+  `legal/` beside the launcher, including font and icon licences, the WebView2
+  SDK licence where applicable, and generated frontend notices when available.
+  Repository file locations are unchanged.
 - Custom-endpoint names must be unique across all endpoints and languages,
   ignoring case and surrounding whitespace. Existing duplicates remain
   available, but conflicting imports and edits require a new name before saving.
@@ -28,6 +45,14 @@ in a tagged version.
 
 ### Fixed
 
+- Settings continues reporting update preparation and handoff, disables
+  cancellation during replacement, and suppresses offline warnings when the
+  backend intentionally closes for installation. Failed handoffs restore health
+  warnings, and lost download responses recover the current update status.
+- Invalid configuration fields are repaired individually with diagnostics,
+  preserving valid settings and unknown fields when the YAML parses. Repairs
+  update files directly without automatic backups; malformed documents are
+  replaced with defaults.
 - Custom-endpoint hostnames reject protocol prefixes and use the selected
   Scheme. Existing saved HTTP(S) URLs migrate while preserving their effective
   address, endpoint ID, activation, and encryption key.

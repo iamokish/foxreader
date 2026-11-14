@@ -1,35 +1,125 @@
 # Updating Fox Reader
 
-Open **Settings → Updates**, then select **Check for updates**. Checking is
+In a packaged build, open **Settings → Updates**, then select **Check for updates**. Checking is
 explicit: opening Fox Reader does not contact GitHub. The app checks the latest
 stable release and keeps the installed Windows/Linux/macOS, architecture,
 CPU/CUDA, and GGUF choices. If the release lacks an exact match, use the release
 page to choose a distribution yourself.
 
-**Download update** saves the verified archive under `updates/<version>/` beside
-the launcher. Every part is checked for its declared size and SHA256, and split
-archives are joined in their numbered order and checked again. Completed parts
-survive cancellation and failed downloads; a retry checks their hashes before
-reusing them. The app never extracts, installs, or executes an update.
+When running from source, update controls are omitted and the update API is
+disabled. A copied `build-info.json` does not enable updates in a source checkout.
 
-After the download finishes:
+## Download and install
 
-1. Close Fox Reader and extract the downloaded archive into a **new folder**.
-2. Copy your `config`, `fonts`, and `models` folders from the old installation to
-   the new installation. Keep the old folder as a backup.
-3. Start the new launcher and check the setup and reader before removing the old
-   installation. Keep the old version if the new one does not work for you.
+In supported packaged installations, choose **Download and install**. **Save
+your work first:** Fox Reader closes when the separate **Fox Reader Updater**
+window is ready. The updater waits for the backend and launcher to exit,
+installs the release, and shows success. It does not restart Fox Reader. Close
+the updater, then start Fox Reader yourself when ready.
 
-Source checkouts and older releases without `build-info.json` can check release
-notes, but download selection stays manual. A downloaded split archive needs
-approximately twice its archive size in free space while joining; the app checks
-space before transferring data and removes the numbered parts after a successful
-join. It keeps your existing installation and user files throughout.
+If preparation fails or the updater cannot start safely, Fox Reader stays open
+and reports the error. A failed handoff restores normal backend health warnings.
+
+Downloads first go under `updates/<version>/` beside the launcher. Every part
+is checked for its declared size and SHA256; split archives are joined in their
+numbered order and checked again. Completed parts survive cancellation and
+failed downloads, and a retry checks their hashes before reusing them. After
+verification, Fox Reader extracts and validates a prepared tree beside the
+installation. The native updater checks that tree against the verified file
+inventory before replacing anything.
+
+You can cancel downloading or preparation from Settings. After the handoff,
+follow the updater window; cancellation is available only before file
+replacement begins. Once files are being changed, let installation or rollback
+finish. Settings stops retrying backend requests when the app intentionally
+closes for the update.
+
+Cancelling in the updater discards its prepared files when you close that
+window. Start a new download to try again. Cancelling earlier in Settings keeps
+verified downloads available for reuse.
+If the updater is interrupted while cleaning up a cancelled update, the next
+launcher retries removal of its remaining temporary files.
+
+| Installation content | Update behavior |
+|---|---|
+| `bin/`, `legal/` | Replaced exactly by the new release; obsolete files are removed. |
+| `fonts/` | Merged: packaged paths replace matching old paths; other user fonts stay. |
+| Launcher, updater, icons, platform viewer libraries, desktop entry files | Refreshed from the release; obsolete managed components are removed. |
+| `build-info.json` | Replaced with the new release metadata; restored to the previous version if installation rolls back. |
+| `config/`, `models/` | Left untouched by installation. |
+
+Other personal files remain in place. The normal app startup/shutdown cache
+cleanup still applies.
+
+## Failure recovery and cleanup
+
+File replacement uses a journal and keeps the previous managed files until the
+update commits. If replacement fails, the updater automatically restores those
+files. If a process or computer stops during replacement or rollback, the next
+launcher detects the unfinished transaction and runs recovery before starting
+the backend. An active updater or an unfinished recovery blocks normal startup.
+
+Prepared files, the verified archive, and rollback copies live temporarily in
+`.foxreader-update-<id>/` beside the launcher. After success, large temporary
+files are removed immediately. Closing the updater starts a silent cleanup
+helper so its running copy can also be removed. If locked files prevent complete
+cleanup, a later launcher retries cleanup of the completed transaction. A
+failed cleanup of a completed update does not undo the update.
+
+Keep an unfinished transaction folder until recovery completes: it holds the
+files needed to restore the previous installation. The updater reports failures
+instead of restarting the app automatically.
+
+## Manual updates and configuration
+
+If the installed updater is unavailable, **Download update** keeps the existing
+manual workflow and displays the verified archive path. Older packaged
+releases without `build-info.json` use the release page to select a
+download. Existing releases that predate the native updater need one manual
+update to a release that includes it; subsequent updates can install through
+Settings. After downloading manually:
+
+1. Close Fox Reader and extract the archive into a **new folder**.
+2. Copy `config`, `fonts`, and `models` from the old installation to the new one.
+   Keep the old installation until the new version works.
+3. Start the new launcher and check the setup and reader.
+
+Release archives do not include `fox_config.yaml`. The new backend creates it
+from built-in defaults when absent and updates existing configuration on launch,
+adding new fields and repairing invalid values while keeping valid settings
+and unknown fields when the YAML parses. Repairs update the file directly
+without automatic backups; malformed documents are replaced with defaults.
+Copy `user_config.yaml` too if you use it; it remains the preferred configuration
+file. You do not need to merge a template after updating. See
+[Configuration](configuration.md) for repair behavior and diagnostics.
+
+A split archive needs space for its parts and the joined archive. Automatic
+installation also needs space for extraction, the merged fonts tree, and
+recovery copies of the launchers and macOS app. Fox Reader checks free space
+before preparing the update and removes numbered parts after a successful join.
 
 Local builds made with `--no-window` can check newer versions and release notes,
 but cannot download an update archive through the app: published CI archives
 include native windows. Rebuild the newer release with `--no-window` to keep Fox
 Reader's graphical windows excluded.
+
+## Native updater implementation
+
+`foxreader-updater.exe` on Windows, or `foxreader-updater` on Linux/macOS, ships
+beside the launcher in native-window builds. It is a separate C++17 program
+using Win32, GTK 3, or Cocoa respectively. `--no-window` builds omit it.
+
+The app launches a transaction-local copy through an authenticated, one-use
+inherited pipe. Opening the updater by itself does not authorize an install.
+The handoff supplies the installation, transaction, process identities, and the
+expected inventory digest; the updater accepts only its managed paths. Archive
+extraction rejects paths and links that leave the prepared tree. Internal
+relative library/framework symlinks remain supported.
+
+The shared core is in `packaging/updater/core.cpp`; platform UI and handoff code
+are alongside it. Native tests exercise replacement, font merging, interrupted
+installation/rollback recovery, integrity failures, and cleanup. See the
+[build guide](../packaging/build.md) for compiler and platform requirements.
 
 ## Release workflow
 

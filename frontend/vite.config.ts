@@ -16,8 +16,8 @@ export default defineConfig({
     emptyOutDir: false,
     // Emit bundled-dependency licenses (see NOTICE §1B): writes
     // static/.vite/license.md listing every package bundled into app.js.
-    // embed_assets.py embeds the whole static/ dir, so the license file
-    // ships inside the binary alongside the bundle. (Note: top-level
+    // packaging/build.py copies the report to legal/frontend-licenses.md;
+    // embed_assets.py excludes the .vite directory. (Note: top-level
     // esbuild.legalComments does NOT work here — Vite 8 minifies with oxc
     // and ignores esbuild options, as the build warning confirms.)
     license: true,

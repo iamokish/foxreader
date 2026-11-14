@@ -15,8 +15,8 @@ from fox_reader.font_calibration import PROFILE_SCHEMA, profile_for
 logger = logging.getLogger(__name__)
 
 #: What counts as a font in ``fonts/``. Nothing else in that folder does --
-#: not ``.fonts_cache.json``, not the ``LICENSE-ComicMono`` that ships beside the
-#: fallbacks, not an editor's stray backup. This matters for more than tidiness:
+#: not ``.fonts_cache.json``, licences from font packs or older builds, or an
+#: editor's stray backup. This matters for more than tidiness:
 #: whether the bundled fallbacks load is decided by how many fonts are in the
 #: folder, so a folder holding only those files has to count as empty.
 FONT_EXTENSIONS = (".ttf", ".otf")

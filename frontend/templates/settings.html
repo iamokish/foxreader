@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <script type="module" src="/static/desktop-entry.js"></script>
+  {% if updates_enabled %}
   <script type="module" src="/static/updates-entry.js"></script>
+  {% endif %}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fox Reader — Settings</title>
@@ -827,16 +829,21 @@
       <div id="settings" aria-busy="true"><div class="empty">Loading translation models…</div></div>
     </section>
 
+    {% if updates_enabled %}
     <section class="api-section" aria-labelledby="updatesTitle" id="updatesPanel">
       <div class="section-title" id="updatesTitle">Fox Reader Updates</div>
       <div class="section-description">
         Check for a new release and download the version matching this installation.
-        Every download is verified before it is ready to install.
+        Every download is verified before installation.
       </div>
       <div id="updateVersion" class="update-status">Reading installed version…</div>
+      <p id="updateInstallHint" class="update-status" hidden>
+        Save your work first. Download and install will close Fox Reader and open
+        its updater. Start Fox Reader yourself after the updater reports success.
+      </p>
       <div class="update-actions">
         <button type="button" class="save-tokens" id="checkUpdateBtn">Check for updates</button>
-        <button type="button" class="save-tokens" id="downloadUpdateBtn" hidden>Download update</button>
+        <button type="button" class="save-tokens" id="downloadUpdateBtn" aria-describedby="updateInstallHint" hidden>Download update</button>
         <button type="button" class="save-tokens" id="cancelUpdateBtn" hidden>Cancel download</button>
       </div>
       <progress class="update-progress" id="updateProgress" max="1" value="0" aria-label="Update download progress" hidden></progress>
@@ -853,6 +860,7 @@
         Keep the previous folder until the new version starts correctly.
       </div>
     </section>
+    {% endif %}
     <div id="message" data-selectable></div>
   </main>
 

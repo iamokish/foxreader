@@ -53,6 +53,10 @@ Notes:
 You need five things: Python 3.12, Node.js, a JS package manager,
 `uv`, Git, and a C compiler. Install them in this order.
 
+Native-window builds also compile the separate updater with C++17 support from
+the same toolchain. Its UI uses Win32 on Windows, GTK 3 on Linux, and Cocoa on
+macOS; no additional browser runtime is bundled for it.
+
 ### 1a. Python 3.12 (exactly 3.12 — not 3.11, not 3.13)
 
 Download: <https://www.python.org/downloads/> (pick any **3.12.x**).
@@ -481,7 +485,7 @@ python packaging/build.py --device cpu --no-gguf --no-window
 ```
 
 This removes every Fox Reader graphical window: the reader, loading banner,
-browser controller, and error dialogs. It builds a console launcher without
+browser controller, updater, and error dialogs. It builds a console launcher without
 WebView2 or GTK/WebKitGTK, and omits their native assets. The Linux launcher
 therefore needs only the C compiler, without the WebKitGTK development
 packages; the backend and optional GGUF build still need their usual tools
@@ -603,6 +607,38 @@ gh attestation verify <file> --repo iamokish/foxreader
    viewer loads `http://127.0.0.1:7954` (or your configured host/port).
 4. First launch opens `/setup`, which downloads the models (needs internet
    once; weights live in `models/` afterwards).
+
+The archive includes no `fox_config.yaml`. On first launch, the backend creates
+`config/` and `config/fox_config.yaml` using its built-in defaults. Your local
+configuration is never copied into a build. When replacing an installation,
+copy its `config/` folder to the new one before starting it for a manual update;
+automatic updates preserve this folder in place. Launch adds any new
+fields and repairs invalid values while preserving valid settings and unknown
+fields when the YAML parses. Repairs update files directly without automatic
+backups; malformed documents are replaced with defaults. A manually created
+`config/user_config.yaml` takes precedence. See the
+[configuration guide](../docs/configuration.md) for details.
+
+The portable folder collects its legal documents under `legal/` beside the
+launcher: `LICENSE`, `NOTICE`, `TERMS.md`, `FONT.md`, `OFL.txt`, and
+`LICENSE-ComicMono`, plus `LICENSE-material-icons`. Native Windows builds also
+include `WebView2-LICENSE.txt` there. When Vite's generated
+`frontend/static/.vite/license.md` exists, it is copied as
+`legal/frontend-licenses.md`; older prebuilt frontends may lack this report.
+Keep `legal/` with the distributed app. Original repository files, embedded
+frontend licences, and runtime dependency metadata remain in their existing
+locations.
+
+Native-window builds include `foxreader-updater.exe` on Windows or
+`foxreader-updater` on Linux/macOS beside the launcher. **Settings → Updates →
+Download and install** verifies and prepares the release, opens this separate
+updater, and closes Fox Reader. Save your work first. The updater replaces
+`bin/`, `legal/`, and managed launchers/assets, merges packaged fonts with user
+fonts, and leaves `config/` and `models/` untouched. Failed replacement rolls
+back; an interrupted transaction is recovered by the next launcher. A successful
+update does not restart Fox Reader. See the [update guide](../docs/updating.md)
+for the complete workflow. Source checkouts, unavailable helpers, and
+`--no-window` builds retain their documented manual update paths.
 
 Press **F11** or **Alt+Enter** to toggle fullscreen. The title bar follows the
 system appearance, with a dark fallback. On Mac keyboards, F11 may require

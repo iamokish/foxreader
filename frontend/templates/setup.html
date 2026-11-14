@@ -737,8 +737,8 @@
        never by JS after load: a returning user must not see this flash, and a
        first-run user must not get a click through before it covers the page.
        Everything the card says is inline markup, so it cannot fail to render
-       and needs nothing from the backend -- TERMS.md ships beside the
-       launcher, not inside the binary. */
+       and needs nothing from the backend -- packaged TERMS.md lives in
+       legal/ beside the launcher; source checkouts keep it at the root. */
     .copyright-gate {
       display: none;
     }
@@ -1197,8 +1197,9 @@
 
       <p class="copyright-foot" data-selectable>
         Summary only — the binding text is <b>TERMS.md §4</b> (manga copyright)
-        and <b>NOTICE §4</b> (dataset terms), both shipped beside the Fox Reader
-        launcher. You can reopen this notice from the
+        and <b>NOTICE §4</b> (dataset terms). Find both in <code>legal/</code>
+        beside the packaged launcher, or in the repository root when running
+        from source. You can reopen this notice from the
         <b>Terms &amp; Licenses</b> link on this page.
       </p>
 

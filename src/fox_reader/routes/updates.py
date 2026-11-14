@@ -10,8 +10,9 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from fox_reader import utils
 from fox_reader.routes.system import _is_loopback
-from fox_reader.services.updates import UpdateError, UpdateService
+from fox_reader.services.updates import SOURCE_UPDATE_MESSAGE, UpdateError, UpdateService
 from fox_reader.utils import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
@@ -22,11 +23,15 @@ _service_lock = threading.Lock()
 def _service(request: Request) -> UpdateService:
     with _service_lock:
         if not hasattr(request.app.state, "updates"):
-            request.app.state.updates = UpdateService(PROJECT_ROOT)
+            from fox_reader import runtime
+
+            request.app.state.updates = UpdateService(PROJECT_ROOT, shutdown=lambda: runtime.shutdown_soon(1.0))
         return request.app.state.updates
 
 
 def _access(request: Request, mutation: bool = False) -> JSONResponse | None:
+    if not utils.is_frozen:
+        return JSONResponse({"error": SOURCE_UPDATE_MESSAGE}, status_code=403)
     if not _is_loopback(request):
         return JSONResponse({"error": "Updates are available only on this computer."}, status_code=403)
     try:

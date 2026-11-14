@@ -17,7 +17,9 @@ def stage_desktop(root: Path, launcher: Path, system: str, version: str,
         license = launcher.parent / "WebView2-LICENSE.txt"
         if not license.is_file() or not license.stat().st_size:
             raise RuntimeError("WebView2 SDK license is missing beside the compiled launcher")
-        shutil.copy2(license, root / license.name)
+        legal = root / "legal"
+        legal.mkdir(exist_ok=True)
+        shutil.copy2(license, legal / license.name)
     elif system == "Darwin":
         if no_window:
             # Finder opens .command files in Terminal. Keep arguments literal and

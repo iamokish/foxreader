@@ -19,14 +19,15 @@ venv/
 !/fonts/NotoSansSymbols2-Regular.otf
 !fonts/OFL.txt
 
-# Config
-/config/*
-!/config/fox_config.yaml
+# Config (created and repaired on first run)
+/config/
 
 # Log
 log/
 /logs/
 /updates/
+/.foxreader-update-*/
+/.fox-reader.update.lock
 *.log
 stdout.log
 stderr.log

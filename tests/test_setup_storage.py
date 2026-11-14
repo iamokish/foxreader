@@ -345,10 +345,10 @@ def test_direct_download_save_failure_does_not_start_worker(env, monkeypatch):
     monkeypatch.setattr(setup, "_model_completed", lambda path, item: False)
     monkeypatch.setattr(setup, "_terms_refusal", lambda models: None)
 
-    def fail_save():
+    def fail_save(*args):
         raise OSError("disk full")
 
-    monkeypatch.setattr(env.manager, "save", fail_save)
+    monkeypatch.setattr(config_module.os, "replace", fail_save)
     response = env.client.post("/api/setup/download", json={"mtl_dir": "new", "selected_mtl": ["test-mtl"]})
     assert response.status_code == 503
     assert setup._download_state["active"] is False

@@ -16,6 +16,10 @@ model weights, datasets, fonts, libraries, and online APIs each keep their
 own terms, listed in `NOTICE` §§1–4 and linked from `/setup` next to each
 download.
 
+In packaged applications, these terms, `LICENSE`, and `NOTICE` are in `legal/`
+beside the launcher. In the source repository, they remain at the repository
+root.
+
 ## 2. License summary (short version — LICENSE and NOTICE control)
 
 - Fox Reader's own code: **AGPL-3.0-or-later**. You may run, study, share,

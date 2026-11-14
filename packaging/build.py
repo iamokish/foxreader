@@ -6,12 +6,15 @@ binary, builds the C launcher, and stages the result as::
 
     fox-reader/
       launcher(.exe)   the only thing the user starts
-      LICENSE/NOTICE/TERMS.md  legal: AGPL text, attributions, terms of use
+      foxreader-updater(.exe)  native update window, started only by Fox Reader
+      legal/           licenses, attributions, terms of use and font guide
       bin/             the compiled backend and everything it links against
       cache/           empty; scratch, cleared at startup and at shutdown
-      config/          fox_config.yaml, and nothing else
       fonts/           the user's fonts; the fallbacks live in the binary
       models/          empty; weights are downloaded on first run
+
+Configuration is created on first run. No local config directory or files are
+copied into builds, so upgrades cannot overwrite a user's configuration.
 
 Nuitka rather than PyInstaller for one reason: PyInstaller ships ``.pyc`` files
 that decompile cleanly, so the "compiled" build hands the source to anyone who
@@ -77,7 +80,14 @@ import llamacpp  # noqa: E402
 import macos  # noqa: E402
 
 # pyrefly: ignore [missing-import]
-from toolchain import LAUNCHER_NAME, ToolchainError, build_launcher, find_compiler  # noqa: E402
+from toolchain import (  # noqa: E402
+    LAUNCHER_NAME,
+    UPDATER_NAME,
+    ToolchainError,
+    build_launcher,
+    build_updater,
+    find_compiler,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_DIR = Path(__file__).resolve().parent
@@ -1179,7 +1189,7 @@ def create_build_venv(device: str) -> Path:
 
 
 def compile_launcher(python: Path, *, no_window: bool = False) -> tuple[Path, str]:
-    """Build the C launcher. Returns the binary and the compiler's kind.
+    """Build the native launcher and updater with the same compiler.
 
     Deliberately before Nuitka: a machine with no C compiler should find that out
     in two seconds, not after a twenty-minute compile of everything else. The kind
@@ -1196,6 +1206,8 @@ def compile_launcher(python: Path, *, no_window: bool = False) -> tuple[Path, st
     try:
         compiler = find_compiler(python=python)
         built = build_launcher(out, compiler=compiler, no_window=no_window)
+        if not no_window:
+            build_updater(WORK_DIR / UPDATER_NAME, compiler=compiler)
     except ToolchainError as exc:
         raise BuildError(str(exc)) from exc
     print()
@@ -2396,19 +2408,33 @@ def stage_layout(dist: Path, launcher: Path, *, no_window: bool = False) -> Path
     # archive stays small and extraction restores the links.
     shutil.copytree(dist, root / "bin", symlinks=True)
     shutil.copy2(launcher, root / LAUNCHER_NAME)
+    if not no_window:
+        updater = launcher.parent / UPDATER_NAME
+        if not updater.is_file() or not updater.stat().st_size:
+            raise BuildError(f"{updater} is missing or empty; the native build requires its updater")
+        shutil.copy2(updater, root / UPDATER_NAME)
+        if os.name != "nt":
+            (root / UPDATER_NAME).chmod(0o755)
     if os.name != "nt":
         (root / LAUNCHER_NAME).chmod(0o755)
 
-    # Legal files at the root, next to the launcher users actually see:
-    # LICENSE (AGPL §4/§6: every binary conveyance must include the license
-    # text), NOTICE (Apache-2.0 §4d attributions plus the model/dataset credits
-    # that must travel with distributions), TERMS.md (terms of use). A missing
-    # file fails the build rather than shipping a non-compliant archive.
-    for legal in ("LICENSE", "NOTICE", "TERMS.md"):
-        source = PROJECT_ROOT / legal
+    # Collect the distribution's readable legal documents without relocating
+    # repository sources or dependency metadata used by the runtime.
+    legal = root / "legal"
+    legal.mkdir()
+    for name in (
+        "LICENSE", "NOTICE", "TERMS.md", "FONT.md",
+        "fonts/OFL.txt", "fonts/LICENSE-ComicMono", "frontend/static/LICENSE-material-icons",
+    ):
+        source = PROJECT_ROOT / name
         if not source.is_file():
             raise BuildError(f"{source} is missing — refusing to stage a build without it")
-        shutil.copy2(source, root / legal)
+        shutil.copy2(source, legal / source.name)
+    # New frontend builds produce this report; older --skip-frontend inputs
+    # can lack it and retain the curated attributions in NOTICE.
+    frontend_licenses = PROJECT_ROOT / "frontend" / "static" / ".vite" / "license.md"
+    if frontend_licenses.is_file():
+        shutil.copy2(frontend_licenses, legal / "frontend-licenses.md")
 
     binary = root / "bin" / BACKEND_NAME
     if not binary.is_file():
@@ -2429,34 +2455,12 @@ def stage_layout(dist: Path, launcher: Path, *, no_window: bool = False) -> Path
                 f"  The launcher looks for it by name. Candidates: {', '.join(found[:12]) or 'none'}"
             )
 
-    # config/: the one file the user is expected to edit, and the one the
-    # launcher reads to find the host and port. settings.yaml and
-    # user_endpoints.yaml are deliberately absent -- their managers write
-    # defaults on first load, and shipping them would overwrite a user's
-    # choices on every upgrade.
-    config = root / "config"
-    config.mkdir()
-    source_config = PROJECT_ROOT / "config" / "fox_config.yaml"
-    if not source_config.is_file():
-        raise BuildError(f"{source_config} is missing")
-    shutil.copy2(source_config, config / "fox_config.yaml")
+    # ConfigManager creates config/ and fox_config.yaml on first run. Never
+    # copy the builder's configuration: it contains local choices and shipping
+    # it would overwrite those choices in an existing installation on upgrade.
 
-    # fonts/: the user's, and it ships empty. ComicMono and the symbol fallback
-    # are inside the binary as the typesetter's faces, so their licences have
-    # to travel with the build even though the files they cover are not visible
-    # here.
-    fonts = root / "fonts"
-    fonts.mkdir()
-    licence = PROJECT_ROOT / "fonts" / "LICENSE-ComicMono"
-    if licence.is_file():
-        shutil.copy2(licence, fonts / licence.name)
-    else:
-        print(f"      warning: {licence} is missing, and the embedded font needs it")
-    symbol_licence = PROJECT_ROOT / "fonts" / "OFL.txt"
-    if symbol_licence.is_file():
-        shutil.copy2(symbol_licence, fonts / symbol_licence.name)
-    else:
-        print(f"      warning: {symbol_licence} is missing, and the embedded symbol font needs it")
+    # User fonts go here. Bundled faces are embedded; their notices live in legal/.
+    (root / "fonts").mkdir()
 
     # Both empty on purpose. cache/ is scratch, cleared at startup and shutdown;
     # models/ is filled by the first-run download, which is why the weights are

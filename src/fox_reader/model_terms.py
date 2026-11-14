@@ -1,7 +1,7 @@
 """Per-model Terms of Use and licence notices, and the record of accepting them.
 
 Why this module exists: NOTICE and TERMS.md state every model's terms, but a
-document shipped beside the launcher is not a decision anyone made. Weights are
+document shipped with the app is not a decision anyone made. Weights are
 fetched from third-party vendors on the user's behalf, and some of them carry
 real restrictions -- academic-only training-data lineage, Google's Gemma Terms,
 Meta's Llama 3 Community License. So each model's terms are shown, and accepted,
@@ -13,9 +13,9 @@ Two deliberate choices:
 
 * **The text lives in Python, not in a file.** ``packaging/embed_assets.py``
   embeds ``frontend/`` into the binary; ``packaging/build.py`` copies NOTICE and
-  TERMS.md to the *archive root*. A compiled build therefore cannot read either
-  one, so a notice that loaded them would be empty exactly where it matters.
-  Compiled code is the only thing guaranteed to be there.
+  TERMS.md into the archive's ``legal/`` directory. Setup notices are compiled
+  into Python, so displaying and validating them does not depend on locating
+  those loose documents.
 
 * **The version is the content hash.** Editing a notice changes its version,
   which retires the old acceptance automatically. Nobody has to remember to bump

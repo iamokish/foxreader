@@ -22,7 +22,11 @@ export function installUpdates() {
     const progress = element("updateProgress");
     const ready = element("updateReady");
     let latest = null;
-    let downloading = false;
+    let phase = "idle";
+    let active = false;
+    let installSupported = false;
+    let expectedDisconnect = false;
+    let handoffDisconnectedAt = null;
     let busy = true;
     let stopped = false;
     let polling = 0;
@@ -31,11 +35,20 @@ export function installUpdates() {
     const controllers = new Set();
 
     const controls = () => {
-        check.disabled = busy || downloading;
-        download.disabled = busy || downloading;
-        download.hidden = !latest?.available || !latest?.compatible || downloading;
-        cancel.hidden = !downloading;
-        cancel.disabled = cancelling;
+        const cancellable = phase === "downloading" || phase === "preparing";
+        check.disabled = busy || active;
+        download.disabled = busy || active;
+        download.hidden = !latest?.available || !latest?.compatible || active;
+        download.textContent = installSupported ? "Download and install" : "Download update";
+        cancel.hidden = !cancellable;
+        cancel.disabled = cancelling || !cancellable;
+        cancel.textContent = installSupported ? "Cancel update" : "Cancel download";
+        const hint = element("updateInstallHint");
+        if (hint) hint.hidden = !installSupported;
+    };
+    const showHandoff = () => {
+        status.textContent = "Fox Reader is closing for the update. Continue in the Fox Reader Updater window. Start Fox Reader yourself after it reports success.";
+        progress.hidden = true;
     };
     async function request(path, method = "GET") {
         const controller = new AbortController();
@@ -62,16 +75,29 @@ export function installUpdates() {
         if (latest?.version) version.textContent += ` · Latest: ${latest.version}`;
     };
     const showStatus = (data, initial = false) => {
+        handoffDisconnectedAt = null;
         showVersion(data.current_version);
-        downloading = data.state === "downloading";
-        if (!downloading) cancelling = false;
-        progress.hidden = !downloading;
-        if (downloading) {
+        if (typeof data.install_supported === "boolean") installSupported = data.install_supported;
+        phase = data.state || "idle";
+        active = ["downloading", "preparing", "handoff", "installing"].includes(phase);
+        expectedDisconnect = phase === "handoff" || phase === "installing";
+        panel.dataset.updateState = phase;
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: phase } }));
+        if (phase !== "downloading" && phase !== "preparing") cancelling = false;
+        progress.hidden = !active || phase === "installing";
+        if (phase === "downloading") {
             const total = Math.max(0, Number(data.total) || 0);
             const received = Math.max(0, Number(data.downloaded) || 0);
             progress.max = total || 1;
             progress.value = Math.min(total || 1, received);
             status.textContent = `${data.message || "Downloading update…"} ${bytes(received)}${total ? ` / ${bytes(total)}` : ""}`;
+        } else if (phase === "preparing" || phase === "handoff") {
+            progress.removeAttribute("value");
+            status.textContent = data.message || (phase === "preparing"
+                ? "Verifying and preparing the update…"
+                : "Opening Fox Reader Updater. Fox Reader will close when it is ready…");
+        } else if (phase === "installing") {
+            showHandoff();
         } else if (data.state === "complete") {
             status.textContent = "The update archive has been verified.";
         } else if (data.state === "error" || data.state === "cancelled") {
@@ -85,16 +111,27 @@ export function installUpdates() {
     };
     async function poll(initial = false) {
         clearTimeout(polling);
+        if (stopped || phase === "installing") return;
         const serial = ++pollSerial;
         try {
             const data = await request("status");
             if (stopped || serial !== pollSerial) return;
             showStatus(data, initial);
-            if (downloading) polling = window.setTimeout(poll, 1000);
+            if (active && phase !== "installing") polling = window.setTimeout(poll, 1000);
         } catch (_) {
             if (stopped || serial !== pollSerial) return;
-            if (downloading) {
-                status.textContent = "Waiting for the backend to report download progress…";
+            if (expectedDisconnect) {
+                showHandoff();
+                // Handoff still permits startup failure. A lost status request
+                // must not hide that failure or leave the controls disabled.
+                // Retry past the helper's 20-second readiness timeout, then
+                // stop if shutdown left this page in an external browser.
+                handoffDisconnectedAt ??= Date.now();
+                if (Date.now() - handoffDisconnectedAt < 30_000) {
+                    polling = window.setTimeout(poll, 2000);
+                }
+            } else if (active) {
+                status.textContent = "Waiting for the backend to report update progress…";
                 polling = window.setTimeout(poll, 2000);
             } else if (initial) {
                 version.textContent = "Installed version unavailable";
@@ -108,6 +145,7 @@ export function installUpdates() {
         }
     }
     const onCheck = async () => {
+        if (busy || active) return;
         busy = true;
         latest = null;
         controls();
@@ -144,6 +182,7 @@ export function installUpdates() {
         }
     };
     const onDownload = async () => {
+        if (busy || active) return;
         busy = true;
         ready.hidden = true;
         controls();
@@ -152,15 +191,21 @@ export function installUpdates() {
             const data = await request("download", "POST");
             if (stopped) return;
             showStatus(data);
-            await poll();
+            if (phase !== "installing") await poll();
         } catch (error) {
-            if (!stopped) status.textContent = error instanceof Error ? error.message : "Could not start the download.";
+            if (!stopped) {
+                status.textContent = error instanceof Error ? error.message : "Could not start the download.";
+                // A lost response can follow an accepted download. Recover its
+                // current state so preparation and shutdown remain visible.
+                await poll();
+            }
         } finally {
             busy = false;
             if (!stopped) controls();
         }
     };
     const onCancel = async () => {
+        if (phase !== "downloading" && phase !== "preparing") return;
         cancelling = true;
         ++pollSerial;
         clearTimeout(polling);
@@ -176,6 +221,7 @@ export function installUpdates() {
             if (!stopped) {
                 status.textContent = error instanceof Error ? error.message : "Could not cancel the download.";
                 controls();
+                if (active) await poll();
             }
         }
     };

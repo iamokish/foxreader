@@ -87,10 +87,13 @@ def test_build_launcher_receives_window_variant(build, monkeypatch, tmp_path, no
         return output
 
     monkeypatch.setattr(build, "build_launcher", compile_fixture)
+    updater_calls = []
+    monkeypatch.setattr(build, "build_updater", lambda *args, **kwargs: updater_calls.append((args, kwargs)))
     launcher, kind = build.compile_launcher(tmp_path / "python", no_window=no_window)
     assert launcher == build.WORK_DIR / build.LAUNCHER_NAME
     assert kind == "fixture"
     assert calls == [{"compiler": compiler, "no_window": no_window}]
+    assert updater_calls == ([] if no_window else [((build.WORK_DIR / build.UPDATER_NAME,), {"compiler": compiler})])
 
 
 @pytest.mark.parametrize("no_window", [False, True])
@@ -104,6 +107,7 @@ def test_mac_staging_always_finalizes_binaries_and_signs_only_present_app(
     (dist / build.BACKEND_NAME).write_bytes(b"backend fixture")
     launcher = tmp_path / build.LAUNCHER_NAME
     launcher.write_bytes(b"launcher fixture")
+    (tmp_path / build.UPDATER_NAME).write_bytes(b"updater fixture")
     finalized = []
     codesigned = []
     monkeypatch.setattr(build.macos, "finalize", finalized.append)

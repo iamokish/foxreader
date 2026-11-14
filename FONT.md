@@ -17,10 +17,12 @@ Bold and italic faces are separate files; copy each weight you want. Faces
 group by their family name. A broken font file is skipped with a warning. If a
 face does not appear, check that the file is a usable TTF or OTF font.
 
-The folder also holds `.fonts_cache.json` and font licences. Leave the cache
-alone; it rebuilds itself. A folder holding only those files counts as empty,
-and the built-in ComicMono faces are used. NotoSansSymbols2 is a hidden symbol
-fallback and never appears as a pickable text font.
+The folder also holds `.fonts_cache.json`. Leave the cache alone; it rebuilds
+itself. In the repository, the bundled font licences are in `fonts/`; packaged
+apps put them in `legal/` beside the launcher. A fonts folder holding only the
+cache or licence files counts as empty, and the built-in ComicMono faces are
+used. NotoSansSymbols2 is a hidden symbol fallback and never appears as a
+pickable text font.
 
 ## Optional symbol fallback fonts
 
@@ -143,6 +145,11 @@ catalogs, recent search pages and font faces are cached for efficient reuse.
 Font files have their own licences, separate from Fox Reader's licence. Only
 copy a font into `fonts/` when its licence allows your intended use, and check
 redistribution rights before sharing font files.
+
+The repository includes the bundled font licences at `fonts/LICENSE-ComicMono`
+and `fonts/OFL.txt`. In a packaged app, read `legal/LICENSE-ComicMono` and
+`legal/OFL.txt`; this guide is included as `legal/FONT.md`. These packaged paths
+are relative to the folder containing the launcher.
 
 - **SIL Open Font License (OFL):** allows use, sharing and bundling, including
   commercially, subject to the licence's conditions.

@@ -242,6 +242,53 @@ describe("shared backend health dialog", () => {
         expect(vi.getTimerCount()).toBe(0);
     });
 
+    it("pauses health warnings during updater handoff and resumes if handoff fails", async () => {
+        vi.mocked(fetch).mockRejectedValueOnce(new Error("offline"));
+        stop = installPageHealth();
+        await settle();
+        expect(dialog().open).toBe(true);
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: "handoff" } }));
+        expect(dialog().open).toBe(false);
+        window.dispatchEvent(new Event("pageshow"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(fetch).toHaveBeenCalledOnce();
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: "error" } }));
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(dialog().open).toBe(false);
+        expect((document.getElementById("draft") as HTMLInputElement).value).toBe("unsaved settings");
+    });
+
+    it("cancels pending health work when installation intentionally closes the backend", async () => {
+        let resolve!: (value: Response) => void;
+        vi.mocked(fetch).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+        stop = installPageHealth();
+        const signal = vi.mocked(fetch).mock.calls[0][1]!.signal!;
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: "installing" } }));
+        expect(signal.aborted).toBe(true);
+        resolve(response("new session"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(fetch).toHaveBeenCalledOnce();
+        expect(dialog().open).toBe(false);
+    });
+
+    it.each(["offline", "restarted"])("restores a suppressed %s warning after a failed updater handoff", async (state) => {
+        if (state === "offline") vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+        stop = installPageHealth();
+        await settle();
+        if (state === "restarted") {
+            vi.mocked(fetch).mockResolvedValue(response("s2"));
+            await vi.advanceTimersByTimeAsync(15_000);
+        }
+        expect(dialog().open).toBe(true);
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: "handoff" } }));
+        expect(dialog().open).toBe(false);
+        window.dispatchEvent(new CustomEvent("fox-reader:update-state", { detail: { state: "error" } }));
+        await settle();
+        expect(dialog().open).toBe(true);
+        expect(action().textContent).toBe(state === "offline" ? "Retry" : "Refresh");
+    });
+
     it("wires the shared module through every existing template entry", () => {
         const entry = readFileSync("static/desktop-entry.js", "utf8");
         expect(entry).toContain('import { installPageHealth } from "./health-overlay.js"');

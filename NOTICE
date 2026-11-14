@@ -2,6 +2,11 @@
 FOX READER — LICENSE AND THIRD-PARTY NOTICES
 ================================================================================
 
+Document locations: the repository keeps LICENSE, NOTICE, TERMS.md and FONT.md
+at its root, and bundled font licences under fonts/. Packaged applications
+collect these documents and asset licences in legal/ beside the launcher.
+References below to LICENSE or TERMS.md refer to those sibling documents.
+
 0. FOX READER'S OWN CODE
 --------------------------------------------------------------------------------
 Copyright (c) iamokish (https://github.com/iamokish/foxreader).
@@ -178,11 +183,13 @@ frontend/package-lock.json upstream sources.
 
 Binary attribution: vite.config.ts sets build.license:true, so builds emit
 frontend/static/.vite/license.md listing every package bundled into app.js.
-packaging/embed_assets.py embeds the whole frontend/static directory, so the
-license file ships inside the binary alongside the bundle. The
-pre-existing frontend/static/LICENSE-material-icons (Apache-2.0) is likewise
-embedded. If .vite/license.md is missing from an old build, this NOTICE
-section is the fallback attribution.
+packaging/build.py copies this generated report, when available, to
+legal/frontend-licenses.md. The .vite directory is excluded from embedded
+assets. The pre-existing frontend/static/LICENSE-material-icons (Apache-2.0)
+remains embedded and is also copied to legal/LICENSE-material-icons. Original
+source files remain in their existing locations. If .vite/license.md is
+missing from an old prebuilt frontend, this NOTICE section is the fallback
+attribution.
 
 1C. VENDORED THIRD-PARTY SOURCE (src/fox_reader/hf/, in git and in binaries)
 --------------------------------------------------------------------------------
@@ -223,7 +230,7 @@ the same PaddlePaddle repositories under their own terms.
 Windows launchers link Microsoft's WebView2LoaderStatic.lib from
 Microsoft.Web.WebView2 SDK 1.0.2903.40. Copyright Microsoft Corporation.
 The SDK's BSD 3-Clause license is included unchanged as
-WebView2-LICENSE.txt beside the Windows launcher.
+legal/WebView2-LICENSE.txt in native Windows distributions.
 https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.2903.40
 
 The WebView2 Evergreen browser runtime is installed and updated separately
@@ -235,12 +242,15 @@ frameworks. Those system browser engines are not included in the archive.
 --------------------------------------------------------------------------------
 * ComicMono / ComicMono-Bold (fonts/ComicMono*.ttf) — MIT License.
   Original (c) 2018 Shannon Miwa; modified (c) 2019 dtinth.
-  Full text: fonts/LICENSE-ComicMono.
+  Full text: fonts/LICENSE-ComicMono in the repository;
+  legal/LICENSE-ComicMono in packaged applications.
 * NotoSansSymbols2-Regular (fonts/NotoSansSymbols2-Regular.otf) — SIL Open
   Font License 1.1, Copyright 2022 The Noto Project Authors. Full text:
-  fonts/OFL.txt. Render-time per-glyph fallback only; stays under OFL.
+  fonts/OFL.txt in the repository; legal/OFL.txt in packaged applications.
+  Render-time per-glyph fallback only; stays under OFL.
 * Material Icons (frontend/static/) — Apache License 2.0.
-  Full text: frontend/static/LICENSE-material-icons.
+  Full text: frontend/static/LICENSE-material-icons in the repository;
+  legal/LICENSE-material-icons in packaged applications (also embedded).
 
 3. MODEL WEIGHTS (NOT in git — fetched by YOU from upstream at /setup)
 --------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Explicit update checks and verified downloads; never installs or runs code."""
+"""Explicit verified downloads and handoff to the independent native updater."""
 from __future__ import annotations
 
 import hashlib
@@ -12,11 +12,19 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
-from fox_reader import __version__
+from fox_reader import __version__, utils
+from fox_reader.services.update_install import (
+    InstallError,
+    install_supported,
+    launch_updater,
+    prepare_update,
+    stop_waiting_updater,
+)
 
 logger = logging.getLogger(__name__)
 REPOSITORY = "iamokish/foxreader"
@@ -38,6 +46,7 @@ NO_WINDOW_UPDATE_MESSAGE = (
     "Published update archives include native windows. To keep this build without Fox Reader "
     "graphical windows, rebuild the newer release with --no-window."
 )
+SOURCE_UPDATE_MESSAGE = "Updates are available only in packaged Fox Reader builds, not when running from source."
 
 
 class UpdateError(ValueError):
@@ -130,7 +139,7 @@ def validate_manifest(manifest: object, build: dict | None, current_version: str
               "version": version, "notes": notes, "pub_date": date, "release_url": expected_url,
               "compatible": False, "variant": None, "download_size": 0}
     if build is None:
-        result["reason"] = "This is a source checkout or an older build without update metadata. Use the release page."
+        result["reason"] = "This build has no update metadata. Use the release page to select a download."
         return result, None
     if build.get("no_window", False):
         result["reason"] = NO_WINDOW_UPDATE_MESSAGE
@@ -185,7 +194,7 @@ def validate_manifest(manifest: object, build: dict | None, current_version: str
 
 
 class UpdateService:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, shutdown: Callable[[], bool] | None = None):
         self.root = root.resolve()
         self._lock = threading.RLock()
         self._checking = threading.Lock()
@@ -194,11 +203,14 @@ class UpdateService:
         self._selected: dict | None = None
         self._release: dict | None = None
         self._last_check = float("-inf")
+        self._shutdown = shutdown
         self.build = self._read_build()
         self.current_version = self.build["version"] if self.build else __version__
         self._status = {"state": "idle", "downloaded": 0, "total": 0, "message": "", "archive": None}
 
     def _read_build(self) -> dict | None:
+        if not utils.is_frozen:
+            return None
         try:
             path = self.root / "build-info.json"
             if path.stat().st_size > 16 * 1024:
@@ -220,23 +232,33 @@ class UpdateService:
     def status(self) -> dict:
         with self._lock:
             result = {**self._status, "current_version": self.current_version,
-                      "download_supported": self.build is not None and not self.build.get("no_window", False)}
-            if not self.build:
-                result["reason"] = "Source checkouts and older builds use the release page for updates."
+                      "updates_supported": bool(utils.is_frozen),
+                      "download_supported": bool(utils.is_frozen) and self.build is not None
+                      and not self.build.get("no_window", False),
+                      "install_supported": self._can_install()}
+            if not utils.is_frozen:
+                result["reason"] = SOURCE_UPDATE_MESSAGE
+            elif not self.build:
+                result["reason"] = "Older builds without update metadata use the release page for downloads."
             elif self.build.get("no_window", False):
                 result["reason"] = NO_WINDOW_UPDATE_MESSAGE
             return result
+
+    def _can_install(self) -> bool:
+        return bool(utils.is_frozen) and self._shutdown is not None and install_supported(self.root, self.build)
 
     def _set(self, **fields) -> None:
         with self._lock:
             self._status.update(fields)
 
     def check(self) -> dict:
+        if not utils.is_frozen:
+            raise UpdateError(SOURCE_UPDATE_MESSAGE)
         if not self._checking.acquire(blocking=False):
             raise UpdateError("An update check is already running.")
         try:
             with self._lock:
-                if self._thread and self._thread.is_alive():
+                if self._status["state"] == "installing" or (self._thread and self._thread.is_alive()):
                     raise UpdateError("Wait for the current download before checking another release.")
                 if time.monotonic() - self._last_check < CHECK_COOLDOWN_SECONDS:
                     if self._release is not None:
@@ -264,8 +286,10 @@ class UpdateService:
             self._checking.release()
 
     def start(self) -> dict:
+        if not utils.is_frozen:
+            raise UpdateError(SOURCE_UPDATE_MESSAGE)
         with self._lock:
-            if self._thread and self._thread.is_alive():
+            if self._status["state"] == "installing" or (self._thread and self._thread.is_alive()):
                 raise UpdateError("An update download is already running.")
             if not self._release or not self._selected or not self._release["available"]:
                 raise UpdateError("Check for a compatible newer release before downloading.")
@@ -279,9 +303,9 @@ class UpdateService:
 
     def cancel(self) -> dict:
         with self._lock:
-            if self._thread and self._thread.is_alive():
+            if self._status["state"] not in {"handoff", "installing"} and self._thread and self._thread.is_alive():
                 self._cancel.set()
-                self._status["message"] = "Cancelling download… Verified parts will be kept."
+                self._status["message"] = "Cancelling update preparation… Verified downloads will be kept."
             return self.status()
 
     def close(self) -> None:
@@ -309,6 +333,39 @@ class UpdateService:
                 digest.update(block)
         return digest.hexdigest() == metadata["sha256"]
 
+    def _complete_download(self, destination: Path, archive: dict, version: str) -> None:
+        if not self._can_install():
+            self._set(state="complete", downloaded=archive["size"], message=INSTALL_MESSAGE, archive=str(destination))
+            return
+        self._set(state="preparing", downloaded=archive["size"], archive=str(destination),
+                  message="Verifying and preparing the update before closing Fox Reader…")
+        prepared = prepare_update(self.root, destination, archive, self.build, version, self._cancelled)
+        process = None
+        try:
+            # Cancellation and handoff must have one ordering: every accepted
+            # cancellation wins before the helper takes ownership.
+            with self._lock:
+                self._cancelled()
+                self._set(state="handoff", message="Opening Fox Reader Updater…")
+            process = launch_updater(prepared, self.build["platform"])
+            # Only the confirmed updater may wait for our exit. If graceful
+            # shutdown is unavailable, stop that waiting helper and stay open.
+            if not self._shutdown():
+                raise InstallError("Fox Reader could not shut down safely. The installation has not been changed.")
+            self._set(state="installing", archive=None,
+                      message="Fox Reader is closing. The separate updater will finish and show the result.")
+        except BaseException:
+            if process is not None:
+                stop_waiting_updater(process)
+            # No application files have been replaced while this backend lives.
+            # Restore the verified download so another attempt can reuse it.
+            if not (prepared.transaction / "journal.bin").exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if prepared.archive.is_file() and not destination.exists():
+                    prepared.archive.replace(destination)
+                shutil.rmtree(prepared.transaction, ignore_errors=True)
+            raise
+
     def _download(self, selected: dict, version: str) -> None:
         temporary: Path | None = None
         try:
@@ -320,8 +377,7 @@ class UpdateService:
             destination = self._path(folder, archive["name"])
             self._set(message="Checking previously downloaded files…")
             if self._verified(destination, archive):
-                self._set(state="complete", downloaded=archive["size"], message=INSTALL_MESSAGE,
-                          archive=str(destination))
+                self._complete_download(destination, archive, version)
                 return
             completed = []
             downloaded = 0
@@ -387,11 +443,10 @@ class UpdateService:
                         path.unlink()
                     except OSError:
                         logger.debug("Could not remove completed update part %s", path, exc_info=True)
-            self._set(state="complete", downloaded=archive["size"], message=INSTALL_MESSAGE,
-                      archive=str(destination))
+            self._complete_download(destination, archive, version)
         except _Cancelled:
             self._set(state="cancelled", message="Download cancelled. Verified parts are kept for the next attempt.")
-        except (OSError, httpx.HTTPError, UpdateError) as error:
+        except (OSError, httpx.HTTPError, UpdateError, InstallError) as error:
             logger.warning("Update download failed: %s", error)
             self._set(state="error", message=str(error))
         except Exception:

@@ -62,6 +62,8 @@ IS_WINDOWS = os.name == "nt"
 #: What the built launcher is called. It sits at the root of the distribution,
 #: which is the only thing the user is meant to double-click.
 LAUNCHER_NAME = "launcher.exe" if IS_WINDOWS else "launcher"
+UPDATER_NAME = "foxreader-updater.exe" if IS_WINDOWS else "foxreader-updater"
+UPDATER_DIR = PACKAGING_DIR / "updater"
 
 #: The smoke test. Small, but it pulls in the same two things the launcher needs
 #: that a "int main(){return 0;}" would not prove: libc and the socket library.
@@ -833,13 +835,70 @@ def _native_command(compiler: Compiler, source: Path, out: Path, scratch: Path) 
                                                       "-pthread", "-ldl"]
 
 
+def _updater_command(compiler: Compiler, out: Path, scratch: Path) -> list[str]:
+    """Build the independent updater with the platform's native controls."""
+    system = platform.system()
+    platform_source = {"Windows": "ui_windows.cpp", "Linux": "ui_linux.cpp", "Darwin": "ui_macos.mm"}[system]
+    sources = [str(UPDATER_DIR / name) for name in ("core.cpp", "handoff.cpp", "ui_state.cpp", platform_source)]
+    if compiler.kind == "msvc":
+        return [str(compiler.path), "/nologo", "/O2", "/MT", "/W4", "/utf-8", "/EHsc", "/std:c++17",
+                "/DNDEBUG", "/DUNICODE", "/D_UNICODE", *sources, f"/Fo{scratch}\\", f"/Fe{out}",
+                "/link", "/INCREMENTAL:NO", "/SUBSYSTEM:WINDOWS", "/ENTRY:wWinMainCRTStartup",
+                "user32.lib", "gdi32.lib", "comctl32.lib", "shell32.lib", "bcrypt.lib"]
+
+    # Use the matching C++ driver so its standard library follows the selected
+    # compiler (including versioned gcc-13 / clang-18 installations).
+    name = compiler.path.name
+    cxx_name = name.replace("clang", "clang++", 1) if "clang" in name else name.replace("gcc", "g++", 1)
+    candidate = compiler.path.with_name(cxx_name)
+    if cxx_name == name or not candidate.is_file():
+        environment = compiler.env or os.environ
+        resolved = shutil.which("clang++" if compiler.kind == "clang" else "g++",
+                                path=environment.get("PATH", environment.get("Path", "")))
+        if not resolved:
+            raise ToolchainError("The updater requires a C++17 compiler matching the launcher toolchain.")
+        candidate = Path(resolved)
+    command = [str(candidate), "-std=c++17", "-O2", "-Wall", "-Wextra", "-DNDEBUG", *sources, "-o", str(out)]
+    if system == "Windows":
+        return command + ["-static", "-static-libgcc", "-static-libstdc++", "-municode", "-mwindows",
+                          "-luser32", "-lgdi32", "-lcomctl32", "-lshell32", "-lbcrypt"]
+    if system == "Darwin":
+        import macos
+
+        return command + ["-arch", "arm64", f"-mmacosx-version-min={macos.DEPLOYMENT_TARGET}",
+                          "-fobjc-arc", "-framework", "Cocoa", "-lproc", "-pthread"]
+    try:
+        flags = subprocess.run(["pkg-config", "--cflags", "--libs", "gtk+-3.0"],
+                               capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ToolchainError("Install libgtk-3-dev and pkg-config to build the native updater.") from exc
+    return command + ["-static-libgcc", "-static-libstdc++", "-pthread", *shlex.split(flags.stdout)]
+
+
+def build_updater(out: Path, compiler: Compiler | None = None) -> Path:
+    """Compile the C++17 updater; it never links a browser engine or Python."""
+    compiler = compiler or find_compiler()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="fox-updater-") as tmp:
+        scratch = Path(tmp)
+        command = _updater_command(compiler, out, scratch)
+        print(f"  updater compiler: {compiler.label}")
+        _checked_build(command, compiler, scratch)
+    if not out.is_file():
+        raise ToolchainError(f"the compiler reported success but produced no {out.name}")
+    if not IS_WINDOWS:
+        out.chmod(0o755)
+    print(f"  built {out.name}  ({out.stat().st_size:,} bytes)")
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--out",
         type=Path,
-        default=PACKAGING_DIR / "build" / LAUNCHER_NAME,
-        help="where to write the launcher",
+        help="output path (defaults to build/launcher or build/foxreader-updater)",
     )
     parser.add_argument("--source", type=Path, default=LAUNCHER_SOURCE, help="the C file to compile")
     parser.add_argument(
@@ -857,7 +916,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="omit every Fox Reader graphical window; use browser and terminal modes",
     )
+    parser.add_argument("--updater", action="store_true", help="build the independent native updater")
     args = parser.parse_args(argv)
+    output = args.out or PACKAGING_DIR / "build" / (UPDATER_NAME if args.updater else LAUNCHER_NAME)
 
     try:
         compiler = find_compiler(allow_download=not args.no_download)
@@ -865,7 +926,12 @@ def main(argv: list[str] | None = None) -> int:
             target = f"  [{compiler.target}]" if compiler.target else ""
             print(f"{compiler.label}{target}")
             return 0
-        build_launcher(args.out.resolve(), args.source.resolve(), compiler, no_window=args.no_window)
+        if args.updater:
+            if args.no_window:
+                parser.error("the native updater is not part of --no-window builds")
+            build_updater(output.resolve(), compiler)
+        else:
+            build_launcher(output.resolve(), args.source.resolve(), compiler, no_window=args.no_window)
     except ToolchainError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

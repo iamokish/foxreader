@@ -327,15 +327,18 @@ Typing in inputs/textareas (or the editable translation panel) disables editing 
 
 ## Settings & Configuration
 
-On-disk state (repo root, gitignored except `fox_config.yaml`):
+On-disk state lives in the source checkout's root or beside the packaged launcher. Configuration files are local user data and are gitignored; builds do not include `fox_config.yaml`.
 
-- `config/fox_config.yaml` — `host: 127.0.0.1`, `port: 7954`, `mtl_dir: models`, `theme: dark|light`, `layout: basic|vulpes`. `host`/`port` are immutable at runtime.
+- `config/fox_config.yaml` — created with built-in defaults on first launch: `host: 127.0.0.1`, `port: 7954`, `mtl_dir: models`, `theme: dark`, `layout: basic`. Fox Reader creates `config/` when needed. `host`/`port` require a restart.
+- `config/user_config.yaml` — optional configuration you create manually; takes precedence over `fox_config.yaml`.
 - `config/settings.yaml` — `mtl_defaults` per language (`japanese/korean/chinese`), `devices` (`paddleocr/paddleocr_vl/bubble/translator/textseg: auto|<device>`, `mtl_threads`), `deepl_api_token` / `jpdb_api_token`, `ocr_engine: paddleocr|paddleocr-vl`.
 - `config/user_endpoints.yaml` — custom translation endpoints.
 - `config/workspaces.yaml` — panel layout sizes.
 - `models/` — weights (bubble `model.safetensors`, PaddleOCR det/rec + VL GGUF, manga seg safetensors, MTL Gemma/VNTL/Qwen). Downloaded once via `/setup`; each completed download touches a `_completed` marker.
 - `fonts/` — your `.ttf`/`.otf` faces (scanned + cached in `.fonts_cache.json`); ComicMono and NotoSansSymbols2 are bundled. `NotoSansSymbols2` is a render-time per-glyph fallback, never listed. Guide (adding faces, symbol fallbacks, licensing): [`/FONT.md`](/FONT.md).
 - `cache/` — scratch previews/masks; cleared at startup and shutdown.
+
+Each launch checks the configuration, fills in newly added fields, and repairs invalid fields while preserving valid settings and unknown fields when the YAML parses. Repairs update the file directly without automatic backups; malformed documents are replaced with defaults. See [Configuration](docs/configuration.md) for accepted values, file precedence, repair behavior, and diagnostics.
 
 Pages:
 
@@ -400,14 +403,16 @@ Result layout:
 ```
 fox-reader/
   launcher(.exe)   desktop window and backend lifecycle
+  foxreader-updater(.exe)  separate update window (native-window builds)
   Fox Reader.app/  Finder entry point (macOS only)
   libfox-window.so WebKitGTK viewer (Linux only)
   libfox-browser.so GTK-only browser controller (Linux only)
   bin/             compiled backend + linked libs (+ MSVC runtime DLLs + .dist-info metadata)
   cache/           scratch (empty, created at build)
-  config/          fox_config.yaml
+  config/          created on first launch, including fox_config.yaml
   fonts/           your fonts
   models/          weights (downloaded on first run)
+  legal/           licences, notices, terms, and font guide
   icons/           desktop icons
   logs/            launcher, backend, and frontend diagnostics
   build-info.json  installed version and CPU/CUDA/GGUF variant
@@ -415,22 +420,24 @@ fox-reader/
 
 Windows uses the installed [WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/); if it is missing, the launcher opens your browser and offers Microsoft's runtime installer link. Linux uses the distribution's WebKitGTK (`sudo apt install libwebkit2gtk-4.1-0` on Ubuntu/Debian). Without WebKitGTK, Linux opens the browser and keeps a separate GTK-only controller visible. macOS uses built-in WKWebView. No Chromium runtime is bundled.
 
+Packaged legal documents live in `legal/` beside the launcher: `LICENSE`, `NOTICE`, `TERMS.md`, `FONT.md`, `OFL.txt`, `LICENSE-ComicMono`, and `LICENSE-material-icons`. Native Windows builds also include `WebView2-LICENSE.txt` there; builds with Vite's generated licence report include `frontend-licenses.md`. Source files remain in their existing repository locations.
+
 Double-click `launcher.exe` on Windows or `Fox Reader.app` on macOS. On Linux, put the extracted folder in its final location, run `./install-desktop.sh`, then open **Fox Reader** from your applications menu; the entry uses `Terminal=false`. Keep the whole portable folder together, including `config`, `fonts`, and `models` beside the Mac app.
 
 `launcher --browser` opens the system browser and keeps a controller window available. `launcher --cli` (or `FOX_READER_CLI=1`) runs the backend with a foreground terminal manager, without opening a browser or window; Ctrl+C stops the backend it started. Closing the desktop controller also stops its owned backend, with a 20-second graceful shutdown period. A controller attached to an already-running backend leaves that backend running.
 
 The Linux browser controller shows the running state and provides **Open Reader** and **Quit Fox Reader**. Closing the browser leaves this controller visible. If GTK cannot open a window, the launcher uses an attached terminal or opens a terminal manager before starting the backend. If neither is available, it reports the failure without starting an invisible backend. Diagnostics are in `logs/launcher.log`, `logs/backend.log`, `logs/backend-output.log`, and `logs/frontend.log`.
 
-For verified update downloads and preserving your existing installation, see [Updating Fox Reader](docs/updating.md). Desktop testing notes are in [docs/desktop.md](docs/desktop.md).
+In packaged builds, **Settings → Updates → Download and install** verifies the release, opens the separate updater, and closes Fox Reader. Save your work before starting. The updater replaces `bin/`, `legal/`, and `build-info.json`, merges fonts, refreshes the launcher and managed assets, and preserves `config/` and `models/`. Failed replacements roll back; interrupted transactions recover through the next launcher. Success does not restart the app: close the updater and launch Fox Reader yourself. Packaged installations without the helper retain manual verified downloads. Source runs have no update controls or update API access. See [Updating Fox Reader](docs/updating.md) and [desktop testing notes](docs/desktop.md).
 
 For a build without any Fox Reader graphical windows, use `python packaging/build.py --no-window`. It opens the system browser and keeps a terminal manager visible; Ctrl+C stops the backend it started. `launcher --cli` (or `FOX_READER_CLI=1`) skips the browser for terminal/headless use. There are no native reader, loading, controller, or error windows in this variant. On Windows open `launcher.exe`; on Linux install its menu entry with `./install-desktop.sh` (it uses `Terminal=true`); on macOS open `Fox Reader.command` in Terminal. Keep the terminal open while reading: closing the browser alone does not stop the backend. A second manager attached to an existing backend only detaches when stopped.
 
-This optional local build omits WebView2 and the Linux GTK/WebKitGTK plugins, and does not create a Mac `.app`. Its archive has a `-no-window` suffix and `build-info.json` records the variant. The regular CI builds remain native-window builds; updating this custom variant requires another `--no-window` build.
+This optional local build omits WebView2, the Linux GTK/WebKitGTK plugins, and the graphical updater, and does not create a Mac `.app`. Its archive has a `-no-window` suffix and `build-info.json` records the variant. The regular CI builds remain native-window builds; updating this custom variant requires another `--no-window` build.
 
 ### Prerequisites
 
 - `uv`, `pnpm`, Node.js `22+` (CI pins 24 + pnpm 11), Python `3.12`
-- Native compiler for the launcher (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
+- Native compiler for the launcher and C++17 updater (verified by compiling+linking a smoke program; `python packaging/toolchain.py --which` shows the winner):
   - Windows: VS Build Tools with “Desktop development with C++” and the Windows SDK are required for the WebView2 host. Native-window builds download a pinned, SHA512-verified WebView2 SDK header and static loader; they do not download a browser runtime. For an offline native-window build, set `FOX_WEBVIEW2_SDK` to the unpacked Microsoft.Web.WebView2 `1.0.2903.40` NuGet package. MinGW can also compile the `--no-window` launcher and standalone C test fixtures; CUDA builds retain their own compiler requirements.
   - Linux: `gcc`/`clang`, `pkg-config`, and WebKitGTK headers (`sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev`); CUDA variants pin GCC per toolkit (11.8→11, 12.6/12.9→13, 13.0→14).
   - macOS: native ARM64 Python 3.12 and Apple Clang from Xcode Command Line Tools (`xcode-select --install`), macOS 14+. Local verification requires a working GPU by default; [GitHub-hosted builds](packaging/build.md#build-macos-releases-on-github) handle runners without GPU access.
@@ -559,7 +566,7 @@ foxreader/
     src/entries/         geometry, textFit (preview layout), shapes (overlay),
                          split, inpaint, pageTl
   packaging/             Nuitka build, toolchain + launcher (C), llama.cpp helper, asset embed
-  config/                fox_config.yaml, settings.yaml, user_endpoints.yaml, workspaces.yaml
+  config/                runtime configuration and state (created locally)
   fonts/ / models/ / cache/   faces / weights / scratch
   tests/                 backend + frontend + build suites (+ manual legacy scripts)
   .github/workflows/     build.yml (matrix + tagged releases)
@@ -592,7 +599,7 @@ Pages → [folder] → gallery
 | GGUF segfault after install | Reinstall with printed `CMAKE_ARGS` + `--no-cache-dir` (uv reuses wrong-device wheels otherwise) |
 | Page shows setup wizard | Required models missing — complete `/setup` downloads (needs disk + network) |
 | MTL will not load | Check `/ml/memory` and device pins in `/settings`; `FOX_READER_IGNORE_MTL_MEMORY=1` bypasses the gate for testing |
-| Port in use | Change `port` in `config/fox_config.yaml` (host/port are file-only) |
+| Port in use | Change `port` in `config/user_config.yaml` if present, otherwise `config/fox_config.yaml`, then restart |
 | Stale UI after save | Flip `Original / Saved`; gallery badges mark pages with a dest copy |
 
 ## Credits & Third-Party
@@ -602,5 +609,5 @@ Pages → [folder] → gallery
 - Local MT: Gemma / VNTL / Qwen via [llama.cpp](https://github.com/ggerganov/llama.cpp) (`llama-cpp-python`)
 - Online MT: [DeepL API](https://www.deepl.com/pro-api) (official v2 client), [JPDB](https://jpdb.io/) (official v1 client); custom user endpoints supported
 - Packaging: [Nuitka](https://nuitka.net/), Vite, Preact, Hugging Face Hub, FastAPI/Uvicorn, Pydantic
-- Fonts: ComicMono (bundled fallback) + NotoSansSymbols2 (render-time symbol fallback) — see `fonts/` licences
+- Fonts: ComicMono (bundled fallback) + NotoSansSymbols2 (render-time symbol fallback) — licences are in the repository's `fonts/` folder and the packaged app's `legal/` folder; see [FONT.md](FONT.md)
 - Models download from Hugging Face on first run (`/setup`); GPU wheels from the PyTorch indexes per `--device`

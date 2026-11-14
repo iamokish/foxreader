@@ -83,10 +83,37 @@ when the same backend recovers. A restart requires an explicit **Refresh**; it
 does not automatically reload the page or discard unsaved forms. These themed
 notices stay above open editor dialogs.
 
+During an update handoff, Settings pauses its health warnings because the
+backend is closing intentionally. Follow the separate updater window instead.
+
 On macOS, open `Fox Reader.app` in the extracted distribution; keep `bin`,
 `config`, `fonts`, `models`, and `cache` beside it. The root `launcher` also
 remains available. After choosing a permanent location on Linux, run
 `./install-desktop.sh` to install a per-user menu entry with `Terminal=false`.
+
+The backend creates `config/fox_config.yaml` on first launch; configuration is
+not bundled in the archive. Existing configuration is checked and updated on
+launch without automatic configuration backups. See
+[Configuration](configuration.md) for custom host/port values and automatic
+repairs, including replacement of malformed documents with defaults.
+
+Project documents and bundled font/icon licences are in `legal/` beside the
+launcher. Native Windows builds place their SDK licence at
+`legal/WebView2-LICENSE.txt`; the WebView2 browser runtime remains separate.
+
+Native-window distributions also include `foxreader-updater(.exe)`. Choose
+**Download and install** in Settings after saving your work. Fox Reader verifies
+and prepares the release, opens the updater, then closes. The updater waits for
+shutdown before replacing managed application files; configuration and models
+stay in place and fonts are merged. It displays success without restarting the
+reader. Close it, then start Fox Reader yourself.
+
+The updater uses Win32 on Windows, GTK 3 on Linux, and Cocoa on macOS. It opens
+only with the app's inherited-pipe handoff; double-clicking the executable does
+not start an installation. Failed replacements roll back automatically. The
+launcher blocks normal startup during an active update or unfinished recovery,
+and uses the transaction's updater to recover an interrupted replacement. See
+[Updating Fox Reader](updating.md) for cancellation, cleanup, and manual fallback.
 
 The title-bar close button asks **Close Fox Reader?** in a native **Yes / No**
 dialog on Windows, Linux, and macOS. The dialog follows the system theme and
@@ -183,9 +210,13 @@ each OS. The automated tests do not replace these runtime checks:
    Test missing GTK with and without an available terminal; a failed terminal
    launch must not leave a new backend running. Check `--cli` opens no browser
    or GUI. On Windows, test missing WebView2 and its browser fallback.
-6. Check and cancel an update, retry it, and verify the final archive. Test a
-   corrupted/missing part and insufficient disk space. The working installation
-   must remain usable throughout.
+6. Check and cancel an update before handoff, then retry. Test a corrupted or
+   missing part and insufficient disk space; these must leave the installation
+   unchanged. Complete an update and confirm the app closes, the separate updater
+   reports success, and the reader does not restart automatically. Check custom
+   fonts, configuration, and model weights afterwards. On an isolated test copy,
+   interrupt replacement and confirm the next launcher recovers before starting
+   the backend.
 
 macOS distributions remain ad-hoc signed. Public Gatekeeper-friendly releases
 still require the maintainer's Developer ID signing and notarization credentials;

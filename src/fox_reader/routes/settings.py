@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from fox_reader import assets
+from fox_reader import assets, utils
 from fox_reader.constants import MTL_MODELS, mtl_model, mtl_model_downloaded
 from fox_reader.device import AUTO_THREADS, CPU, physical_cores, thread_count, thread_override
 from fox_reader.device import SLOTS as DEVICE_SLOTS
@@ -264,7 +264,7 @@ async def settings_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
-        context={},
+        context={"updates_enabled": utils.is_frozen},
     )
 
 

@@ -49,6 +49,8 @@ import shlex
 import stat
 import struct
 import sys
+import tarfile
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1077,6 +1079,29 @@ def build_module() -> object:
     sys.modules.pop(spec.name, None)
 
 
+def test_updater_toolchain_default_preserves_launcher(build_module, monkeypatch, tmp_path):
+    """Building the updater without --out must not overwrite the launcher."""
+    toolchain = sys.modules[build_module.build_updater.__module__]
+    monkeypatch.setattr(toolchain, "PACKAGING_DIR", tmp_path)
+    monkeypatch.setattr(toolchain, "find_compiler", lambda **kwargs: object())
+
+    def write_binary(out, *args, **kwargs):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(out.name.encode())
+
+    monkeypatch.setattr(toolchain, "build_launcher", write_binary)
+    monkeypatch.setattr(toolchain, "build_updater", write_binary)
+    assert toolchain.main([]) == 0
+    launcher = tmp_path / "build" / toolchain.LAUNCHER_NAME
+    original = launcher.read_bytes()
+    assert toolchain.main(["--updater"]) == 0
+    assert launcher.read_bytes() == original
+    assert (tmp_path / "build" / toolchain.UPDATER_NAME).is_file()
+    explicit = tmp_path / "custom-updater"
+    assert toolchain.main(["--updater", "--out", str(explicit)]) == 0
+    assert explicit.is_file()
+
+
 def test_the_archive_name_says_what_is_in_the_archive(build_module):
     """Two builds in one ``dist/`` used to be one file, and the second one won.
 
@@ -1100,6 +1125,109 @@ def test_the_archive_name_is_a_filename_on_every_platform(build_module):
     name = build_module.archive_stem("0.1.0rc1+local.1", "cu130", "cu130", "linux-x64")
     assert name == "fox-reader-v0.1.0rc1-local.1-cu130-gguf-linux-x64"
     assert not (set(name) & set('<>:"/\\|?*+ ')), f"{name!r} is not a filename on Windows"
+
+
+@pytest.fixture
+def staging_inputs(build_module, monkeypatch, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    sources = {}
+    for name in (
+        "LICENSE", "NOTICE", "TERMS.md", "FONT.md", "fonts/OFL.txt", "fonts/LICENSE-ComicMono",
+        "frontend/static/LICENSE-material-icons",
+    ):
+        source = project / name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        sources[name] = f"Original {name} bytes\r\n".encode()
+        source.write_bytes(sources[name])
+    dist = tmp_path / "backend.dist"
+    dist.mkdir()
+    (dist / build_module.BACKEND_NAME).write_bytes(b"backend fixture")
+    metadata_license = dist / "example.dist-info" / "licenses" / "LICENSE"
+    metadata_license.parent.mkdir(parents=True)
+    metadata_license.write_bytes(b"dependency license")
+    launcher = tmp_path / build_module.LAUNCHER_NAME
+    launcher.write_bytes(b"launcher fixture")
+    (tmp_path / build_module.UPDATER_NAME).write_bytes(b"updater fixture")
+    for name in ("WebView2-LICENSE.txt", "libfox-window.so", "libfox-browser.so"):
+        (tmp_path / name).write_bytes(f"Native fixture: {name}".encode())
+    monkeypatch.setattr(build_module, "PROJECT_ROOT", project)
+    monkeypatch.setattr(build_module, "STAGE_DIR", tmp_path / "stage")
+    monkeypatch.setattr(build_module, "DIST_DIR", tmp_path / "archives")
+    monkeypatch.setattr(build_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(build_module.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(build_module, "_read_version", lambda: "1.0.0")
+    monkeypatch.setattr(build_module.macos, "finalize", lambda *_: None)
+    monkeypatch.setattr(build_module.macos, "_run", lambda *_: None)
+    return SimpleNamespace(project=project, dist=dist, launcher=launcher, sources=sources)
+
+
+@pytest.mark.parametrize("local_config", [False, True], ids=["first-build", "configured-checkout"])
+def test_staging_never_requires_or_bundles_local_configuration(build_module, staging_inputs, local_config):
+    """A release must build from a clean checkout and never ship local settings."""
+    if local_config:
+        config = staging_inputs.project / "config"
+        config.mkdir()
+        for name in ("fox_config.yaml", "user_config.yaml", "settings.yaml", "user_endpoints.yaml"):
+            (config / name).write_text("private: local choice\n", encoding="utf-8")
+
+    root = build_module.stage_layout(staging_inputs.dist, staging_inputs.launcher)
+
+    assert (root / "bin" / build_module.BACKEND_NAME).read_bytes() == b"backend fixture"
+    assert not (root / "config").exists()
+    assert not list(root.rglob("*.yaml"))
+    assert (root / build_module.UPDATER_NAME).read_bytes() == b"updater fixture"
+
+
+@pytest.mark.parametrize("system,machine", [("Windows", "AMD64"), ("Linux", "x86_64"), ("Darwin", "arm64")])
+@pytest.mark.parametrize("no_window", [False, True])
+@pytest.mark.parametrize("frontend_report", [False, True], ids=["older-frontend", "generated-notices"])
+def test_archive_collects_legal_files_without_moving_sources(
+    build_module, staging_inputs, monkeypatch, system, machine, no_window, frontend_report,
+):
+    """Exercise staging and archive contents for every portable build layout."""
+    monkeypatch.setattr(build_module.platform, "system", lambda: system)
+    monkeypatch.setattr(build_module.platform, "machine", lambda: machine)
+    expected = {Path(name).name: content for name, content in staging_inputs.sources.items()}
+    if frontend_report:
+        report = staging_inputs.project / "frontend" / "static" / ".vite" / "license.md"
+        report.parent.mkdir()
+        report.write_bytes(b"Generated frontend attributions\n")
+        expected["frontend-licenses.md"] = report.read_bytes()
+    if system == "Windows" and not no_window:
+        expected["WebView2-LICENSE.txt"] = (staging_inputs.launcher.parent / "WebView2-LICENSE.txt").read_bytes()
+
+    root = build_module.stage_layout(staging_inputs.dist, staging_inputs.launcher, no_window=no_window)
+    archive = build_module.package_output(root, "1.0.0", "cpu", None, no_window=no_window)
+
+    assert {path.name: path.read_bytes() for path in (root / "legal").iterdir()} == expected
+    assert not list((root / "fonts").iterdir())
+    assert (root / build_module.UPDATER_NAME).exists() is not no_window
+    assert all(not (root / name).exists() for name in expected)
+    assert (root / "bin" / "example.dist-info" / "licenses" / "LICENSE").read_bytes() == b"dependency license"
+    source_contents = {name: (staging_inputs.project / name).read_bytes() for name in staging_inputs.sources}
+    assert source_contents == staging_inputs.sources
+    if system == "Windows":
+        with zipfile.ZipFile(archive) as packaged:
+            files = {name: packaged.read(name) for name in packaged.namelist() if not name.endswith("/")}
+    else:
+        with tarfile.open(archive) as packaged:
+            files = {member.name: packaged.extractfile(member).read() for member in packaged if member.isfile()}
+    for name, content in expected.items():
+        assert files[f"{root.name}/legal/{name}"] == content
+        assert f"{root.name}/{name}" not in files
+        assert f"{root.name}/fonts/{name}" not in files
+
+
+@pytest.mark.parametrize("missing", [
+    "LICENSE", "NOTICE", "TERMS.md", "FONT.md", "fonts/OFL.txt", "fonts/LICENSE-ComicMono",
+    "frontend/static/LICENSE-material-icons",
+])
+def test_staging_refuses_to_omit_required_legal_documents(build_module, staging_inputs, missing):
+    (staging_inputs.project / missing).unlink()
+
+    with pytest.raises(build_module.BuildError, match="refusing to stage a build without it"):
+        build_module.stage_layout(staging_inputs.dist, staging_inputs.launcher)
 
 
 def test_build_and_ci_share_the_unified_cuda129_device(build_module, monkeypatch, tmp_path):

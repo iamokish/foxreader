@@ -62,9 +62,13 @@ def test_linux_distribution_requires_both_controller_and_viewer(tmp_path, missin
         module().stage_desktop(root, launcher, "Linux", "0.2.1")
 
 
-def test_windows_distribution_requires_and_preserves_webview_license(tmp_path):
+@pytest.mark.parametrize("existing_legal", [False, True])
+def test_windows_distribution_requires_and_preserves_webview_license(tmp_path, existing_legal):
     root = tmp_path / "portable"
     root.mkdir()
+    if existing_legal:
+        (root / "legal").mkdir()
+        (root / "legal" / "LICENSE").write_text("Fox Reader license fixture", encoding="utf-8")
     launcher = tmp_path / "launcher.exe"
     launcher.write_bytes(b"executable fixture")
     desktop = module()
@@ -73,7 +77,10 @@ def test_windows_distribution_requires_and_preserves_webview_license(tmp_path):
     license = tmp_path / "WebView2-LICENSE.txt"
     license.write_text("Microsoft WebView2 SDK license fixture", encoding="utf-8")
     desktop.stage_desktop(root, launcher, "Windows", "0.2.1")
-    assert (root / license.name).read_bytes() == license.read_bytes()
+    assert (root / "legal" / license.name).read_bytes() == license.read_bytes()
+    assert not (root / license.name).exists()
+    if existing_legal:
+        assert (root / "legal" / "LICENSE").read_text(encoding="utf-8") == "Fox Reader license fixture"
 
 
 @pytest.mark.parametrize("system", ["Windows", "Linux", "Darwin"])
@@ -91,6 +98,7 @@ def test_no_window_distribution_omits_all_native_hosts(tmp_path, system, stale_n
     module().stage_desktop(root, launcher, system, "0.2.1", no_window=True)
 
     assert all(not (root / name).exists() for name in native_files)
+    assert not (root / "legal" / "WebView2-LICENSE.txt").exists()
     assert not (root / "Fox Reader.app").exists()
     if system == "Linux":
         script = (root / "install-desktop.sh").read_bytes()

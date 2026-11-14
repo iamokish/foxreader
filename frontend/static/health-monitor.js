@@ -15,9 +15,12 @@ export function createHealthMonitor({ online, offline, restarted }) {
     let paused = false;
     let timer = null;
     let pending = null;
+    let announceAfterResume = false;
 
     function transition(next) {
-        if (status === "restarted" || status === next) return;
+        if (status === "restarted") next = status;
+        if (status === next && !announceAfterResume) return;
+        announceAfterResume = false;
         status = next;
         if (next === "offline") offline(retry);
         else if (next === "restarted") restarted();
@@ -94,6 +97,9 @@ export function createHealthMonitor({ online, offline, restarted }) {
         resume() {
             if (stopped || !paused) return;
             paused = false;
+            // The updater hides warnings while it closes the backend. Publish
+            // the next result even if a failed handoff left health unchanged.
+            announceAfterResume = true;
             retry();
         },
         stop() {
@@ -109,10 +115,24 @@ let installedCleanup = null;
 export function installHealthMonitor(callbacks, anchor, onDispose = () => {}) {
     if (installedCleanup) return installedCleanup;
     const monitor = createHealthMonitor(callbacks);
+    let updatePaused = false;
     const pagehide = () => monitor.pause();
-    const pageshow = () => monitor.resume();
+    const pageshow = () => { if (!updatePaused) monitor.resume(); };
+    const updateState = (event) => {
+        const state = event.detail?.state;
+        if (state === "handoff" || state === "installing") {
+            updatePaused = true;
+            monitor.pause();
+            callbacks.online();
+        } else if (updatePaused) {
+            updatePaused = false;
+            monitor.resume();
+        }
+    };
     window.addEventListener("pagehide", pagehide);
     window.addEventListener("pageshow", pageshow);
+    window.addEventListener("fox-reader:update-state", updateState);
+    updateState({ detail: { state: document.getElementById("updatesPanel")?.dataset.updateState } });
     // Existing duplicate-tab handling replaces the body. Do not cover that
     // screen with a newly created health dialog or keep polling behind it.
     const observer = new MutationObserver(() => {
@@ -127,6 +147,7 @@ export function installHealthMonitor(callbacks, anchor, onDispose = () => {}) {
         observer.disconnect();
         window.removeEventListener("pagehide", pagehide);
         window.removeEventListener("pageshow", pageshow);
+        window.removeEventListener("fox-reader:update-state", updateState);
         installedCleanup = null;
         onDispose();
     }

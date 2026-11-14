@@ -460,11 +460,10 @@ static int exe_dir(pchar *dst, size_t cap)
 /* ------------------------------------------------------------------------- */
 /* Config.                                                                   */
 /*                                                                           */
-/* config/fox_config.yaml is written by ConfigManager as a flat mapping of    */
-/* key: value lines -- tests/test_config.py pins that shape precisely so this */
-/* parser can stay this small. user_config.yaml, if it exists, wins: that is  */
-/* the same precedence the Python side applies, and the two disagreeing about */
-/* the port would leave the launcher probing the wrong one forever.           */
+/* ConfigManager writes canonical root host/port lines before server startup. */
+/* A hand-edited file can require repair, so startup waits reread these lines */
+/* until the backend answers. user_config.yaml replaces fox_config.yaml when */
+/* present; missing fields use code defaults, not values from the other file. */
 /* ------------------------------------------------------------------------- */
 
 static char *read_whole_file(const pchar *path, size_t *out_len)
@@ -578,10 +577,8 @@ static int valid_host(const char *s)
     return 1;
 }
 
-/* Overlays whatever `path` defines onto host/port. Absent keys, an unreadable
- * file and a malformed value all leave the current values alone -- the Python
- * side falls back to the same defaults when it rejects a file, so a config this
- * cannot make sense of still leaves both sides agreeing. */
+/* Reads the selected file onto code defaults. Until ConfigManager repairs a
+ * hand-edited document this is only a candidate address, not authoritative. */
 static void apply_config_file(const pchar *path, char *host, size_t hostcap, int *port)
 {
     size_t len = 0, start = 0, i;
@@ -603,7 +600,7 @@ static void apply_config_file(const pchar *path, char *host, size_t hostcap, int
             } else if (strcmp(key, "port") == 0) {
                 char *end = NULL;
                 long n = strtol(val, &end, 10);
-                if (end && end != val && n >= 1 && n <= 65535)
+                if (end && end != val && *end == 0 && n >= 1 && n <= 65535)
                     *port = (int)n;
             }
         }
@@ -623,9 +620,11 @@ static void read_config(const pchar *root, char *host, size_t hostcap, int *port
 
     if (!p_join(dir, PATH_CAP, root, PL("config")))
         return;
-    if (p_join(path, PATH_CAP, dir, PL("fox_config.yaml")))
+    if (p_join(path, PATH_CAP, dir, PL("user_config.yaml")) && path_exists(path)) {
         apply_config_file(path, host, hostcap, port);
-    if (p_join(path, PATH_CAP, dir, PL("user_config.yaml")))
+        return;
+    }
+    if (p_join(path, PATH_CAP, dir, PL("fox_config.yaml")))
         apply_config_file(path, host, hostcap, port);
 }
 
@@ -1090,6 +1089,8 @@ static void lock_release(lock_t *l)
 #endif
 }
 
+#include "update_handoff.h"
+
 /* ------------------------------------------------------------------------- */
 /* The child process.                                                        */
 /* ------------------------------------------------------------------------- */
@@ -1184,8 +1185,16 @@ static void set_child_env(const pchar *root, const char *token)
 
 static int child_start(child_t *c, const pchar *exe, const pchar *root, const char *token)
 {
+    char launcher_pid[32];
     memset(c, 0, sizeof *c);
     set_child_env(root, token);
+#ifdef _WIN32
+    snprintf(launcher_pid, sizeof launcher_pid, "%lu", (unsigned long)GetCurrentProcessId());
+    SetEnvironmentVariableA("FOX_READER_LAUNCHER_PID", launcher_pid);
+#else
+    snprintf(launcher_pid, sizeof launcher_pid, "%ld", (long)getpid());
+    setenv("FOX_READER_LAUNCHER_PID", launcher_pid, 1);
+#endif
     open_backend_output(root);
 
 #ifdef _WIN32
@@ -1252,7 +1261,7 @@ static int child_start(child_t *c, const pchar *exe, const pchar *root, const ch
         c->job = CreateJobObjectW(NULL, NULL);
         if (c->job) {
             memset(&limits, 0, sizeof limits);
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
             if (!SetInformationJobObject(c->job, JobObjectExtendedLimitInformation, &limits, sizeof limits) ||
                 !AssignProcessToJobObject(c->job, pi.hProcess)) {
                 /* Nested jobs need Windows 8. Without one the explicit stop path
@@ -1714,8 +1723,9 @@ static int monitor_attached(const char *url, int want_browser)
 
 /* Our backend. Wait for it, open the UI, and hold the console until it or the
  * user says otherwise. */
-static int monitor_owned(const char *url, int want_browser)
+static int monitor_owned(const pchar *root, int want_browser)
 {
+    char url[MAX_URL];
     int waited = 0;
     int announced_slow = 0;
     int ready = 0;
@@ -1740,6 +1750,9 @@ static int monitor_owned(const char *url, int want_browser)
             return 1;
         }
 
+        /* The backend repairs and canonicalizes configuration before binding.
+         * Refresh both the readiness probe and the eventual browser address. */
+        read_config(root, g_host, sizeof g_host, &g_port);
         if (probe(connect_host(g_host), g_port) == PROBE_FOX) {
             ready = 1;
             break;
@@ -1760,6 +1773,7 @@ static int monitor_owned(const char *url, int want_browser)
     if (!ready)
         return 0; /* interrupted; main stops the child */
 
+    build_url(url, sizeof url, connect_host(g_host), g_port);
     out("\nFox Reader is ready at %s\n", url);
     if (want_browser) {
         out("Opening it in your browser.\n");
@@ -1826,6 +1840,8 @@ static int run_backend(const pchar *root, int want_browser)
     lock_t lock;
     int i, locked, rc = 0;
     probe_t state;
+    int update = update_guard(root);
+    if (update != 0) return update > 0 ? 0 : 1;
     if (!p_join(bindir, PATH_CAP, root, FOX_BIN_DIR))
         return 1;
 
@@ -1884,6 +1900,13 @@ static int run_backend(const pchar *root, int want_browser)
         out("\nAnother launcher is already starting Fox Reader. Waiting for it.\n");
         out("Press Ctrl+C to stop waiting.\n");
         while (!STOP_REQUESTED()) {
+            int updating = update_lock_busy(root);
+            if (updating != 0) {
+                out("Fox Reader cannot start while the updater owns this installation.\n");
+                return updating > 0 ? 0 : 1;
+            }
+            read_config(root, g_host, sizeof g_host, &g_port);
+            build_url(url, sizeof url, connect_host(g_host), g_port);
             if (probe(connect_host(g_host), g_port) == PROBE_FOX)
                 break;
             sleep_ms(ATTACH_POLL_MS);
@@ -1922,16 +1945,22 @@ static int run_backend(const pchar *root, int want_browser)
     }
 
     if (state == PROBE_FOREIGN) {
-        errline("\nerror: something else is already using %s\n", url);
-        errline("       Change the port in config/fox_config.yaml, or stop whatever has it.\n");
-        lock_release(&lock);
-        maybe_pause();
-        return 1;
+        /* This candidate came from an unvalidated, potentially malformed file.
+         * Let Python repair it first; an actual bind conflict will be reported
+         * by the backend instead of rejecting a usable repaired address here. */
+        out("\nThe configured address is in use; the backend will validate it before binding.\n");
     }
 
     if (STOP_REQUESTED()) {
         lock_release(&lock);
         return 0;
+    }
+
+    update = update_lock_busy(root);
+    if (update != 0) {
+        out("Fox Reader cannot start while the updater owns this installation.\n");
+        lock_release(&lock);
+        return update > 0 ? 0 : 1;
     }
 
     make_token(g_token, sizeof g_token);
@@ -1946,7 +1975,7 @@ static int run_backend(const pchar *root, int want_browser)
         return 1;
     }
 
-    rc = monitor_owned(url, want_browser);
+    rc = monitor_owned(root, want_browser);
 
     /* On Windows the console handler has usually done this already; it is
      * idempotent, so calling it here covers Ctrl+C on Linux and the plain
@@ -2032,6 +2061,44 @@ int main(int argc, char **argv)
     }
     SetConsoleOutputCP(CP_UTF8);
 #endif
+#ifdef __APPLE__
+    /* A renamed Finder bundle may outlive several updates. Its executable is
+     * a stable entry point into the current root launcher, including recovery
+     * logic and command-line options introduced by later releases. Forward
+     * before parsing options or initializing Cocoa, and preserve this PID. */
+    if (!exe_dir(root, PATH_CAP))
+        fatal("cannot work out where this program is installed.");
+    {
+        const char *suffix = "/Contents/MacOS";
+        size_t len = strlen(root), tail = strlen(suffix);
+        if (len > tail + 4 && strcmp(root + len - tail, suffix) == 0 &&
+            strncmp(root + len - tail - 4, ".app", 4) == 0) {
+            char launcher[PATH_CAP], *parent;
+            struct stat info;
+            int execute_error;
+            root[len - tail] = 0;
+            parent = strrchr(root, '/');
+            if (!parent) fatal("cannot locate the installation beside this application bundle.");
+            if (parent == root) parent[1] = 0;
+            else *parent = 0;
+            if (!p_join(launcher, PATH_CAP, root, "launcher") ||
+                lstat(launcher, &info) != 0 || !S_ISREG(info.st_mode) ||
+                access(launcher, X_OK) != 0) {
+                init_logs(root);
+                errline("The current Fox Reader launcher is missing or cannot be executed. "
+                        "Keep the application bundle beside the root launcher and restore that file before opening Fox Reader.\n");
+                return 1;
+            }
+            argv[0] = launcher;
+            execv(launcher, argv);
+            execute_error = errno;
+            init_logs(root);
+            errline("Could not start the current Fox Reader launcher: %s. "
+                    "Check the root launcher file and its permissions.\n", strerror(execute_error));
+            return 1;
+        }
+    }
+#endif
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--cli") == 0) {
             want_browser = 0;
@@ -2060,6 +2127,7 @@ int main(int argc, char **argv)
     if (env_truthy("FOX_READER_CLI"))
         want_browser = 0;
 
+#ifndef __APPLE__
     if (!exe_dir(root, PATH_CAP)) {
 #ifdef _WIN32
         fatal("cannot work out where this program is installed.");
@@ -2075,21 +2143,6 @@ int main(int argc, char **argv)
             fatal("cannot work out where this program is installed; run it by path.");
         *slash = 0;
 #endif
-    }
-
-
-#ifdef __APPLE__
-    /* Finder entry point, allowing the user to rename the .app. */
-    {
-        const char *suffix = "/Contents/MacOS";
-        size_t len = strlen(root), tail = strlen(suffix);
-        if (len > tail + 4 && strcmp(root + len - tail, suffix) == 0 &&
-            strncmp(root + len - tail - 4, ".app", 4) == 0) {
-            char *parent;
-            root[len - tail] = 0;
-            parent = strrchr(root, '/');
-            if (parent) *parent = 0;
-        }
     }
 #endif
     init_logs(root);

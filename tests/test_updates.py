@@ -1,6 +1,7 @@
 """Updates download verified bytes without touching the working installation."""
 import hashlib
 import json
+import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -38,7 +39,8 @@ def selected(value):
 
 
 @pytest.fixture
-def service(tmp_path):
+def service(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates.utils, "is_frozen", True)
     build = {"version": "1.2.2", "platform": "windows", "architecture": "x86_64",
              "device": "cpu", "gguf": "cpu", "repository": updates.REPOSITORY}
     (tmp_path / "build-info.json").write_text(json.dumps(build), encoding="utf-8")
@@ -82,9 +84,23 @@ def finish(service):
     return service.status()
 
 
-def test_status_does_not_check_network_and_source_build_does_not_guess(tmp_path, network):
-    source = updates.UpdateService(tmp_path)
-    assert source.status()["download_supported"] is False
+@pytest.mark.parametrize("metadata_present", [False, True])
+def test_source_cannot_update_even_with_copied_build_metadata(service, network, monkeypatch, metadata_present):
+    if not metadata_present:
+        (service.root / "build-info.json").unlink()
+    monkeypatch.setattr(updates.utils, "is_frozen", False)
+    source = updates.UpdateService(service.root)
+    status = source.status()
+    assert source.build is None
+    assert status["current_version"] == updates.__version__
+    assert status["updates_supported"] is False
+    assert status["download_supported"] is False
+    assert status["install_supported"] is False
+    for action in (source.check, source.start):
+        with pytest.raises(updates.UpdateError, match="running from source"):
+            action()
+    assert source._thread is None
+    assert not (service.root / "updates").exists()
     assert network[1] == []
     result, chosen = updates.validate_manifest(manifest(), None, "1.2.2")
     assert result["available"] and not result["compatible"] and chosen is None
@@ -123,6 +139,7 @@ def test_explicit_native_window_build_keeps_update_support(service, network):
     (service.root / "build-info.json").write_text(json.dumps(build), encoding="utf-8")
     service = updates.UpdateService(service.root)
     prepare(service, network)
+    assert service.status()["updates_supported"] is True
     assert service.status()["download_supported"] is True
     assert service.check()["compatible"] is True
 
@@ -306,6 +323,36 @@ def client_for(service, host="127.0.0.1", base_url="http://127.0.0.1"):
     return TestClient(app, base_url=base_url, client=(host, 1234))
 
 
+@pytest.mark.parametrize("method,path", [("GET", "status"), ("GET", "check"),
+                                         ("POST", "download"), ("POST", "cancel")])
+def test_source_update_routes_reject_requests_before_creating_a_service(network, monkeypatch, method, path):
+    monkeypatch.setattr(updates.utils, "is_frozen", False)
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 1234))
+    response = client.request(method, f"/api/updates/{path}",
+                              headers={"X-Fox-Reader-Update": "1", "Origin": "http://127.0.0.1"})
+    assert response.status_code == 403
+    assert "running from source" in response.json()["error"]
+    assert not hasattr(app.state, "updates")
+    assert network[1] == []
+
+
+@pytest.mark.parametrize("packaged", [False, True])
+def test_settings_only_renders_updates_for_packaged_builds(monkeypatch, packaged):
+    from fox_reader.routes import settings
+
+    monkeypatch.setattr(updates.utils, "is_frozen", packaged)
+    app = FastAPI()
+    app.include_router(settings.router)
+    response = TestClient(app).get("/settings")
+    assert response.status_code == 200
+    assert ('id="updatesPanel"' in response.text) is packaged
+    assert ("/static/updates-entry.js" in response.text) is packaged
+    assert "/static/desktop-entry.js" in response.text
+    assert 'id="settings"' in response.text
+
+
 def test_routes_reject_remote_and_cross_origin_mutations(service, network):
     prepare(service, network)
     client = client_for(service)
@@ -337,3 +384,122 @@ def test_repeat_checks_are_cached_to_avoid_hammering_github(service, network):
     first = service.check()
     assert service.check() == first
     assert network[1] == [updates.MANIFEST_URL]
+
+
+@pytest.mark.parametrize("failure", [None, "checksum", "prepare", "handoff", "shutdown", "shutdown_exception"])
+def test_installation_handoff_preserves_data_and_shuts_down_only_after_ready(service, network, monkeypatch, failure):
+    value = prepare(service, network)
+    if failure == "checksum":
+        network[0][selected(value)["parts"][0]["url"]] = b"bad"
+    calls = []
+    staged = []
+
+    def preparation(root, destination, archive, build, version, cancel):
+        calls.append("prepare")
+        assert destination.read_bytes() == b"onetwo", "split parts must be joined and verified before preparation"
+        if failure == "prepare":
+            raise updates.InstallError("preparation failed")
+        transaction = root / (".foxreader-update-" + "a" * 32)
+        transaction.mkdir()
+        path = transaction / "archive.zip"
+        destination.replace(path)
+        prepared = SimpleNamespace(transaction=transaction, archive=path)
+        staged.append(prepared)
+        return prepared
+
+    process = SimpleNamespace(poll=lambda: None, terminate=lambda: calls.append("terminate"),
+                              wait=lambda **_: calls.append("wait"))
+
+    def handoff(prepared, platform):
+        calls.append("handoff")
+        assert service.status()["state"] == "handoff"
+        service.cancel()
+        assert not service._cancel.is_set(), "cancellation is locked after handing off"
+        if failure == "handoff":
+            raise updates.InstallError("handoff failed")
+        calls.append("READY")
+        return process
+
+    def shutdown():
+        calls.append("shutdown")
+        assert calls[-2] == "READY"
+        if failure == "shutdown_exception":
+            raise RuntimeError("shutdown failed")
+        return failure != "shutdown"
+
+    monkeypatch.setattr(updates, "install_supported", lambda *_: True)
+    monkeypatch.setattr(updates, "prepare_update", preparation)
+    monkeypatch.setattr(updates, "launch_updater", handoff)
+    service._shutdown = shutdown
+    assert service.status()["install_supported"] is True
+    service.check()
+    service.start()
+    status = finish(service)
+    if failure is None:
+        assert status["state"] == "installing" and status["archive"] is None
+        assert calls == ["prepare", "handoff", "READY", "shutdown"]
+        assert staged[0].archive.read_bytes() == b"onetwo"
+        with pytest.raises(updates.UpdateError):
+            service.start()
+        with pytest.raises(updates.UpdateError):
+            service.check()
+    else:
+        assert status["state"] == "error"
+        if failure in {"checksum", "prepare", "handoff"}:
+            assert "shutdown" not in calls
+        else:
+            assert calls[-2:] == ["terminate", "wait"]
+        if failure != "checksum":
+            assert (service.root / "updates" / "1.2.3" / selected(value)["archive"]["name"]).read_bytes() == b"onetwo"
+        assert not list(service.root.glob(".foxreader-update-*"))
+    assert json.loads((service.root / "build-info.json").read_text())["version"] == "1.2.2"
+
+
+def test_cancellation_at_handoff_never_reports_acceptance_then_installs(service, network, monkeypatch):
+    prepare(service, network)
+    prepared = threading.Event()
+    final_check = threading.Event()
+    continue_handoff = threading.Event()
+    cancelling = threading.Event()
+    cancelled = threading.Event()
+    responses = []
+    check_cancelled = service._cancelled
+
+    def preparation(*_):
+        prepared.set()
+        return SimpleNamespace()
+
+    def cancellation_check():
+        check_cancelled()
+        if prepared.is_set():
+            final_check.set()
+            assert continue_handoff.wait(5)
+
+    def cancel():
+        cancelling.set()
+        responses.append(service.cancel())
+        cancelled.set()
+
+    monkeypatch.setattr(updates, "install_supported", lambda *_: True)
+    monkeypatch.setattr(updates, "prepare_update", preparation)
+    monkeypatch.setattr(updates, "launch_updater", lambda *_: SimpleNamespace())
+    monkeypatch.setattr(service, "_cancelled", cancellation_check)
+    service._shutdown = lambda: True
+    service.check()
+    service.start()
+    worker = threading.Thread(target=cancel)
+    try:
+        assert final_check.wait(5)
+        worker.start()
+        assert cancelling.wait(5)
+        # Give the request a chance to reach cancel() while the update thread
+        # is paused immediately after its final cancellation check.
+        cancelled.wait(0.25)
+    finally:
+        continue_handoff.set()
+        if worker.ident is not None:
+            worker.join(timeout=5)
+    assert finish(service)["state"] == "installing"
+    assert len(responses) == 1
+    assert responses[0]["state"] in {"handoff", "installing"}
+    assert not service._cancel.is_set()
