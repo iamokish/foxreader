@@ -6,6 +6,8 @@ in a tagged version.
 
 ## [Unreleased]
 
+## [0.3.1]
+
 ### Added
 
 - Download and install updates through a separate native updater on Windows,
@@ -13,8 +15,7 @@ in a tagged version.
   Fox Reader closes for installation and stays closed after success.
 - Transactional replacement with automatic rollback and recovery on the next
   launch after interruption. Updates preserve configuration and models, merge
-  fonts, and clean up their temporary files. `build-info.json` is replaced with
-  the new release metadata and restored with the previous version on rollback.
+  fonts, and clean up their temporary files.
 - Native Yes/No close confirmation on Windows, Linux, and macOS. The dialog
   follows the system theme, stays above its parent window, and defaults to No.
 - Backend health monitoring on setup, settings, and custom-endpoint pages,
@@ -166,6 +167,7 @@ in a tagged version.
 - Character rosters, custom fonts, dark/light themes, and standalone builds.
 
 [Unreleased]: https://github.com/iamokish/foxreader/compare/0.3.0...master
+[0.3.1]: https://github.com/iamokish/foxreader/compare/0.2.2...0.3.1
 [0.3.0]: https://github.com/iamokish/foxreader/compare/0.2.2...0.3.0
 [0.2.2]: https://github.com/iamokish/foxreader/compare/0.2.1...0.2.2
 [0.2.1]: https://github.com/iamokish/foxreader/compare/0.2.0...0.2.1
